@@ -18,3 +18,5 @@ rightmove-debug.txt
 .claude/
 .windsurf/
 data/
+.vercel
+.env*

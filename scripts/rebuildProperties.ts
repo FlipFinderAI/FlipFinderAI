@@ -1,5 +1,5 @@
 import axios from "axios";
-import { PrismaClient } from "../generated/prisma/client";
+import { PrismaClient } from "../src/generated/prisma/client";
 import { PrismaLibSql } from "@prisma/adapter-libsql";
 import { setTimeout } from "timers/promises";
 

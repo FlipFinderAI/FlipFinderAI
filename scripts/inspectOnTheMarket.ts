@@ -1,5 +1,5 @@
 import axios from "axios";
-import prisma from "../lib/prisma";
+import prisma from "../src/lib/prisma";
 import { setTimeout } from "timers/promises";
 
 
