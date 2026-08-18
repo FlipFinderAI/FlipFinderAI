@@ -2094,10 +2094,14 @@ return finalImages;
 ========================================================= */
 
 async function extractFloorPlanImages(
-  page: Page
+  page: Page,
+  source: string
 ): Promise<string[]> {
   const candidates = new Map<string, string>();
 
+  /*
+   * Try extracting floor plans from the current page first.
+   */
   try {
     const html = await page.content();
 
@@ -2173,6 +2177,120 @@ async function extractFloorPlanImages(
     // not fatal
   }
 
+  /*
+   * If no floor plans found on the main page, try navigating
+   * to the Zoopla floor-plans tab.
+   */
+  if (
+    candidates.size === 0 &&
+    source === "zoopla"
+  ) {
+    try {
+      const currentUrl = new URL(page.url());
+
+      const floorPlanUrl =
+        `${currentUrl.origin}${currentUrl.pathname}?tab=floor_plans`;
+
+      console.log(
+        "ZOOPLA FLOOR PLAN TAB:",
+        floorPlanUrl
+      );
+
+      await page.goto(floorPlanUrl, {
+        waitUntil: "domcontentloaded",
+        timeout: 20_000,
+      });
+
+      await page.waitForTimeout(2_000);
+
+      const fpHtml = await page.content();
+
+      const fpTabMatches = fpHtml.match(
+        /https?:\/\/[^"'\\\s<>]*(?:floorplan|floor-plan|floor_plan)[^"'\\\s<>]*?\.(?:jpg|jpeg|png|webp)(?:\?[^"'\\\s<>]*)?/gi
+      ) || [];
+
+      for (const url of fpTabMatches) {
+        let cleaned = url.trim();
+        cleaned = cleaned.replace(/\\u002F/gi, "/");
+        cleaned = cleaned.replace(/\\\//g, "/");
+        cleaned = cleaned.replace(/&amp;/gi, "&");
+
+        if (!/^https?:\/\//i.test(cleaned)) continue;
+
+        try {
+          const parsed = new URL(cleaned);
+          parsed.hash = "";
+          const key = parsed.pathname.toLowerCase();
+          if (!candidates.has(key)) {
+            candidates.set(key, parsed.toString());
+          }
+        } catch {
+          // skip
+        }
+      }
+
+      const fpImages = await page
+        .locator("img")
+        .evaluateAll((elements: Element[]) =>
+          elements
+            .map((el) => {
+              const img = el as HTMLImageElement;
+              const combined = [
+                img.src,
+                img.currentSrc,
+                img.getAttribute("data-src") || "",
+                img.getAttribute("alt") || "",
+                img.className || "",
+              ].join(" ").toLowerCase();
+
+              if (
+                combined.includes("floorplan") ||
+                combined.includes("floor-plan") ||
+                combined.includes("floor_plan")
+              ) {
+                return img.currentSrc || img.src || img.getAttribute("data-src") || "";
+              }
+              return "";
+            })
+            .filter(Boolean)
+        );
+
+      for (const url of fpImages) {
+        let cleaned = url.trim();
+        if (!/^https?:\/\//i.test(cleaned)) continue;
+
+        try {
+          const parsed = new URL(cleaned);
+          parsed.hash = "";
+          const key = parsed.pathname.toLowerCase();
+          if (!candidates.has(key)) {
+            candidates.set(key, parsed.toString());
+          }
+        } catch {
+          // skip
+        }
+      }
+
+      /*
+       * Navigate back to the main listing page
+       * so subsequent scraping is unaffected.
+       */
+      await page.goto(currentUrl.toString(), {
+        waitUntil: "domcontentloaded",
+        timeout: 20_000,
+      });
+
+      await page.waitForTimeout(1_000);
+    } catch (fpNavError) {
+      console.log(
+        "Floor plan tab navigation failed (non-fatal):",
+        fpNavError instanceof Error
+          ? fpNavError.message
+          : fpNavError
+      );
+    }
+  }
+
   return Array.from(candidates.values());
 }
 
@@ -2219,6 +2337,15 @@ function detectFrontOfHouse(
     }
   }
 
+  /*
+   * Zoopla and most portals put the front-of-house
+   * photograph as the first image in the gallery.
+   *
+   * CDN URL hashes are meaningless so keyword matching
+   * on the URL itself will rarely work. Gallery position
+   * is the strongest available heuristic when no URL
+   * keyword matches.
+   */
   return nonFloorPlan[0];
 }
 
@@ -2874,6 +3001,35 @@ async function handleCommonPopups(
 }
 
 /* =========================================================
+   URL NORMALISATION
+========================================================= */
+
+function normalizeListingUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+
+    if (
+      parsed.hostname.includes("zoopla.co.uk")
+    ) {
+      const match = parsed.pathname.match(
+        /\/details\/(\d+)\//
+      );
+
+      if (match?.[1]) {
+        return `https://www.zoopla.co.uk/for-sale/details/${match[1]}/`;
+      }
+    }
+
+    parsed.search = "";
+    parsed.hash = "";
+
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
+/* =========================================================
    EXTERNAL ID
 ========================================================= */
 
@@ -2881,10 +3037,13 @@ function createExternalId(
   url: string,
   source: string
 ): string {
+  const normalizedUrl =
+    normalizeListingUrl(url);
+
   const hash =
     crypto
       .createHash("sha256")
-      .update(`${source}|${url}`)
+      .update(`${source}|${normalizedUrl}`)
       .digest("hex")
       .slice(0, 40);
 
@@ -3120,7 +3279,7 @@ const floorArea =
       );
 
     const floorPlans =
-      await extractFloorPlanImages(page);
+      await extractFloorPlanImages(page, sourceInfo.source);
 
     const primaryPhoto =
       detectFrontOfHouse(images, floorPlans);

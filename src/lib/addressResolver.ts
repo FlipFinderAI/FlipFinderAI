@@ -79,6 +79,12 @@ export type AddressCandidate = {
    * ArcGIS address type (e.g. "PointAddress", "StreetAddress").
    */
   arcGISAddrType?: string;
+
+  /*
+   * Geolocation from the geocoder result.
+   */
+  latitude?: number | null;
+  longitude?: number | null;
 };
 
 /*
@@ -176,6 +182,11 @@ type NominatimResult = {
 type ArcGISCandidate = {
   address?: string;
   score?: number;
+
+  location?: {
+    x?: number;
+    y?: number;
+  };
 
   attributes?: {
     Match_addr?: string;
@@ -1107,6 +1118,16 @@ function nominatimCandidate(
 
     verified:
       false,
+
+    latitude:
+      result.lat
+        ? Number(result.lat)
+        : null,
+
+    longitude:
+      result.lon
+        ? Number(result.lon)
+        : null,
   };
 }
 
@@ -1221,6 +1242,9 @@ function photonCandidates(
       score += 10;
     }
 
+    const coords =
+      feature.geometry?.coordinates;
+
     candidates.push({
       address:
         `${actualHouse || expectedHouseNumber || ""} ${actualStreet || expectedStreet}, ${actualTown || expectedTown}, ${postcode}`.trim(),
@@ -1257,6 +1281,18 @@ function photonCandidates(
 
       verified:
         false,
+
+      latitude:
+        Array.isArray(coords) &&
+        coords.length >= 2
+          ? Number(coords[1])
+          : null,
+
+      longitude:
+        Array.isArray(coords) &&
+        coords.length >= 2
+          ? Number(coords[0])
+          : null,
     });
   }
 
@@ -2218,11 +2254,180 @@ export async function resolveTargetHouseNumber(
   const geocoderAgrees =
     sourceCount >= 2;
 
+  /*
+   * When geocoders do NOT agree on the listing house number,
+   * attempt to discover the correct number by searching for
+   * the street without a number constraint.
+   *
+   * If independent geocoders consistently return a specific
+   * house number on the same street, that is stronger evidence
+   * than a listing that geocoders cannot confirm.
+   */
+
+  let alternativeNumber: string | null = null;
+
+  if (!geocoderAgrees && parsed.street) {
+    const streetQuery =
+      `${parsed.street}, ${parsed.town || "Leeds"}, ${parsed.district}, UK`;
+
+    console.log(
+      "TARGET RESOLUTION: geocoders disagree — trying street-only query:",
+      streetQuery
+    );
+
+    try {
+      const [
+        streetNominatim,
+        streetPhoton,
+        streetArcGIS,
+      ] = await Promise.all([
+        queryNominatim(streetQuery),
+        queryPhoton(streetQuery),
+        queryArcGIS(streetQuery),
+      ]);
+
+      const streetCandidates: string[] = [];
+
+      for (const result of streetNominatim) {
+        const cand = nominatimCandidate(
+          result,
+          null,
+          parsed.street,
+          parsed.town,
+          parsed.district
+        );
+
+        if (
+          cand &&
+          cand.houseNumber &&
+          cand.districtMatch
+        ) {
+          streetCandidates.push(cand.houseNumber);
+          break;
+        }
+      }
+
+      for (const cand of photonCandidates(
+        streetPhoton,
+        null,
+        parsed.street,
+        parsed.town,
+        parsed.district
+      )) {
+        if (
+          cand.houseNumber &&
+          cand.districtMatch
+        ) {
+          streetCandidates.push(cand.houseNumber);
+          break;
+        }
+      }
+
+      for (const cand of arcGISCandidates(
+        streetArcGIS,
+        null,
+        parsed.street,
+        parsed.town,
+        parsed.district
+      )) {
+        if (
+          cand.houseNumber &&
+          cand.districtMatch
+        ) {
+          streetCandidates.push(cand.houseNumber);
+          if (
+            cand.arcGISAddrType === "PointAddress"
+          ) {
+            highestAddrType = "PointAddress";
+          }
+          break;
+        }
+      }
+
+      /*
+       * If 2+ geocoders agree on a specific house number
+       * from the street-level search, use it.
+       */
+      const normalised =
+        streetCandidates.map(normaliseHouseNumber);
+
+      const counts = new Map<string, number>();
+
+      for (const n of normalised) {
+        if (n) {
+          counts.set(
+            n,
+            (counts.get(n) || 0) + 1
+          );
+        }
+      }
+
+      for (const [num, count] of counts) {
+        if (count >= 2) {
+          alternativeNumber = num;
+          break;
+        }
+      }
+
+      /*
+       * If no multi-source agreement, use ArcGIS
+       * PointAddress as a single-source fallback.
+       */
+      if (!alternativeNumber) {
+        for (const cand of arcGISCandidates(
+          streetArcGIS,
+          null,
+          parsed.street,
+          parsed.town,
+          parsed.district
+        )) {
+          if (
+            cand.houseNumber &&
+            cand.arcGISAddrType === "PointAddress" &&
+            cand.districtMatch
+          ) {
+            alternativeNumber = normaliseHouseNumber(
+              cand.houseNumber
+            );
+            highestAddrType = "PointAddress";
+            break;
+          }
+        }
+      }
+    } catch (altError) {
+      console.log(
+        "TARGET RESOLUTION: street-only search failed (non-fatal):",
+        altError instanceof Error
+          ? altError.message
+          : altError
+      );
+    }
+
+    if (alternativeNumber) {
+      console.log(
+        "TARGET RESOLUTION: geocoder alternative:",
+        alternativeNumber,
+        "(listing had:",
+        listingHouseNumber,
+        ")"
+      );
+    }
+  }
+
+  /*
+   * When geocoders agree, use the listing number (confirmed).
+   * When they disagree but found an alternative, use the
+   * alternative (geocoder evidence beats incorrect listing).
+   * When no alternative found, return null (unknown).
+   */
+
+  const effectiveNumber =
+    geocoderAgrees
+      ? normaliseHouseNumber(listingHouseNumber)
+      : alternativeNumber || null;
+
   const result: TargetHouseNumber = {
-    number:
-      normaliseHouseNumber(
-        listingHouseNumber
-      ),
+    number: effectiveNumber,
     sourceCount,
     sources: agreeingSources,
     highestAddrType,

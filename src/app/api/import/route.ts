@@ -1492,6 +1492,55 @@ console.log(
           postcodeResolutionScore =
             best.score || 0;
 
+          /*
+           * ========================================================
+           * POST-RESOLUTION HOUSE NUMBER CORRECTION
+           * ========================================================
+           *
+           * When the geocoder-verified address contains a different
+           * house number than the effective house number, and the
+           * geocoder result is high-confidence (PointAddress or
+           * verified candidate with multiple sources), prefer the
+           * geocoder's house number.
+           *
+           * This handles cases where the listing address contains
+           * the wrong house number but the geocoder has the correct
+           * address indexed.
+           */
+
+          const resolvedNumber =
+            best.houseNumber || null;
+
+          if (
+            resolvedNumber &&
+            effectiveHouseNumber &&
+            normaliseHouseNumber(resolvedNumber) !==
+              normaliseHouseNumber(effectiveHouseNumber)
+          ) {
+            const isHighConfidence =
+              best.verified === true ||
+              best.sourceCount !== undefined &&
+                best.sourceCount >= 2 ||
+              best.arcGISAddrType === "PointAddress";
+
+            if (isHighConfidence) {
+              console.log(
+                "POST-RESOLUTION CORRECTION:",
+                `effective house number ${effectiveHouseNumber} overridden by geocoder ${resolvedNumber}`
+              );
+
+              effectiveHouseNumber =
+                normaliseHouseNumber(resolvedNumber);
+            } else {
+              console.log(
+                "POST-RESOLUTION: geocoder suggests",
+                resolvedNumber,
+                "but confidence insufficient to override",
+                effectiveHouseNumber
+              );
+            }
+          }
+
           console.log(
             "========================================"
           );
@@ -2045,7 +2094,7 @@ for (
       propertyId: property.id,
       url: localUrl,
       displayOrder: i,
-      isPrimary: localUrl === imported.primaryPhoto,
+      isPrimary: imageUrls[i] === imported.primaryPhoto,
     });
   } catch (error) {
     console.error(
