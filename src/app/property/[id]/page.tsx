@@ -1,9 +1,10 @@
-
+import PropertyHeader from "@/components/property/PropertyHeader";
 import prisma from "@/lib/prisma";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import PropertyGallery from "@/components/PropertyGallery";
 import AIAnalysisPanel from "@/components/AIAnalysisPanel";
+import EPCCertificate from "@/components/EPCCertificate";
+import ValuationEvidence from "@/components/property/ValuationEvidence";
 
 function formatMoney(value: number | null | undefined) {
   if (value === null || value === undefined) {
@@ -13,7 +14,7 @@ function formatMoney(value: number | null | undefined) {
   return `£${Math.round(value).toLocaleString("en-GB")}`;
 }
 
-function formatDate(value: Date | null) {
+function formatDate(value: Date | null | undefined) {
   if (!value) {
     return "Unknown";
   }
@@ -25,14 +26,22 @@ function formatDate(value: Date | null) {
   });
 }
 
-function reasonForComparable(comparable: {
-  exactPostcode: boolean;
-  sameStreet: boolean;
-  samePropertyType: boolean;
-  sameBedrooms: boolean;
-  sameSector: boolean;
-  recent: boolean;
-}) {
+function parseJson<T>(
+  value: string | null | undefined,
+  fallback: T
+): T {
+  if (!value) {
+    return fallback;
+  }
+
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function reasonForComparable(comparable: any) {
   const reasons: string[] = [];
 
   if (comparable.exactPostcode) {
@@ -60,21 +69,6 @@ function reasonForComparable(comparable: {
   }
 
   return reasons;
-}
-
-function parseJson<T>(
-  value: string | null | undefined,
-  fallback: T
-): T {
-  if (!value) {
-    return fallback;
-  }
-
-  try {
-    return JSON.parse(value) as T;
-  } catch {
-    return fallback;
-  }
 }
 
 export default async function PropertyPage({
@@ -106,34 +100,30 @@ export default async function PropertyPage({
   }
 
   /*
-   * Re-run comparable valuation when
-   * the property page is opened.
+   * ============================================================
+   * COMPARABLE VALUATION
+   * ============================================================
    */
 
-  let valuation:
-    | Awaited<
-        ReturnType<
-          typeof import("@/lib/comparableValuation")["calculateComparableValue"]
-        >
-      >
-    | null = null;
+  let valuation: any = null;
 
   try {
-    const { calculateComparableValue } = await import(
+    const {
+      calculateComparableValue,
+    } = await import(
       "@/lib/comparableValuation"
     );
 
-    valuation = await calculateComparableValue(property.id);
+    valuation =
+      await calculateComparableValue(
+        property.id
+      );
   } catch (error) {
     console.error(
       "Comparable valuation failed:",
       error
     );
   }
-
-  /*
-   * VALUATION
-   */
 
   const estimatedValue =
     valuation?.estimatedValue ??
@@ -156,45 +146,177 @@ export default async function PropertyPage({
     property.potentialProfit ?? 0;
 
   /*
-   * PHOTOS
-   *
-   * IMPORTANT:
-   * PropertyPhoto records are used first.
-   * This is what gives us all 12 imported photos.
+   * ============================================================
+   * PROPERTY PHOTOS
+   * ============================================================
    */
 
-  const images =
-    property.photos.length > 0
-      ? property.photos.map(
-          (photo) => photo.url
+  const images = Array.from(
+    new Set(
+      property.photos
+        .map((photo) => photo.url)
+        .filter(
+          (url): url is string =>
+            typeof url === "string" &&
+            url.trim().length > 0
         )
-      : (() => {
-          try {
-            const parsed = JSON.parse(
-              property.images || "[]"
+        .map((url) => {
+          const markdownMatch =
+            url.match(
+              /\]\((https?:\/\/[^)]+)\)/
             );
 
-            return Array.isArray(parsed)
-              ? parsed.filter(
-                  (image): image is string =>
-                    typeof image === "string"
-                )
-              : [];
-          } catch {
-            return [];
+          if (markdownMatch?.[1]) {
+            return markdownMatch[1];
           }
-        })();
+
+          const bracketMatch =
+            url.match(
+              /\[(https?:\/\/[^\]]+)\]/
+            );
+
+          if (bracketMatch?.[1]) {
+            return bracketMatch[1];
+          }
+
+          return url
+            .replace(/^\[/, "")
+            .replace(/\]$/, "")
+            .trim();
+        })
+        .filter((url) => {
+          const isLocalPropertyImage =
+            url.startsWith(
+              "/uploads/properties/"
+            );
+
+          const isOnTheMarket =
+            url.includes(
+              "media.onthemarket.com/properties"
+            );
+
+          const isZoopla =
+            url.includes(
+              "lid.zoocdn.com"
+            );
+
+          const isZooplaAgentLogo =
+            url.includes(
+              "st.zoocdn.com/zoopla_static_agent_logo"
+            );
+
+          const isLikelyImage =
+            /\.(jpg|jpeg|png|webp)(?:[?#].*)?$/i.test(
+              url
+            );
+
+          return (
+            (
+              isLocalPropertyImage ||
+              isOnTheMarket ||
+              isZoopla
+            ) &&
+            !isZooplaAgentLogo &&
+            isLikelyImage
+          );
+        })
+    )
+  );
 
   /*
-   * EXISTING AI DATA
+   * ============================================================
+   * FLOOR PLANS
+   * ============================================================
    */
 
-  const photoAnalysis = parseJson<
-    Record<string, unknown>
-  >(
-    property.photoAnalysis,
-    {}
-  );
+  const floorPlans: string[] =
+    parseJson<string[]>(
+      property.floorPlanImages,
+      []
+    ).filter(
+      (url): url is string =>
+        typeof url === "string" &&
+        url.trim().length > 0
+    );
+
+  /*
+   * ============================================================
+   * EPC DATA
+   * ============================================================
+   */
+
+  const epcRating =
+    property.epcRating ?? null;
+
+  const epcPotentialRating =
+    property.epcPotentialRating ?? null;
+
+  const epcScore =
+    property.epcScore ?? null;
+
+  const epcCertificateDate =
+    property.epcCertificateDate ?? null;
+
+  const epcFloorArea =
+    property.epcFloorArea ?? null;
+
+  const epcHeating =
+    property.epcHeating ?? null;
+
+  const epcSource =
+    property.epcSource ?? null;
+
+  const epcPotentialScore =
+    property.epcPotentialScore ?? null;
+
+  const epcPropertyType =
+    property.epcPropertyType ?? null;
+
+  const epcMainFuel =
+    property.epcMainFuel ?? null;
+
+  const epcWalls =
+    property.epcWalls ?? null;
+
+  const epcRoof =
+    property.epcRoof ?? null;
+
+  const epcWindows =
+    property.epcWindows ?? null;
+
+  const epcRecommendations =
+    parseJson<
+      Array<{
+        recommendation: string;
+        impact: string;
+        typicalSaving: string;
+        cost: string;
+      }>
+    >(
+      property.epcRecommendations,
+      []
+    );
+
+  const epcEstimatedCosts =
+    parseJson<Record<string, unknown> | null>(
+      property.epcEstimatedCosts,
+      null
+    );
+
+  const epcCertificateUrl =
+    property.epcCertificateUrl ?? null;
+
+  /*
+   * ============================================================
+   * EXISTING AI DATA
+   * ============================================================
+   */
+
+  const photoAnalysis =
+    parseJson<Record<string, unknown>>(
+      property.photoAnalysis,
+      {}
+    );
 
   const aiOpportunities =
     parseJson<string[]>(
@@ -278,12 +400,10 @@ export default async function PropertyPage({
             refurbPlan,
 
           recommendation:
-            property.aiRecommendation ===
-              "BUY" ||
+            property.aiRecommendation === "BUY" ||
             property.aiRecommendation ===
               "INVESTIGATE" ||
-            property.aiRecommendation ===
-              "AVOID"
+            property.aiRecommendation === "AVOID"
               ? property.aiRecommendation
               : "INVESTIGATE",
 
@@ -295,9 +415,15 @@ export default async function PropertyPage({
         }
       : null;
 
+  /*
+   * ============================================================
+   * PAGE
+   * ============================================================
+   */
+
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
-      <div className="mx-auto max-w-7xl px-4 py-5 sm:px-6 lg:px-8">
+    <main className="min-h-screen bg-slate-950 px-4 py-6 text-white sm:px-6 lg:px-8">
+      <div className="mx-auto max-w-7xl">
 
         {/* BACK */}
 
@@ -310,119 +436,108 @@ export default async function PropertyPage({
           </Link>
         </div>
 
-        {/* ==================================================
-            PROPERTY HEADER
-        ================================================== */}
+        {/* PROPERTY HEADER */}
 
-        <section className="rounded-3xl border border-slate-800 bg-slate-900 p-5 shadow-xl">
+        <PropertyHeader
+          property={property}
+          images={images}
+          floorPlans={floorPlans}
+          purchasePrice={purchasePrice}
+          estimatedValue={estimatedValue}
+          discountPercent={discountPercent}
+          formatMoney={formatMoney}
+        />
 
-          <div className="grid gap-6 lg:grid-cols-[1.3fr_1fr]">
+        {/* EPC */}
 
-            {/* PROPERTY GALLERY */}
+        <EPCCertificate
+          rating={epcRating}
+          potentialRating={epcPotentialRating}
+          score={epcScore}
+          potentialScore={epcPotentialScore}
+          certificateDate={epcCertificateDate}
+          floorArea={
+            epcFloorArea ??
+            property.floorArea
+          }
+          heating={epcHeating}
+          source={epcSource}
+          propertyType={epcPropertyType}
+          mainFuel={epcMainFuel}
+          walls={epcWalls}
+          roof={epcRoof}
+          windows={epcWindows}
+          recommendations={
+            epcRecommendations.length > 0
+              ? epcRecommendations
+              : null
+          }
+          estimatedCosts={epcEstimatedCosts}
+          certificateUrl={epcCertificateUrl}
+        />
 
-            <div>
-              <PropertyGallery
-                images={images}
-                address={property.address}
-              />
-            </div>
+        {/* LOCATION */}
 
-            {/* PROPERTY INFORMATION */}
+        {(property.latitude || property.postcode) && (
+          <section className="mt-6 rounded-3xl border border-slate-800 bg-slate-900 p-5">
+            <h2 className="text-xl font-bold">
+              Location
+            </h2>
 
-            <div className="flex flex-col justify-between">
-
-              <div>
-
-                <div className="mb-2 flex flex-wrap items-center gap-2">
-
-                  <span className="rounded-full bg-blue-500/10 px-3 py-1 text-sm font-semibold text-blue-400">
-                    {property.type ||
-                      "Property"}
-                  </span>
-
-                  {discountPercent > 0 && (
-                    <span className="rounded-full bg-green-500/10 px-3 py-1 text-sm font-semibold text-green-400">
-                      {discountPercent}% BMV
-                    </span>
-                  )}
-
-                </div>
-
-                <h1 className="text-2xl font-bold leading-tight sm:text-3xl">
-                  {property.address}
-                </h1>
-
-                <p className="mt-1 text-base text-slate-400">
-                  {property.postcode}
-                </p>
-
-                <div className="mt-4 flex flex-wrap gap-5 text-slate-300">
-
-                  <span>
-                    🛏{" "}
-                    {property.bedrooms ??
-                      "—"}
-                  </span>
-
-                  <span>
-                    🛁{" "}
-                    {property.bathrooms ??
-                      "—"}
-                  </span>
-
-                  <span>
-                    🏠{" "}
-                    {property.type ??
-                      "—"}
-                  </span>
-
-                </div>
-
-              </div>
-
-              {/* PRICE */}
-
-              <div className="mt-6 grid grid-cols-2 gap-3">
-
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              {property.latitude && property.longitude && (
                 <div className="rounded-2xl bg-slate-800 p-4">
-
-                  <p className="text-sm text-slate-400">
-                    Asking price
+                  <p className="text-xs text-slate-500">Coordinates</p>
+                  <p className="mt-1 text-sm font-semibold text-white">
+                    {property.latitude.toFixed(5)}, {property.longitude.toFixed(5)}
                   </p>
-
-                  <p className="mt-1 text-2xl font-bold">
-                    {formatMoney(
-                      purchasePrice
-                    )}
-                  </p>
-
                 </div>
+              )}
 
-                <div className="rounded-2xl bg-green-500/10 p-4">
-
-                  <p className="text-sm text-green-400">
-                    Estimated value
+              {property.postcode && (
+                <div className="rounded-2xl bg-slate-800 p-4">
+                  <p className="text-xs text-slate-500">Postcode</p>
+                  <p className="mt-1 text-sm font-semibold text-white">
+                    {property.postcode}
                   </p>
-
-                  <p className="mt-1 text-2xl font-bold text-green-400">
-                    {formatMoney(
-                      estimatedValue
-                    )}
-                  </p>
-
                 </div>
-
-              </div>
-
+              )}
             </div>
+          </section>
+        )}
 
-          </div>
+        {/* FLOOR PLANS */}
 
-        </section>
+        {floorPlans.length > 0 && (
+          <section className="mt-6 rounded-3xl border border-slate-800 bg-slate-900 p-5">
+            <h2 className="text-xl font-bold">
+              Floor Plans
+            </h2>
 
-        {/* ==================================================
-            COMPARABLE VALUATION
-        ================================================== */}
+            <p className="mt-1 text-sm text-slate-400">
+              {floorPlans.length} floor plan image{floorPlans.length !== 1 ? "s" : ""} available
+            </p>
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              {floorPlans.map(
+                (fp, index) => (
+                  <div
+                    key={index}
+                    className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-800"
+                  >
+                    <img
+                      src={fp}
+                      alt={`Floor plan ${index + 1}`}
+                      className="h-48 w-full object-contain bg-white"
+                    />
+                  </div>
+                )
+              )}
+            </div>
+          </section>
+        )}
+
+        {/* COMPARABLE VALUATION */}
 
         <section className="mt-6">
 
@@ -433,8 +548,7 @@ export default async function PropertyPage({
             </h2>
 
             <p className="mt-1 text-sm text-slate-400">
-              Valuation based on recent local
-              sold-property evidence.
+              Valuation based on recent local sold-property evidence.
             </p>
 
           </div>
@@ -482,8 +596,7 @@ export default async function PropertyPage({
               </p>
 
               <p className="mt-1 text-2xl font-bold">
-                {valuation?.comparableCount ??
-                  0}
+                {valuation?.comparableCount ?? 0}
               </p>
 
             </div>
@@ -495,9 +608,7 @@ export default async function PropertyPage({
               </p>
 
               <p className="mt-1 text-2xl font-bold text-blue-400">
-                {valuation?.confidence ??
-                  0}
-                %
+                {valuation?.confidence ?? 0}%
               </p>
 
             </div>
@@ -506,114 +617,13 @@ export default async function PropertyPage({
 
         </section>
 
-        {/* ==================================================
-            VALUATION EVIDENCE
-        ================================================== */}
+        {/* VALUATION EVIDENCE */}
 
-        <section className="mt-6 rounded-3xl border border-slate-800 bg-slate-900 p-5">
+        <ValuationEvidence
+          valuation={valuation}
+        />
 
-          <h2 className="text-xl font-bold">
-            Valuation Evidence
-          </h2>
-
-          <p className="mt-1 text-sm text-slate-400">
-            How the valuation has been calculated.
-          </p>
-
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-
-            <div className="rounded-2xl bg-slate-800 p-3">
-
-              <p className="text-sm text-slate-400">
-                Exact postcode
-              </p>
-
-              <p className="mt-1 text-xl font-bold">
-                {valuation?.exactPostcodeCount ??
-                  0}
-              </p>
-
-              <p className="text-xs text-slate-500">
-                Same postcode
-              </p>
-
-            </div>
-
-            <div className="rounded-2xl bg-slate-800 p-3">
-
-              <p className="text-sm text-slate-400">
-                Same street
-              </p>
-
-              <p className="mt-1 text-xl font-bold">
-                {valuation?.sameStreetCount ??
-                  0}
-              </p>
-
-              <p className="text-xs text-slate-500">
-                Strong local evidence
-              </p>
-
-            </div>
-
-            <div className="rounded-2xl bg-slate-800 p-3">
-
-              <p className="text-sm text-slate-400">
-                Same property type
-              </p>
-
-              <p className="mt-1 text-xl font-bold">
-                {valuation?.sameTypeCount ??
-                  0}
-              </p>
-
-              <p className="text-xs text-slate-500">
-                Matching type
-              </p>
-
-            </div>
-
-            <div className="rounded-2xl bg-slate-800 p-3">
-
-              <p className="text-sm text-slate-400">
-                Same bedrooms
-              </p>
-
-              <p className="mt-1 text-xl font-bold">
-                {valuation?.sameBedroomsCount ??
-                  0}
-              </p>
-
-              <p className="text-xs text-slate-500">
-                Where data exists
-              </p>
-
-            </div>
-
-            <div className="rounded-2xl bg-slate-800 p-3">
-
-              <p className="text-sm text-slate-400">
-                Recent sales
-              </p>
-
-              <p className="mt-1 text-xl font-bold">
-                {valuation?.recentCount ??
-                  0}
-              </p>
-
-              <p className="text-xs text-slate-500">
-                Within 12 months
-              </p>
-
-            </div>
-
-          </div>
-
-        </section>
-
-        {/* ==================================================
-            DEAL POSITION
-        ================================================== */}
+        {/* DEAL POSITION */}
 
         <section className="mt-6 rounded-3xl border border-slate-800 bg-slate-900 p-5">
 
@@ -686,7 +696,9 @@ export default async function PropertyPage({
                     : "text-red-400"
                 }`}
               >
-                {formatMoney(profit)}
+                {formatMoney(
+                  profit
+                )}
               </span>
 
             </div>
@@ -695,9 +707,7 @@ export default async function PropertyPage({
 
         </section>
 
-        {/* ==================================================
-            AI ANALYSIS
-        ================================================== */}
+        {/* AI ANALYSIS */}
 
         <AIAnalysisPanel
           propertyId={property.id}
@@ -706,9 +716,7 @@ export default async function PropertyPage({
           }
         />
 
-        {/* ==================================================
-            COMPARABLE SALES
-        ================================================== */}
+        {/* COMPARABLE SALES */}
 
         <section className="mt-6">
 
@@ -719,8 +727,7 @@ export default async function PropertyPage({
             </h2>
 
             <p className="mt-1 text-sm text-slate-400">
-              The actual sold properties used to
-              calculate the valuation.
+              The actual sold properties used to calculate the valuation.
             </p>
 
           </div>
@@ -748,9 +755,8 @@ export default async function PropertyPage({
                         <div className="flex flex-wrap items-center gap-2">
 
                           <h3 className="text-base font-bold">
-                            {
-                              comparable.address
-                            }
+                            {comparable.address ??
+                              "Unknown address"}
                           </h3>
 
                           {comparable.exactPostcode && (
@@ -768,17 +774,13 @@ export default async function PropertyPage({
                         </div>
 
                         <p className="mt-1 text-sm text-slate-400">
-                          {
-                            comparable.postcode
-                          }
+                          {comparable.postcode}
                         </p>
 
                         <div className="mt-3 flex flex-wrap gap-2">
 
                           {reasons.map(
-                            (
-                              reason: string
-                            ) => (
+                            (reason: string) => (
                               <span
                                 key={reason}
                                 className="rounded-lg bg-slate-800 px-2.5 py-1 text-xs text-slate-300"
@@ -809,9 +811,7 @@ export default async function PropertyPage({
 
                         <p className="mt-1 text-xs text-slate-500">
                           Comparable score:{" "}
-                          {
-                            comparable.comparableScore
-                          }
+                          {comparable.comparableScore}
                         </p>
 
                       </div>
@@ -827,15 +827,13 @@ export default async function PropertyPage({
 
         </section>
 
-        {/* SOURCE */}
+        {/* SOURCE DISCLAIMER */}
 
         <p className="mt-6 text-xs text-slate-500">
-          Comparable sales data sourced from HM
-          Land Registry Price Paid Data.
-          Valuations are estimates based on
-          available transaction evidence and should
-          not be treated as a formal survey or
-          valuation.
+          Comparable sales data sourced from HM Land Registry
+          Price Paid Data. Valuations are estimates based on
+          available transaction evidence and should not be treated
+          as a formal survey or valuation.
         </p>
 
       </div>

@@ -25,81 +25,140 @@ type Props = {
   property: Property;
 };
 
-function getPropertyImage(imagesString?: string | null): string {
+/* =========================================================
+   PROPERTY IMAGE
+========================================================= */
+
+function getPropertyImage(
+  imagesString?: string | null
+): string {
+  const fallback =
+    "/house-placeholder.jpg";
+
   if (!imagesString) {
-    return "/house-placeholder.jpg";
+    return fallback;
   }
 
   try {
-    const parsed = JSON.parse(imagesString);
+    const parsed =
+      JSON.parse(imagesString);
 
     if (!Array.isArray(parsed)) {
-      return "/house-placeholder.jpg";
+      return fallback;
     }
 
     for (const item of parsed) {
-      if (typeof item !== "string") {
+      if (
+        typeof item !== "string"
+      ) {
         continue;
       }
 
-      let url = item.trim();
+      let url =
+        item.trim();
+
+      if (!url) {
+        continue;
+      }
 
       /*
-       * Extract URL from Markdown:
-       *
-       * [https://example.com/photo.jpg](https://example.com/photo.jpg)
+       * Handle markdown-style URLs.
        */
-      const markdownMatch = url.match(
-        /\]\((https?:\/\/[^)]+)\)/
-      );
+      const markdownMatch =
+        url.match(
+          /\]\((https?:\/\/[^)]+)\)/
+        );
 
-      if (markdownMatch?.[1]) {
-        url = markdownMatch[1];
-      } else {
-        /*
-         * Also handle:
-         *
-         * [https://example.com/photo.jpg]
-         */
-        const bracketMatch = url.match(
+      if (
+        markdownMatch?.[1]
+      ) {
+        url =
+          markdownMatch[1];
+      }
+
+      /*
+       * Handle:
+       *
+       * [https://example.com/image.jpg]
+       */
+      const bracketMatch =
+        url.match(
           /\[(https?:\/\/[^\]]+)\]/
         );
 
-        if (bracketMatch?.[1]) {
-          url = bracketMatch[1];
-        }
+      if (
+        bracketMatch?.[1]
+      ) {
+        url =
+          bracketMatch[1];
       }
 
       /*
-       * Remove any remaining brackets/parentheses.
+       * Remove accidental wrappers.
        */
-      url = url
-        .replace(/^\[/, "")
-        .replace(/\]$/, "")
-        .replace(/^\(/, "")
-        .replace(/\)$/, "")
-        .trim();
+      url =
+        url
+          .replace(/^\[/, "")
+          .replace(/\]$/, "")
+          .replace(/^\(/, "")
+          .replace(/\)$/, "")
+          .trim();
 
       /*
-       * We specifically want an actual property photo.
+ * Accept both:
+ *
+ * 1. External property image URLs
+ * 2. Local images saved by FlipFinderAI
+ */
+if (
+  !/^https?:\/\//i.test(url) &&
+  !url.startsWith("/")
+) {
+  continue;
+}
+
+      const lower =
+        url.toLowerCase();
+
+      /*
+       * Reject obvious non-property images.
+       */
+      const blockedTerms = [
+        "logo",
+        "icon",
+        "avatar",
+        "agent-photo",
+        "branch",
+        "floorplan",
+        "floor-plan",
+        "map-marker",
+        "marker",
+        "favicon",
+        "sprite",
+        "placeholder",
+      ];
+
+      const blocked =
+        blockedTerms.some(
+          (term) =>
+            lower.includes(term)
+        );
+
+      if (blocked) {
+        continue;
+      }
+
+      /*
+       * IMPORTANT:
        *
-       * Ignore:
-       * - branch profile images
-       * - partner logos
-       * - floorplans
-       * - map markers
-       * - industry affiliation images
-       * - other Rightmove assets
+       * Do NOT restrict this to
+       * /property-photo/.
+       *
+       * Different UK property
+       * websites use different
+       * image URL structures.
        */
-      const isPropertyPhoto =
-        url.includes("/property-photo/") &&
-        !url.includes("floorplan") &&
-        !url.includes("logo") &&
-        !url.includes("marker");
-
-      if (isPropertyPhoto) {
-        return url;
-      }
+      return url;
     }
   } catch (error) {
     console.error(
@@ -108,55 +167,92 @@ function getPropertyImage(imagesString?: string | null): string {
     );
   }
 
-  return "/house-placeholder.jpg";
+  return fallback;
 }
+
+/* =========================================================
+   PROPERTY CARD
+========================================================= */
 
 export default function PropertyCard({
   property,
 }: Props) {
-  const [analysing, setAnalysing] = useState(false);
-  const [error, setError] = useState("");
+  const [
+    analysing,
+    setAnalysing,
+  ] = useState(false);
+
+  const [
+    error,
+    setError,
+  ] = useState("");
+
+  /*
+   * FINANCIAL VALUES
+   */
 
   const value =
-    property.estimatedValue ?? 0;
+    property.estimatedValue ??
+    0;
 
   const refurb =
-    property.totalRefurbCost ?? 0;
+    property.totalRefurbCost ??
+    0;
 
   const profit =
     property.potentialProfit ??
-    value - property.price - refurb;
+    value -
+      property.price -
+      refurb;
 
   const discount =
     property.discountPercent ??
     (value > 0
-      ? ((value - property.price) / value) * 100
+      ? ((value -
+          property.price) /
+          value) *
+        100
       : 0);
 
   const score =
-    property.aiScore ?? 0;
+    property.aiScore ??
+    0;
+
+  /*
+   * PROPERTY IMAGE
+   */
 
   const image =
-    getPropertyImage(property.images);
+    getPropertyImage(
+      property.images
+    );
+
+  /* =======================================================
+     AI ANALYSIS
+  ======================================================= */
 
   async function analyseDeal() {
     setAnalysing(true);
     setError("");
 
     try {
-      const response = await fetch(
-        "/api/analyse",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type":
-              "application/json",
-          },
-          body: JSON.stringify({
-            propertyId: property.id,
-          }),
-        }
-      );
+      const response =
+        await fetch(
+          "/api/analyse",
+          {
+            method: "POST",
+
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+
+            body: JSON.stringify({
+              propertyId:
+                property.id,
+            }),
+          }
+        );
 
       const data =
         await response.json();
@@ -184,10 +280,16 @@ export default function PropertyCard({
     }
   }
 
+  /* =======================================================
+     RENDER
+  ======================================================= */
+
   return (
     <div className="bg-white rounded-2xl overflow-hidden shadow-sm border border-gray-200 flex flex-col h-full">
 
-      {/* PROPERTY IMAGE */}
+      {/* ===================================================
+          PROPERTY IMAGE
+      =================================================== */}
 
       <div className="relative h-48 w-full bg-gray-100">
 
@@ -214,9 +316,13 @@ export default function PropertyCard({
 
       </div>
 
-      {/* PROPERTY DETAILS */}
+      {/* ===================================================
+          PROPERTY DETAILS
+      =================================================== */}
 
       <div className="p-5 flex flex-col gap-4 flex-1">
+
+        {/* ADDRESS */}
 
         <div>
 
@@ -231,18 +337,22 @@ export default function PropertyCard({
 
         </div>
 
-        {/* PROPERTY TYPE */}
+        {/* =================================================
+            PROPERTY TYPE
+        ================================================= */}
 
         <div className="flex gap-2 text-xs flex-wrap">
 
           <span className="bg-gray-100 px-3 py-1.5 rounded-full">
             🛏{" "}
-            {property.bedrooms ?? 0}
+            {property.bedrooms ??
+              0}
           </span>
 
           <span className="bg-gray-100 px-3 py-1.5 rounded-full">
             🛁{" "}
-            {property.bathrooms ?? 0}
+            {property.bathrooms ??
+              0}
           </span>
 
           <span className="bg-gray-100 px-3 py-1.5 rounded-full">
@@ -253,9 +363,13 @@ export default function PropertyCard({
 
         </div>
 
-        {/* FINANCIALS */}
+        {/* =================================================
+            FINANCIALS
+        ================================================= */}
 
         <div className="grid grid-cols-2 gap-4">
+
+          {/* PURCHASE */}
 
           <div>
 
@@ -270,6 +384,8 @@ export default function PropertyCard({
 
           </div>
 
+          {/* MARKET VALUE */}
+
           <div>
 
             <p className="text-xs text-gray-500">
@@ -283,6 +399,8 @@ export default function PropertyCard({
 
           </div>
 
+          {/* REFURB */}
+
           <div>
 
             <p className="text-xs text-gray-500">
@@ -295,6 +413,8 @@ export default function PropertyCard({
             </p>
 
           </div>
+
+          {/* PROFIT */}
 
           <div>
 
@@ -311,31 +431,37 @@ export default function PropertyCard({
 
         </div>
 
-        {/* ACTIONS */}
+        {/* =================================================
+            ACTIONS
+        ================================================= */}
 
         <div className="mt-auto">
 
           <button
-            onClick={analyseDeal}
-            disabled={analysing}
-            className="w-full bg-black text-white text-center py-3 rounded-xl text-sm font-bold hover:bg-gray-800 transition disabled:opacity-50 disabled:cursor-not-allowed"
+            onClick={
+              analyseDeal
+            }
+            disabled={
+              analysing
+            }
+            className="w-full bg-black text-white py-3 rounded-xl font-semibold hover:bg-gray-800 transition disabled:opacity-50"
           >
             {analysing
-              ? "🤖 Analysing Deal..."
-              : "🤖 Analyse Deal"}
+              ? "Analysing..."
+              : "Analyse Deal"}
           </button>
 
           {error && (
-            <p className="text-red-600 text-xs text-center mt-2">
+            <p className="text-red-600 text-xs mt-2 text-center">
               {error}
             </p>
           )}
 
           <Link
             href={`/property/${property.id}`}
-            className="block text-center text-sm font-semibold text-gray-500 hover:text-black mt-3"
+            className="block text-center text-sm text-gray-500 mt-3 hover:text-black"
           >
-            View Deal
+            View Property
           </Link>
 
         </div>

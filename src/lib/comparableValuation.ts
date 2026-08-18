@@ -1,6 +1,6 @@
 import prisma from "@/lib/prisma";
 
-type ScoredComparable = {
+type ComparableSaleWithScore = {
   sale: {
     id: number;
     postcode: string;
@@ -8,8 +8,8 @@ type ScoredComparable = {
     soldPrice: number;
     soldDate: Date | null;
     bedrooms: number | null;
-    bathrooms?: number | null;
-    floorArea?: number | null;
+    bathrooms: number | null;
+    floorArea: number | null;
     propertyType: string | null;
     source: string | null;
     createdAt: Date;
@@ -25,7 +25,12 @@ type ScoredComparable = {
     sameSector: boolean;
     sameDistrict: boolean;
     recent: boolean;
+    similarSize: boolean;
+    verySimilarSize: boolean;
   };
+
+  pricePerSqFt: number | null;
+  sizeDifferencePercent: number | null;
 };
 
 function normaliseType(
@@ -69,46 +74,26 @@ function normalisePostcode(
     .trim();
 }
 
-/**
- * UK postcode district.
- *
- * Examples:
- * LS8 3BA  -> LS8
- * LS10 2AB -> LS10
- * LS17 8AA -> LS17
- */
 function postcodeDistrict(
   postcode: string
 ): string {
-  const normalised =
-    normalisePostcode(postcode);
+  const normalised = normalisePostcode(postcode);
 
-  const match =
-    normalised.match(
-      /^([A-Z]{1,2}\d{1,2})\d/
-    );
+  const match = normalised.match(
+    /^([A-Z]{1,2}\d{1,2})\d/
+  );
 
   return match?.[1] || "";
 }
 
-/**
- * UK postcode sector.
- *
- * Examples:
- * LS8 3BA  -> LS83
- * LS10 2AB -> LS102
- * LS17 8AA -> LS178
- */
 function postcodeSector(
   postcode: string
 ): string {
-  const normalised =
-    normalisePostcode(postcode);
+  const normalised = normalisePostcode(postcode);
 
-  const match =
-    normalised.match(
-      /^([A-Z]{1,2}\d{1,2}\d)/
-    );
+  const match = normalised.match(
+    /^([A-Z]{1,2}\d{1,2}\d)/
+  );
 
   return match?.[1] || "";
 }
@@ -118,15 +103,19 @@ function extractStreetName(
 ): string {
   if (!address) return "";
 
-  const normalised =
-    normaliseAddress(address);
+  const normalised = normaliseAddress(address);
 
   if (!normalised) return "";
 
-  const parts =
-    normalised.split(" ");
+  const parts = normalised.split(" ");
 
-  // Remove house number.
+  /*
+   * Remove house number.
+   *
+   * Examples:
+   * 7 Sandmoor Drive
+   * 17A Sandmoor Drive
+   */
   if (
     parts.length > 0 &&
     /^\d+[a-z]?$/.test(parts[0])
@@ -134,8 +123,9 @@ function extractStreetName(
     parts.shift();
   }
 
-  // Remove flat number when clearly
-  // at the beginning.
+  /*
+   * Remove flat number.
+   */
   if (
     parts.length > 1 &&
     parts[0] === "flat" &&
@@ -164,37 +154,10 @@ function isSameStreet(
     return false;
   }
 
-  const propertyWords =
-    propertyStreet
-      .split(" ")
-      .filter(Boolean);
-
-  const saleWords =
-    saleStreet
-      .split(" ")
-      .filter(Boolean);
-
-  if (
-    propertyWords.length === 0 ||
-    saleWords.length === 0
-  ) {
-    return false;
-  }
-
-  const propertyCore =
-    propertyWords
-      .slice(0, 3)
-      .join(" ");
-
-  const saleCore =
-    saleWords
-      .slice(0, 3)
-      .join(" ");
-
   return (
-    propertyCore === saleCore ||
-    propertyStreet.includes(saleCore) ||
-    saleStreet.includes(propertyCore)
+    propertyStreet === saleStreet ||
+    propertyStreet.includes(saleStreet) ||
+    saleStreet.includes(propertyStreet)
   );
 }
 
@@ -272,25 +235,121 @@ function standardDeviation(
   return Math.sqrt(variance);
 }
 
+/*
+ * Returns the floor area we should use
+ * for valuation.
+ *
+ * Priority:
+ *
+ * 1. Property.floorArea
+ * 2. Property.epcFloorArea
+ *
+ * We deliberately do NOT use AI guesses here.
+ */
+function getPropertyFloorArea(
+  property: {
+    floorArea: number | null;
+    epcFloorArea: number | null;
+  }
+): number | null {
+  if (
+    property.floorArea !== null &&
+    property.floorArea > 0
+  ) {
+    return property.floorArea;
+  }
+
+  if (
+    property.epcFloorArea !== null &&
+    property.epcFloorArea > 0
+  ) {
+    return property.epcFloorArea;
+  }
+
+  return null;
+}
+
+/*
+ * Calculate size difference.
+ *
+ * Example:
+ *
+ * Subject = 400 sqm
+ * Comparable = 360 sqm
+ *
+ * Difference = 10%
+ */
+function getSizeDifferencePercent(
+  subjectArea: number | null,
+  comparableArea: number | null
+): number | null {
+  if (
+    !subjectArea ||
+    subjectArea <= 0 ||
+    !comparableArea ||
+    comparableArea <= 0
+  ) {
+    return null;
+  }
+
+  return Math.abs(
+    (
+      comparableArea -
+      subjectArea
+    ) /
+      subjectArea
+  ) * 100;
+}
+
+/*
+ * Determines whether a comparable is
+ * genuinely similar in size.
+ */
+function isVerySimilarSize(
+  difference: number | null
+): boolean {
+  return (
+    difference !== null &&
+    difference <= 10
+  );
+}
+
+function isSimilarSize(
+  difference: number | null
+): boolean {
+  return (
+    difference !== null &&
+    difference <= 20
+  );
+}
+
+/*
+ * Confidence should only become high when
+ * the evidence itself is strong.
+ */
 function confidenceScore(args: {
   selectedCount: number;
-  exactPostcodeCount: number;
   sameStreetCount: number;
+  exactPostcodeCount: number;
   sameTypeCount: number;
-  sameBedroomsCount: number;
+  similarSizeCount: number;
+  verySimilarSizeCount: number;
   recentCount: number;
   prices: number[];
   estimatedValue: number;
+  hasFloorArea: boolean;
 }): number {
   const {
     selectedCount,
-    exactPostcodeCount,
     sameStreetCount,
+    exactPostcodeCount,
     sameTypeCount,
-    sameBedroomsCount,
+    similarSizeCount,
+    verySimilarSizeCount,
     recentCount,
     prices,
     estimatedValue,
+    hasFloorArea,
   } = args;
 
   if (
@@ -302,85 +361,94 @@ function confidenceScore(args: {
 
   let confidence = 0;
 
-  // Number of useful comparables.
-  if (selectedCount >= 15) {
+  /*
+   * Number of good comparables.
+   */
+  if (selectedCount >= 10) {
     confidence += 15;
-  } else if (selectedCount >= 10) {
-    confidence += 13;
   } else if (selectedCount >= 7) {
-    confidence += 11;
+    confidence += 12;
   } else if (selectedCount >= 5) {
     confidence += 9;
   } else if (selectedCount >= 3) {
     confidence += 6;
   } else {
-    confidence += 3;
+    confidence += 2;
   }
 
-  // Exact postcode.
-  if (exactPostcodeCount >= 3) {
+  /*
+   * Same street.
+   */
+  if (sameStreetCount >= 4) {
     confidence += 20;
-  } else if (exactPostcodeCount >= 2) {
-    confidence += 17;
-  } else if (exactPostcodeCount >= 1) {
-    confidence += 12;
-  }
-
-  // Same street.
-  if (sameStreetCount >= 5) {
-    confidence += 20;
-  } else if (sameStreetCount >= 3) {
-    confidence += 18;
   } else if (sameStreetCount >= 2) {
-    confidence += 15;
+    confidence += 17;
   } else if (sameStreetCount >= 1) {
     confidence += 10;
   }
 
-  // Same property type.
-  const typeRatio =
-    sameTypeCount /
-    selectedCount;
-
-  if (typeRatio >= 0.9) {
+  /*
+   * Exact postcode.
+   */
+  if (exactPostcodeCount >= 3) {
     confidence += 15;
-  } else if (typeRatio >= 0.75) {
-    confidence += 12;
-  } else if (typeRatio >= 0.5) {
-    confidence += 8;
-  }
-
-  // Bedrooms.
-  if (
-    sameBedroomsCount > 0
-  ) {
-    const bedroomRatio =
-      sameBedroomsCount /
-      selectedCount;
-
-    if (bedroomRatio >= 0.8) {
-      confidence += 10;
-    } else if (
-      bedroomRatio >= 0.6
-    ) {
-      confidence += 7;
-    }
-  }
-
-  // Recency.
-  const recentRatio =
-    recentCount /
-    selectedCount;
-
-  if (recentRatio >= 0.8) {
+  } else if (exactPostcodeCount >= 1) {
     confidence += 10;
-  } else if (recentRatio >= 0.6) {
-    confidence += 8;
-  } else if (recentRatio >= 0.4) {
-    confidence += 5;
   }
 
-  // Price consistency.
+  /*
+   * Property type.
+   */
+  if (
+    selectedCount > 0 &&
+    sameTypeCount / selectedCount >= 0.8
+  ) {
+    confidence += 10;
+  } else if (
+    selectedCount > 0 &&
+    sameTypeCount / selectedCount >= 0.6
+  ) {
+    confidence += 6;
+  }
+
+  /*
+   * SIZE IS NOW A MAJOR CONFIDENCE FACTOR.
+   */
+  if (verySimilarSizeCount >= 3) {
+    confidence += 20;
+  } else if (verySimilarSizeCount >= 2) {
+    confidence += 16;
+  } else if (verySimilarSizeCount >= 1) {
+    confidence += 12;
+  } else if (similarSizeCount >= 3) {
+    confidence += 8;
+  }
+
+  /*
+   * Recent sales.
+   */
+  if (
+    selectedCount > 0 &&
+    recentCount / selectedCount >= 0.8
+  ) {
+    confidence += 10;
+  } else if (
+    selectedCount > 0 &&
+    recentCount / selectedCount >= 0.5
+  ) {
+    confidence += 6;
+  }
+
+  /*
+   * Floor area evidence.
+   */
+  if (hasFloorArea) {
+    confidence += 10;
+  }
+
+  /*
+   * Price consistency.
+   */
   const deviation =
     standardDeviation(prices);
 
@@ -389,14 +457,12 @@ function confidenceScore(args: {
       ? deviation / estimatedValue
       : 1;
 
-  if (coefficient <= 0.05) {
+  if (coefficient <= 0.10) {
     confidence += 10;
-  } else if (coefficient <= 0.10) {
-    confidence += 8;
-  } else if (coefficient <= 0.15) {
-    confidence += 6;
   } else if (coefficient <= 0.20) {
-    confidence += 4;
+    confidence += 6;
+  } else if (coefficient <= 0.30) {
+    confidence += 3;
   }
 
   return Math.min(
@@ -424,6 +490,12 @@ export async function calculateComparableValue(
     );
   }
 
+  /*
+   * ========================================
+   * SUBJECT PROPERTY
+   * ========================================
+   */
+
   const postcode =
     normalisePostcode(
       property.postcode
@@ -448,32 +520,89 @@ export async function calculateComparableValue(
     property.bedrooms ?? null;
 
   /*
-   * Use three years of transaction
-   * history as the initial evidence pool.
+   * Use structured floor area first.
+   * EPC floor area is the fallback.
    */
-  const threeYearsAgo =
-    new Date();
+  const subjectFloorArea =
+  getPropertyFloorArea({
+    floorArea:
+      property.floorArea,
+   epcFloorArea:
+  property.epcFloorArea,
+  });
 
-  threeYearsAgo.setFullYear(
-    threeYearsAgo.getFullYear() - 3
+  console.log(
+    "========================================"
+  );
+
+  console.log(
+    "COMPARABLE VALUATION"
+  );
+
+  console.log(
+    "PROPERTY:",
+    property.address
+  );
+
+  console.log(
+    "POSTCODE:",
+    postcode
+  );
+
+  console.log(
+    "PROPERTY TYPE:",
+    propertyType
+  );
+
+  console.log(
+    "BEDROOMS:",
+    bedrooms
+  );
+
+  console.log(
+    "FLOOR AREA:",
+    subjectFloorArea
+  );
+
+  console.log(
+    "========================================"
   );
 
   /*
-   * Pull a large local evidence pool.
+   * ========================================
+   * EVIDENCE WINDOW
+   * ========================================
    *
-   * IMPORTANT:
-   * The postcode district must be LS8,
-   * not LS83.
+   * Use five years rather than only three.
+   *
+   * This is important for expensive houses
+   * where there may be very few transactions.
+   */
+  const fiveYearsAgo =
+    new Date();
+
+  fiveYearsAgo.setFullYear(
+    fiveYearsAgo.getFullYear() - 5
+  );
+
+  /*
+   * Pull a large district evidence pool.
+   *
+   * We intentionally don't only pull the
+   * postcode sector because we need to be able
+   * to widen the search intelligently.
    */
   const comparables =
     await prisma.comparableSale.findMany({
       where: {
         postcode: {
-          startsWith: district,
+          startsWith:
+            district,
         },
 
         soldDate: {
-          gte: threeYearsAgo,
+          gte:
+            fiveYearsAgo,
         },
 
         soldPrice: {
@@ -482,10 +611,11 @@ export async function calculateComparableValue(
       },
 
       orderBy: {
-        soldDate: "desc",
+        soldDate:
+          "desc",
       },
 
-      take: 1000,
+      take: 2000,
     });
 
   if (
@@ -502,17 +632,26 @@ export async function calculateComparableValue(
       sameStreetCount: 0,
       sameTypeCount: 0,
       sameBedroomsCount: 0,
+      similarSizeCount: 0,
+      verySimilarSizeCount: 0,
       recentCount: 0,
+      subjectFloorArea,
+      valuationMethod:
+        "No comparable sales available",
       comparables: [],
     };
   }
 
   /*
-   * SCORE EVERY SALE.
+   * ========================================
+   * SCORE EVERY SALE
+   * ========================================
    */
   const scored =
     comparables.map(
-      (sale): ScoredComparable => {
+      (
+        sale
+      ): ComparableSaleWithScore => {
         let score = 0;
 
         const salePostcode =
@@ -583,38 +722,78 @@ export async function calculateComparableValue(
             sale.soldDate
           );
 
+        const sizeDifferencePercent =
+          getSizeDifferencePercent(
+            subjectFloorArea,
+            sale.floorArea
+          );
+
+        const verySimilarSize =
+          isVerySimilarSize(
+            sizeDifferencePercent
+          );
+
+        const similarSize =
+          isSimilarSize(
+            sizeDifferencePercent
+          );
+
         /*
+         * ====================================
          * LOCATION
+         * ====================================
          */
 
-        // Exact postcode is the strongest
-        // geographic evidence.
-        if (exactPostcode) {
-          score += 100;
-        }
-
-        // Same street is extremely strong.
+        /*
+         * SAME STREET
+         *
+         * This is deliberately extremely strong.
+         */
         if (sameStreet) {
-          score += 90;
-        }
-
-        // Same postcode sector.
-        if (sameSector) {
-          score += 35;
-        }
-
-        // Same postcode district.
-        if (sameDistrict) {
-          score += 10;
+          score += 180;
         }
 
         /*
-         * PROPERTY CHARACTERISTICS
+         * EXACT POSTCODE
+         */
+        if (exactPostcode) {
+          score += 130;
+        }
+
+        /*
+         * SAME SECTOR
+         */
+        if (sameSector) {
+          score += 55;
+        }
+
+        /*
+         * SAME DISTRICT
+         */
+        if (sameDistrict) {
+          score += 20;
+        }
+
+        /*
+         * ====================================
+         * PROPERTY TYPE
+         * ====================================
          */
 
         if (samePropertyType) {
-          score += 40;
+          score += 60;
+        } else {
+          /*
+           * Penalise completely different types.
+           */
+          score -= 50;
         }
+
+        /*
+         * ====================================
+         * BEDROOMS
+         * ====================================
+         */
 
         if (
           bedrooms !== null &&
@@ -626,32 +805,97 @@ export async function calculateComparableValue(
                 sale.bedrooms
             );
 
-          if (difference === 0) {
-            score += 35;
+          if (
+            difference === 0
+          ) {
+            score += 45;
           } else if (
             difference === 1
           ) {
-            score += 15;
+            score += 25;
+          } else if (
+            difference === 2
+          ) {
+            score += 10;
+          } else {
+            score -= 20;
           }
         }
 
         /*
+         * ====================================
+         * FLOOR AREA
+         * ====================================
+         *
+         * This is now one of the most important
+         * factors in the whole engine.
+         */
+
+        if (
+          verySimilarSize
+        ) {
+          score += 100;
+        } else if (
+          similarSize
+        ) {
+          score += 60;
+        } else if (
+          sizeDifferencePercent !==
+            null &&
+          sizeDifferencePercent <=
+            30
+        ) {
+          score += 25;
+        } else if (
+          sizeDifferencePercent !==
+            null
+        ) {
+          score -= 50;
+        }
+
+        /*
+         * ====================================
          * RECENCY
+         * ====================================
          */
 
         if (age <= 3) {
-          score += 35;
-        } else if (age <= 6) {
+          score += 45;
+        } else if (
+          age <= 6
+        ) {
+          score += 38;
+        } else if (
+          age <= 12
+        ) {
           score += 30;
-        } else if (age <= 12) {
-          score += 25;
-        } else if (age <= 18) {
-          score += 18;
-        } else if (age <= 24) {
+        } else if (
+          age <= 18
+        ) {
+          score += 20;
+        } else if (
+          age <= 24
+        ) {
           score += 12;
-        } else if (age <= 36) {
-          score += 6;
+        } else {
+          score += 4;
         }
+
+        /*
+         * ====================================
+         * £ PER SQ FT
+         * ====================================
+         */
+
+        const pricePerSqFt =
+          sale.floorArea &&
+          sale.floorArea > 0
+            ? Math.round(
+                sale.soldPrice /
+                  (sale.floorArea *
+                    10.7639)
+              )
+            : null;
 
         return {
           sale,
@@ -665,26 +909,37 @@ export async function calculateComparableValue(
             sameDistrict,
             recent:
               age <= 12,
+            similarSize,
+            verySimilarSize,
           },
+          pricePerSqFt,
+          sizeDifferencePercent,
         };
       }
     );
 
   /*
-   * Strongest first.
+   * ========================================
+   * SORT
+   * ========================================
    */
+
   scored.sort(
     (a, b) =>
-      b.score - a.score
+      b.score -
+      a.score
   );
 
   /*
-   * REMOVE DUPLICATE PROPERTY ADDRESSES
+   * ========================================
+   * REMOVE DUPLICATES
+   * ========================================
    */
+
   const uniqueAddresses =
     new Map<
       string,
-      ScoredComparable
+      ComparableSaleWithScore
     >();
 
   for (
@@ -700,7 +955,9 @@ export async function calculateComparableValue(
     }
 
     if (
-      !uniqueAddresses.has(key)
+      !uniqueAddresses.has(
+        key
+      )
     ) {
       uniqueAddresses.set(
         key,
@@ -715,21 +972,32 @@ export async function calculateComparableValue(
     );
 
   /*
-   * SELECT BEST COMPARABLES
+   * ========================================
+   * SELECTION STRATEGY
+   * ========================================
+   *
+   * We want:
+   *
+   * 1. Same street + similar size
+   * 2. Same postcode + similar size
+   * 3. Same sector + similar size
+   * 4. Nearby district + similar size
+   *
+   * NOT simply "cheapest detached houses".
    */
 
   let selected =
     uniqueScored
       .filter(
         item =>
-          item.score >= 150
+          item.score >=
+          250
       )
-      .slice(0, 20);
+      .slice(0, 15);
 
   /*
-   * If fewer than five very
-   * strong comparables exist,
-   * widen the evidence pool.
+   * If we don't have enough excellent
+   * comparables, widen carefully.
    */
   if (
     selected.length < 5
@@ -738,26 +1006,43 @@ export async function calculateComparableValue(
       uniqueScored
         .filter(
           item =>
-            item.score >= 100
+            item.score >=
+            190
         )
         .slice(0, 20);
   }
 
   /*
-   * If still too few, use
-   * the strongest available.
+   * Widen again if necessary.
    */
   if (
     selected.length < 3
   ) {
     selected =
-      uniqueScored.slice(
-        0,
-        Math.min(
-          10,
-          uniqueScored.length
+      uniqueScored
+        .filter(
+          item =>
+            item.score >=
+            130
         )
-      );
+        .slice(0, 20);
+  }
+
+  /*
+   * Last resort.
+   */
+  if (
+    selected.length < 3
+  ) {
+    selected =
+      uniqueScored
+        .slice(
+          0,
+          Math.min(
+            10,
+            uniqueScored.length
+          )
+        );
   }
 
   if (
@@ -774,96 +1059,151 @@ export async function calculateComparableValue(
       sameStreetCount: 0,
       sameTypeCount: 0,
       sameBedroomsCount: 0,
+      similarSizeCount: 0,
+      verySimilarSizeCount: 0,
       recentCount: 0,
+      subjectFloorArea,
+      valuationMethod:
+        "Insufficient comparable evidence",
       comparables: [],
     };
   }
 
   /*
-   * REMOVE EXTREME OUTLIERS
+   * ========================================
+   * PRICE-PER-SQ-FT VALUATION
+   * ========================================
+   *
+   * This becomes the primary valuation method
+   * whenever we have floor area for both the
+   * subject and comparable.
    */
 
-  const initialPrices =
+  const sizeBasedComparables =
+    selected.filter(
+      item =>
+        subjectFloorArea !==
+          null &&
+        item.sale.floorArea !==
+          null &&
+        item.sale.floorArea >
+          0
+    );
+
+  let estimatedValue = 0;
+  let valuationMethod =
+    "Comparable sale prices";
+
+  if (
+    subjectFloorArea !==
+      null &&
+    sizeBasedComparables.length >=
+      2
+  ) {
+    /*
+     * Calculate £/sq ft for each comparable.
+     */
+    const pricePerSqFtValues =
+      sizeBasedComparables
+        .map(
+          item =>
+            item.sale.soldPrice /
+            (item.sale.floorArea! *
+              10.7639)
+        )
+        .filter(
+          value =>
+            Number.isFinite(
+              value
+            ) &&
+            value > 0
+        );
+
+    const weightedPsfTotal =
+      sizeBasedComparables.reduce(
+        (total, item) => {
+          const psf =
+            item.sale.soldPrice /
+            (item.sale.floorArea! *
+              10.7639);
+
+          const weight =
+            Math.max(
+              10,
+              item.score
+            );
+
+          return (
+            total +
+            psf *
+              weight
+          );
+        },
+        0
+      );
+
+    const weightTotal =
+      sizeBasedComparables.reduce(
+        (total, item) =>
+          total +
+          Math.max(
+            10,
+            item.score
+          ),
+        0
+      );
+
+    const weightedPsf =
+      weightTotal > 0
+        ? weightedPsfTotal /
+          weightTotal
+        : median(
+            pricePerSqFtValues
+          );
+
+    estimatedValue =
+      Math.round(
+        (
+          weightedPsf *
+          subjectFloorArea *
+          10.7639
+        ) / 1000
+      ) * 1000;
+
+    valuationMethod =
+      "Size-adjusted £/sq ft comparable valuation";
+  } else {
+    /*
+     * Fallback when floor-area evidence
+     * isn't available.
+     */
+
+    const prices =
+      selected.map(
+        item =>
+          item.sale.soldPrice
+      );
+
+    estimatedValue =
+      median(
+        prices
+      );
+
+    valuationMethod =
+      "Comparable sale median — floor-area evidence unavailable";
+  }
+
+  /*
+   * ========================================
+   * MEDIAN COMPARABLE
+   * ========================================
+   */
+
+  const salePrices =
     selected.map(
       item =>
         item.sale.soldPrice
     );
-
-  const initialMedian =
-    median(
-      initialPrices
-    );
-
-  const filtered =
-    selected.filter(
-      item => {
-        const price =
-          item.sale.soldPrice;
-
-        return (
-          price >=
-            initialMedian *
-              0.60 &&
-          price <=
-            initialMedian *
-              1.50
-        );
-      }
-    );
-
-  const sales =
-    filtered.length >= 3
-      ? filtered
-      : selected;
-
-  /*
-   * WEIGHTED VALUATION
-   */
-
-  let weightedTotal = 0;
-  let totalWeight = 0;
-
-  for (
-    const item of sales
-  ) {
-    const weight =
-      Math.max(
-        10,
-        item.score
-      );
-
-    weightedTotal +=
-      item.sale.soldPrice *
-      weight;
-
-    totalWeight +=
-      weight;
-  }
-
-  const weightedValue =
-    totalWeight > 0
-      ? weightedTotal /
-        totalWeight
-      : 0;
-
-  /*
-   * MEDIAN
-   */
-
-  const salePrices =
-    sales.map(
-      item =>
-        item.sale.soldPrice
-    );
-
-  const medianValue =
-    median(
-      salePrices
-    );
-
-  /*
-   * SIMPLE AVERAGE
-   */
 
   const comparableAverage =
     Math.round(
@@ -876,23 +1216,9 @@ export async function calculateComparableValue(
     );
 
   /*
-   * FINAL VALUE
-   *
-   * 70% weighted comparable
-   * 30% median.
-   */
-  const estimatedValue =
-    Math.round(
-      (
-        weightedValue *
-          0.70 +
-        medianValue *
-          0.30
-      ) / 100
-    ) * 100;
-
-  /*
+   * ========================================
    * VALUATION RANGE
+   * ========================================
    */
 
   const deviation =
@@ -902,9 +1228,9 @@ export async function calculateComparableValue(
 
   const rangeAmount =
     Math.max(
-      7500,
+      15000,
       Math.round(
-        deviation * 0.65
+        deviation * 0.50
       )
     );
 
@@ -915,8 +1241,8 @@ export async function calculateComparableValue(
         (
           estimatedValue -
           rangeAmount
-        ) / 100
-      ) * 100
+        ) / 1000
+      ) * 1000
     );
 
   const valuationRangeHigh =
@@ -924,64 +1250,84 @@ export async function calculateComparableValue(
       (
         estimatedValue +
         rangeAmount
-      ) / 100
-    ) * 100;
+      ) / 1000
+    ) * 1000;
 
   /*
+   * ========================================
    * EVIDENCE COUNTS
+   * ========================================
    */
 
   const exactPostcodeCount =
-    sales.filter(
+    selected.filter(
       item =>
         item.factors
           .exactPostcode
     ).length;
 
   const sameStreetCount =
-    sales.filter(
+    selected.filter(
       item =>
         item.factors
           .sameStreet
     ).length;
 
   const sameTypeCount =
-    sales.filter(
+    selected.filter(
       item =>
         item.factors
           .samePropertyType
     ).length;
 
   const sameBedroomsCount =
-    sales.filter(
+    selected.filter(
       item =>
         item.factors
           .sameBedrooms
     ).length;
 
+  const similarSizeCount =
+    selected.filter(
+      item =>
+        item.factors
+          .similarSize
+    ).length;
+
+  const verySimilarSizeCount =
+    selected.filter(
+      item =>
+        item.factors
+          .verySimilarSize
+    ).length;
+
   const recentCount =
-    sales.filter(
+    selected.filter(
       item =>
         item.factors
           .recent
     ).length;
 
   /*
+   * ========================================
    * CONFIDENCE
+   * ========================================
    */
 
   const confidence =
     confidenceScore({
       selectedCount:
-        sales.length,
-
-      exactPostcodeCount,
+        selected.length,
 
       sameStreetCount,
 
+      exactPostcodeCount,
+
       sameTypeCount,
 
-      sameBedroomsCount,
+      similarSizeCount,
+
+      verySimilarSizeCount,
 
       recentCount,
 
@@ -989,10 +1335,16 @@ export async function calculateComparableValue(
         salePrices,
 
       estimatedValue,
+
+      hasFloorArea:
+        subjectFloorArea !==
+        null,
     });
 
   /*
+   * ========================================
    * BMV
+   * ========================================
    */
 
   const discountPercent =
@@ -1003,13 +1355,75 @@ export async function calculateComparableValue(
               estimatedValue -
               property.price
             ) /
-            estimatedValue
+              estimatedValue
           ) * 100
         )
       : 0;
 
   /*
-   * SAVE TO PROPERTY
+   * ========================================
+   * LOG EVERYTHING
+   * ========================================
+   */
+
+  console.log(
+    "========================================"
+  );
+
+  console.log(
+    "VALUATION RESULT"
+  );
+
+  console.log(
+    "METHOD:",
+    valuationMethod
+  );
+
+  console.log(
+    "SUBJECT FLOOR AREA:",
+    subjectFloorArea
+  );
+
+  console.log(
+    "ESTIMATED VALUE:",
+    estimatedValue
+  );
+
+  console.log(
+    "RANGE:",
+    valuationRangeLow,
+    "-",
+    valuationRangeHigh
+  );
+
+  console.log(
+    "CONFIDENCE:",
+    confidence
+  );
+
+  console.log(
+    "SAME STREET:",
+    sameStreetCount
+  );
+
+  console.log(
+    "SIMILAR SIZE:",
+    similarSizeCount
+  );
+
+  console.log(
+    "VERY SIMILAR SIZE:",
+    verySimilarSizeCount
+  );
+
+  console.log(
+    "========================================"
+  );
+
+  /*
+   * ========================================
+   * SAVE
+   * ========================================
    */
 
   await prisma.property.update({
@@ -1031,7 +1445,9 @@ export async function calculateComparableValue(
   });
 
   /*
-   * RETURN EVERYTHING NEEDED BY UI
+   * ========================================
+   * RETURN
+   * ========================================
    */
 
   return {
@@ -1040,7 +1456,7 @@ export async function calculateComparableValue(
     comparableAverage,
 
     comparableCount:
-      sales.length,
+      selected.length,
 
     confidence,
 
@@ -1056,10 +1472,18 @@ export async function calculateComparableValue(
 
     sameBedroomsCount,
 
+    similarSizeCount,
+
+    verySimilarSizeCount,
+
     recentCount,
 
+    subjectFloorArea,
+
+    valuationMethod,
+
     comparables:
-      sales.map(
+      selected.map(
         item => ({
           id:
             item.sale.id,
@@ -1078,6 +1502,18 @@ export async function calculateComparableValue(
 
           bedrooms:
             item.sale.bedrooms,
+
+          bathrooms:
+            item.sale.bathrooms,
+
+          floorArea:
+            item.sale.floorArea,
+
+          pricePerSqFt:
+            item.pricePerSqFt,
+
+          sizeDifferencePercent:
+            item.sizeDifferencePercent,
 
           propertyType:
             item.sale.propertyType,
@@ -1111,6 +1547,14 @@ export async function calculateComparableValue(
           sameDistrict:
             item.factors
               .sameDistrict,
+
+          similarSize:
+            item.factors
+              .similarSize,
+
+          verySimilarSize:
+            item.factors
+              .verySimilarSize,
 
           recent:
             item.factors

@@ -1,151 +1,166 @@
 generator client {
   provider = "prisma-client-js"
-  output   = "../src/generated/prisma"
+  output   = "../src/generated/prisma/client"
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
 }
 
 model Property {
-  id Int @id @default(autoincrement())
-
-  externalId String @unique
-  address String
-  postcode String
-  type String
-  description String?
-  listingUrl String?
-  agent String?
-  source String?
-  images String?
-
-  price Int
-  estimatedValue Int?
-  soldComparableAvg Int?
-  discountPercent Int?
-
-  bedrooms Int?
-  bathrooms Int?
-  floorArea Int?
-  tenure String?
-  epcRating String?
-
-  refurbRequired Boolean @default(false)
-  kitchenCost Int?
-  bathroomCost Int?
-  decorationCost Int?
-  extensionCost Int?
-  totalRefurbCost Int?
-
-  purchaseCosts Int?
-  stampDuty Int?
-  legalCosts Int?
-  totalInvestment Int?
-  resaleValue Int?
-  potentialProfit Int?
-  rentalValue Int?
-  yield Float?
-
-  aiScore Int?
-  aiConfidence Int?
-  aiRecommendation String?
-  aiSummary String?
-  aiOpportunities String?
-  aiRisks String?
-
-  photoAnalysis String?
-  detectedIssues String?
-  refurbPlan String?
-
-  valuationReasoning String?
-  comparableAnalysis String?
-  marketAnalysis String?
-
-  aiTrainingData String?
-  actualOutcome String?
-  dealSuccessful Boolean?
-
-  dateListed DateTime?
-  lastSeen DateTime @default(now())
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  photos PropertyPhoto[]
-  analyses AIAnalysis[]
+  id                    Int             @id @default(autoincrement())
+  externalId            String          @unique
+  address               String
+  postcode              String
+  type                  String
+  description           String?
+  listingUrl            String?
+  agent                 String?
+  source                String?
+  images                String?
+  price                 Int
+  estimatedValue        Int?
+  soldComparableAvg     Int?
+  discountPercent       Int?
+  bedrooms              Int?
+  bathrooms             Int?
+  floorArea             Int?
+  tenure                String?
+  dateListed            DateTime?
+  lastSeen              DateTime        @default(now())
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+  epcRating             String?
+  epcPotentialRating    String?
+  epcScore              Int?
+  epcCertificateDate    DateTime?
+  epcFloorArea          Int?
+  epcHeating            String?
+  epcSource             String?
+  refurbRequired        Boolean         @default(false)
+  kitchenCost           Int?
+  bathroomCost          Int?
+  decorationCost        Int?
+  extensionCost         Int?
+  totalRefurbCost       Int?
+  refurbPlan            String?
+  purchaseCosts         Int?
+  stampDuty             Int?
+  legalCosts            Int?
+  totalInvestment       Int?
+  resaleValue           Int?
+  potentialProfit       Int?
+  rentalValue           Int?
+  potentialRentalValue  Int?
+  rentalSource          String?
+  rentalEvidence        String?
+  rentalUpdatedAt       DateTime?
+  yield                 Float?
+  aiScore               Int?
+  aiConfidence          Int?
+  aiRecommendation      String?
+  aiSummary             String?
+  aiOpportunities       String?
+  aiRisks               String?
+  detectedIssues        String?
+  photoAnalysis         String?
+  valuationReasoning    String?
+  comparableAnalysis    String?
+  marketAnalysis        String?
+  aiTrainingData        String?
+  actualOutcome         String?
+  dealSuccessful        Boolean?
+  houseNumberAI         String?
+  houseNumberConfidence Float?
+  houseNumberEvidence   String?
+  listingHouseNumber    String?
+  targetHouseNumber     String?
+  effectiveHouseNumber  String?
+  targetMatch           Boolean?
+  targetMismatchReason  String?
+  epcCertificateImage   String?
+  epcCertificateUrl     String?
+  epcPotentialScore     Int?
+  epcExpiryDate         DateTime?
+  epcPropertyType       String?
+  epcWalls              String?
+  epcRoof               String?
+  epcWindows            String?
+  epcMainFuel           String?
+  epcRecommendations    String?
+  epcEstimatedCosts     String?
+  epcFullCertificate    String?
+  floorPlanSource       String?
+  floorPlanUrl          String?
+  floorPlanImages       String?
+  primaryPhoto          String?
+  latitude              Float?
+  longitude             Float?
+  addressConfidence     String?
+  addressSource         String?
+  analyses              AIAnalysis[]
+  photos                PropertyPhoto[]
 }
 
 model PropertyPhoto {
-  id Int @id @default(autoincrement())
-
-  propertyId Int
-  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
-
-  url String
-
-  aiDescription String?
-  detectedRoom String?
-  conditionScore Int?
+  id                  Int      @id @default(autoincrement())
+  propertyId          Int
+  url                 String
+  type                String   @default("photo")
+  sourceUrl           String?
+  displayOrder        Int      @default(0)
+  isPrimary           Boolean  @default(false)
+  aiDescription       String?
+  detectedRoom        String?
+  conditionScore      Int?
   estimatedRepairCost Int?
-
-  createdAt DateTime @default(now())
+  createdAt           DateTime @default(now())
+  property            Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
 }
 
 model ComparableSale {
-  id Int @id @default(autoincrement())
-
-  transactionId String? @unique
-
-  postcode String
-  address String?
-  soldPrice Int
-  soldDate DateTime?
-
-  bedrooms Int?
-  bathrooms Int?
-  floorArea Int?
-  epcRating String?
-
-  propertyType String?
-  source String?
-
-  createdAt DateTime @default(now())
+  id            Int       @id @default(autoincrement())
+  transactionId String?   @unique
+  postcode      String
+  address       String?
+  soldPrice     Int
+  soldDate      DateTime?
+  bedrooms      Int?
+  bathrooms     Int?
+  floorArea     Int?
+  epcRating     String?
+  propertyType  String?
+  source        String?
+  createdAt     DateTime  @default(now())
 }
 
 model AIAnalysis {
-  id Int @id @default(autoincrement())
-
+  id         Int      @id @default(autoincrement())
   propertyId Int
-  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
-
-  model String
-  prompt String
-  response String
+  model      String
+  prompt     String
+  response   String
   confidence Int?
-
-  createdAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
 }
 
 model MarketData {
-  id Int @id @default(autoincrement())
-
-  postcode String
+  id           Int      @id @default(autoincrement())
+  postcode     String
   averagePrice Int?
-  averageRent Int?
-  demandScore Int?
-  growthRate Float?
-
-  createdAt DateTime @default(now())
+  averageRent  Int?
+  demandScore  Int?
+  growthRate   Float?
+  createdAt    DateTime @default(now())
 }
 
 model LearningExample {
-  id Int @id @default(autoincrement())
-
-  propertyId Int?
+  id             Int      @id @default(autoincrement())
+  propertyId     Int?
   beforeAnalysis String?
-  finalDecision String?
-  actualResult String?
-  profit Int?
-
-  createdAt DateTime @default(now())
+  finalDecision  String?
+  actualResult   String?
+  profit         Int?
+  createdAt      DateTime @default(now())
 }

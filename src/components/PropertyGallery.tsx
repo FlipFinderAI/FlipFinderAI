@@ -4,23 +4,91 @@ import { useState } from "react";
 
 type PropertyGalleryProps = {
   images: string[];
+  floorPlans?: string[];
   address: string;
 };
 
 export default function PropertyGallery({
   images,
+  floorPlans = [],
   address,
 }: PropertyGalleryProps) {
-  const validImages = images.filter(
-    (image) =>
-      typeof image === "string" &&
-      image.trim().length > 0
+
+  const cleanImages = Array.from(
+    new Set(
+      images
+        .map((image) => {
+          if (
+            typeof image !== "string" ||
+            image.trim().length === 0
+          ) {
+            return null;
+          }
+
+          let cleaned = image.trim();
+
+          const markdownMatch = cleaned.match(
+            /^\[(.*?)\]\(.*?\)$/
+          );
+
+          if (markdownMatch) {
+            cleaned = markdownMatch[1];
+          }
+
+          return cleaned;
+        })
+        .filter(
+          (image): image is string =>
+            Boolean(image)
+        )
+    )
   );
 
-  const [selectedIndex, setSelectedIndex] = useState(0);
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const cleanFloorPlans = Array.from(
+    new Set(
+      floorPlans
+        .map((image) => {
+          if (
+            typeof image !== "string" ||
+            image.trim().length === 0
+          ) {
+            return null;
+          }
 
-  if (validImages.length === 0) {
+          let cleaned = image.trim();
+
+          const markdownMatch = cleaned.match(
+            /^\[(.*?)\]\(.*?\)$/
+          );
+
+          if (markdownMatch) {
+            cleaned = markdownMatch[1];
+          }
+
+          return cleaned;
+        })
+        .filter(
+          (image): image is string =>
+            Boolean(image)
+        )
+    )
+  );
+
+
+  const [selectedIndex, setSelectedIndex] =
+    useState(0);
+
+  const [isFullscreen, setIsFullscreen] =
+    useState(false);
+
+  const [activeTab, setActiveTab] =
+    useState<"photos" | "floorplans">("photos");
+
+  const hasFloorPlans = cleanFloorPlans.length > 0;
+  const displayImages = activeTab === "floorplans" ? cleanFloorPlans : cleanImages;
+
+
+  if (cleanImages.length === 0 && cleanFloorPlans.length === 0) {
     return (
       <div className="flex h-[420px] items-center justify-center rounded-2xl bg-slate-800 text-slate-500">
         No images available
@@ -28,179 +96,170 @@ export default function PropertyGallery({
     );
   }
 
+
   const selectedImage =
-    validImages[selectedIndex] || validImages[0];
+    displayImages[selectedIndex] ??
+    displayImages[0];
+
 
   function previousImage() {
     setSelectedIndex((current) =>
       current === 0
-        ? validImages.length - 1
+        ? displayImages.length - 1
         : current - 1
     );
   }
 
+
   function nextImage() {
     setSelectedIndex((current) =>
-      current === validImages.length - 1
+      current === displayImages.length - 1
         ? 0
         : current + 1
     );
   }
 
+
   return (
     <>
-      {/* MAIN GALLERY */}
       <div className="w-full">
-        <div
-          className="group relative cursor-pointer overflow-hidden rounded-2xl bg-slate-800"
-          onClick={() => setIsFullscreen(true)}
-        >
-          <img
-            src={selectedImage}
-            alt={`${address} - property photo ${
-              selectedIndex + 1
-            }`}
-            className="h-[420px] w-full object-cover transition duration-300 group-hover:scale-[1.02]"
-          />
 
-          {/* IMAGE COUNT */}
-          <div className="absolute bottom-4 right-4 rounded-full bg-black/70 px-4 py-2 text-sm font-semibold text-white backdrop-blur">
-            {selectedIndex + 1} / {validImages.length}
-          </div>
+        {/* TAB NAVIGATION */}
 
-          {/* EXPAND */}
-          <div className="absolute left-4 bottom-4 rounded-full bg-black/70 px-4 py-2 text-sm font-semibold text-white opacity-0 backdrop-blur transition group-hover:opacity-100">
-            Click to expand
-          </div>
-
-          {/* LEFT ARROW */}
-          {validImages.length > 1 && (
+        {hasFloorPlans && (
+          <div className="mb-3 flex gap-2">
             <button
               type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                previousImage();
+              onClick={() => {
+                setActiveTab("photos");
+                setSelectedIndex(0);
               }}
-              className="absolute left-4 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-black/65 text-2xl text-white backdrop-blur transition hover:bg-black/85"
-              aria-label="Previous photo"
+              className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${
+                activeTab === "photos"
+                  ? "bg-blue-500 text-white"
+                  : "bg-slate-800 text-slate-400 hover:bg-slate-700"
+              }`}
             >
-              ←
+              Photos ({cleanImages.length})
             </button>
-          )}
 
-          {/* RIGHT ARROW */}
-          {validImages.length > 1 && (
             <button
               type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                nextImage();
+              onClick={() => {
+                setActiveTab("floorplans");
+                setSelectedIndex(0);
               }}
-              className="absolute right-4 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-black/65 text-2xl text-white backdrop-blur transition hover:bg-black/85"
-              aria-label="Next photo"
+              className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${
+                activeTab === "floorplans"
+                  ? "bg-blue-500 text-white"
+                  : "bg-slate-800 text-slate-400 hover:bg-slate-700"
+              }`}
             >
-              →
+              Floor Plans ({cleanFloorPlans.length})
             </button>
-          )}
-        </div>
-
-        {/* THUMBNAILS */}
-        {validImages.length > 1 && (
-          <div className="mt-3 grid grid-cols-6 gap-2 sm:grid-cols-8 md:grid-cols-10 lg:grid-cols-12">
-            {validImages.map((image, index) => (
-              <button
-                key={`${image}-${index}`}
-                type="button"
-                onClick={() =>
-                  setSelectedIndex(index)
-                }
-                className={`relative overflow-hidden rounded-lg border-2 transition ${
-                  selectedIndex === index
-                    ? "border-blue-500"
-                    : "border-transparent opacity-70 hover:opacity-100"
-                }`}
-              >
-                <img
-                  src={image}
-                  alt={`${address} thumbnail ${
-                    index + 1
-                  }`}
-                  className="h-16 w-full object-cover"
-                />
-              </button>
-            ))}
           </div>
         )}
+
+        <div
+          className="group relative cursor-pointer overflow-hidden rounded-2xl bg-slate-800"
+          onClick={() =>
+            setIsFullscreen(true)
+          }
+        >
+
+          <img
+            src={selectedImage}
+            alt={`${address} photo`}
+            className="h-[420px] w-full object-cover"
+          />
+
+
+          <div className="absolute bottom-4 right-4 rounded-full bg-black/70 px-4 py-2 text-sm text-white">
+            {selectedIndex + 1} / {displayImages.length}
+          </div>
+
+
+          {displayImages.length > 1 && (
+            <>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  previousImage();
+                }}
+                className="absolute left-4 top-1/2 -translate-y-1/2 rounded-full bg-black/70 px-4 py-2 text-2xl text-white"
+              >
+                ←
+              </button>
+
+
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  nextImage();
+                }}
+                className="absolute right-4 top-1/2 -translate-y-1/2 rounded-full bg-black/70 px-4 py-2 text-2xl text-white"
+              >
+                →
+              </button>
+            </>
+          )}
+
+        </div>
+
+
+        <div className="mt-3 grid grid-cols-6 gap-2">
+
+          {displayImages.map((image,index)=>(
+            <button
+              key={`${image}-${index}`}
+              type="button"
+              onClick={() =>
+                setSelectedIndex(index)
+              }
+            >
+
+              <img
+                src={image}
+                alt={`${address} thumbnail`}
+                className={`h-16 w-full rounded-lg object-cover ${
+                  selectedIndex === index
+                    ? "ring-2 ring-blue-500"
+                    : ""
+                }`}
+              />
+
+            </button>
+          ))}
+
+        </div>
+
       </div>
 
-      {/* FULLSCREEN VIEW */}
+
       {isFullscreen && (
+
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 p-5"
           onClick={() =>
             setIsFullscreen(false)
           }
         >
-          {/* CLOSE */}
-          <button
-            type="button"
-            onClick={() =>
-              setIsFullscreen(false)
-            }
-            className="absolute right-5 top-5 z-10 flex h-11 w-11 items-center justify-center rounded-full bg-white/10 text-2xl text-white backdrop-blur hover:bg-white/20"
-            aria-label="Close gallery"
-          >
-            ×
-          </button>
 
-          {/* COUNTER */}
-          <div className="absolute left-5 top-5 rounded-full bg-white/10 px-4 py-2 text-sm text-white backdrop-blur">
-            {selectedIndex + 1} / {validImages.length}
-          </div>
-
-          {/* PREVIOUS */}
-          {validImages.length > 1 && (
-            <button
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                previousImage();
-              }}
-              className="absolute left-4 top-1/2 z-10 flex h-12 w-12 -translate-y-1/2 items-center justify-center rounded-full bg-white/10 text-3xl text-white backdrop-blur hover:bg-white/20"
-              aria-label="Previous photo"
-            >
-              ←
-            </button>
-          )}
-
-          {/* IMAGE */}
           <img
             src={selectedImage}
-            alt={`${address} - property photo ${
-              selectedIndex + 1
-            }`}
-            className="max-h-[90vh] max-w-[92vw] rounded-xl object-contain"
-            onClick={(event) =>
-              event.stopPropagation()
+            alt={address}
+            className="max-h-[90vh] max-w-[95vw] rounded-xl object-contain"
+            onClick={(e)=>
+              e.stopPropagation()
             }
           />
 
-          {/* NEXT */}
-          {validImages.length > 1 && (
-            <button
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                nextImage();
-              }}
-              className="absolute right-4 top-1/2 z-10 flex h-12 w-12 -translate-y-1/2 items-center justify-center rounded-full bg-white/10 text-3xl text-white backdrop-blur hover:bg-white/20"
-              aria-label="Next photo"
-            >
-              →
-            </button>
-          )}
         </div>
+
       )}
+
     </>
   );
 }

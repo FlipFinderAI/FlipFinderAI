@@ -6,7 +6,12 @@ const SESSION_DURATION = 60 * 10; // 10 minutes
 export function proxy(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
 
-  // Always allow the login page and login API.
+  /*
+   * ==================================================
+   * ALWAYS ALLOW LOGIN
+   * ==================================================
+   */
+
   if (
     pathname === "/login" ||
     pathname === "/api/login"
@@ -14,17 +19,68 @@ export function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Check authentication cookie.
-  const authCookie = request.cookies.get("flipfinder-auth");
+  /*
+   * ==================================================
+   * CHECK AUTHENTICATION
+   * ==================================================
+   */
 
-  if (!authCookie || authCookie.value !== "true") {
+  const authCookie =
+    request.cookies.get("flipfinder-auth");
+
+  const isAuthenticated =
+    authCookie?.value === "true";
+
+  /*
+   * ==================================================
+   * API ROUTES
+   *
+   * NEVER redirect API requests to /login.
+   *
+   * The frontend expects JSON. A redirect would
+   * return the HTML login page and cause:
+   *
+   * Unexpected token '<'
+   *
+   * Instead return a JSON 401 response.
+   * ==================================================
+   */
+
+  if (!isAuthenticated && pathname.startsWith("/api/")) {
+    return NextResponse.json(
+      {
+        error: "Unauthorized",
+        message: "Please log in before using this API.",
+      },
+      {
+        status: 401,
+      }
+    );
+  }
+
+  /*
+   * ==================================================
+   * NORMAL APPLICATION PAGES
+   *
+   * These can still redirect to /login.
+   * ==================================================
+   */
+
+  if (!isAuthenticated) {
     return NextResponse.redirect(
       new URL("/login", request.url)
     );
   }
 
-  // User is authenticated.
-  // Refresh the cookie for another 10 minutes.
+  /*
+   * ==================================================
+   * AUTHENTICATED USER
+   *
+   * Refresh authentication cookie for another
+   * 10 minutes.
+   * ==================================================
+   */
+
   const response = NextResponse.next();
 
   response.cookies.set(
@@ -32,7 +88,8 @@ export function proxy(request: NextRequest) {
     "true",
     {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
+      secure:
+        process.env.NODE_ENV === "production",
       sameSite: "lax",
       maxAge: SESSION_DURATION,
       path: "/",
@@ -42,12 +99,16 @@ export function proxy(request: NextRequest) {
   return response;
 }
 
+/*
+ * ==================================================
+ * PROTECT APPLICATION AND API ROUTES
+ *
+ * Exclude Next.js internals and static files.
+ * ==================================================
+ */
+
 export const config = {
   matcher: [
-    /*
-     * Protect the application and API routes,
-     * while excluding Next.js internals and static files.
-     */
     "/((?!_next/static|_next/image|favicon.ico).*)",
   ],
 };
