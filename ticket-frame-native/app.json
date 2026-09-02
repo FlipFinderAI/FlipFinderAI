@@ -1,0 +1,77 @@
+{
+  "expo": {
+    "name": "Ticket Frame",
+    "slug": "ticket-frame",
+    "version": "1.1.1",
+    "orientation": "portrait",
+    "icon": "./assets/ticket-frame-icon.png",
+    "scheme": "ticketframe",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.marcuslee.ticketframe.personal",
+      "buildNumber": "7",
+      "infoPlist": {
+        "LSSupportsOpeningDocumentsInPlace": true,
+        "NSPhotoLibraryAddUsageDescription": "Ticket Frame saves only the ticket frames and match-memory photos you explicitly choose to export.",
+        "LSApplicationQueriesSchemes": [
+          "waze",
+          "comgooglemaps"
+        ],
+        "UIFileSharingEnabled": true,
+        "UIBackgroundModes": [
+          "location"
+        ]
+      }
+    },
+    "android": {
+      "package": "com.marcuslee.ticketframe",
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-document-picker",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Ticket Frame needs access to ticket screenshots you choose and match-day photos you privately save in Match Memories.",
+          "cameraPermission": false,
+          "microphonePermission": false
+        }
+      ],
+      "expo-font",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Ticket Frame uses your location for live nearby Apple Maps results, stadium attendance and private photo-location grouping.",
+          "locationAlwaysAndWhenInUsePermission": "Ticket Frame uses low-power stadium geofences around favourite-team match times so it can ask whether you attended."
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Ticket Frame reads the date and location of authorised match-day photos to group them privately and suggest nearby places with Apple Maps.",
+          "savePhotosPermission": "Ticket Frame can save photos you choose for match memories."
+        }
+      ],
+      "expo-notifications",
+      "expo-video",
+      "expo-sqlite",
+      "expo-asset"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "3fc7aa45-30b9-4d5a-a5f9-6c4b8ec87e73"
+      }
+    }
+  }
+}

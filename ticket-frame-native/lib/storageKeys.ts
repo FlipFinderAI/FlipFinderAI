@@ -1,0 +1,26 @@
+export const TICKET_STYLE_KEY = "ticket-frame.ticket-style.v1";
+export const SAVED_FRAME_KEY = "ticket-frame.saved-frame.v1";
+export const ONBOARDING_KEY = "ticket-frame.onboarding-complete.v1";
+export const CONSENT_KEY = "ticket-frame.consent.v1";
+export const TICKET_RESET_KEY = "ticket-frame.ticket-reset.2026-08-25.v1";
+export const GROUND_VISITS_KEY = "ticket-frame.ground-visits.v1";
+export const MATCH_PHOTOS_KEY = "ticket-frame.match-photos.v1";
+export const MATCH_MEDIA_REFERENCES_KEY = "ticket-frame.match-media-references.v1";
+export const AUTO_PHOTO_MATCHED_KEY = "ticket-frame.match-photos-auto-matched.v1";
+export const AUTO_MEDIA_SCANNED_KEY = "ticket-frame.match-media-auto-scanned.v9";
+export const MEDIA_METADATA_CACHE_KEY = "ticket-frame.media-metadata-cache.v1";
+export const MEDIA_INDEX_STATE_KEY = "ticket-frame.media-index-state.v1";
+export const HISTORY_PHOTO_SETUP_KEY = "ticket-frame.history-photo-setup.v2";
+export const DELETED_HISTORY_MATCHES_KEY = "ticket-frame.deleted-history-matches.v1";
+export const PHOTO_FEATURE_KEY = "ticket-frame.photo-memories-enabled.v1";
+export const SIRI_FEATURE_KEY = "ticket-frame.siri-enabled.v1";
+export const SIRI_ASKED_KEY = "ticket-frame.siri-asked.v1";
+export const PARKING_CACHE_KEY = "ticket-frame.nearby-parking-cache.v1";
+export const NEARBY_VENUE_CACHE_KEY = "ticket-frame.nearby-venues-cache.v1";
+export const MATCHDAY_EXPERIENCES_KEY = "ticket-frame.matchday-experiences.v1";
+export const MATCHDAY_MEDIA_ASSIGNMENTS_KEY = "ticket-frame.matchday-media-assignments.v1";
+export const MATCHDAY_CUSTOM_LOCATIONS_KEY = "ticket-frame.matchday-custom-locations.v1";
+export const PUB_VISIT_REPORTS_KEY = "ticket-frame.pub-visit-reports.v1";
+export const COMPLETED_TICKETS_SINCE_BACKUP_KEY =
+  "ticket-frame.completed-tickets-since-backup.v1";
+export const POLICY_AGREEMENT_KEY = "ticket-frame.policy-agreement.2026-09-01.v1";

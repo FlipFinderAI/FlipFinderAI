@@ -1,0 +1,377 @@
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+const providerConfigs = [
+  {
+    name: "football-data.org",
+    file: "data/footballDataCache.json",
+    defaultPriority: 100,
+    fieldPriority: {
+      date: 120,
+      kickoff: 120,
+      homeId: 120,
+      awayId: 120,
+      homeName: 120,
+      awayName: 120,
+      homeScore: 120,
+      awayScore: 120,
+      status: 120,
+      season: 120,
+      competition: 120,
+      venue: 100,
+      attendance: 100,
+      homeScorers: 90,
+      awayScorers: 90,
+    },
+  },
+  {
+    name: "openfootball/football.json",
+    file: "data/openFootballCache.json",
+    defaultPriority: 50,
+    fieldPriority: {
+      date: 70,
+      kickoff: 60,
+      homeId: 50,
+      awayId: 50,
+      homeName: 70,
+      awayName: 70,
+      homeScore: 90,
+      awayScore: 90,
+      status: 80,
+      season: 70,
+      competition: 70,
+      venue: 70,
+      attendance: 70,
+      homeScorers: 80,
+      awayScorers: 80,
+    },
+  },
+
+  {
+    name: "api-football/api-sports",
+    file: "data/apiFootballProviderCache.json",
+    defaultPriority: 85,
+    fieldPriority: {
+      date: 110,
+      kickoff: 110,
+      homeId: 90,
+      awayId: 90,
+      homeName: 105,
+      awayName: 105,
+      homeScore: 115,
+      awayScore: 115,
+      status: 115,
+      season: 105,
+      competition: 105,
+      venue: 120,
+      attendance: 125,
+      homeScorers: 130,
+      awayScorers: 130,
+      table: 80,
+    },
+  },
+
+];
+
+const outputPath = resolve(process.cwd(), "data/matchDatabase.json");
+
+const normalise = (value) =>
+  String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+const canonicalClub = (value) => {
+  let name = normalise(value)
+    .replace(/^(?:afc|fc)\s+/, "")
+    .replace(/\s+(?:afc|fc|football club)$/, "")
+    .trim();
+
+  if (name === "milton keynes dons") name = "mk dons";
+
+  return name;
+};
+
+const canonicalCompetition = (value) => {
+  const name = normalise(value);
+
+  if (name.includes("champions league"))
+    return "uefa-champions-league";
+
+  if (
+    name === "premier league" ||
+    name.includes("english premier league")
+  )
+    return "premier-league";
+
+  if (
+    name === "championship" ||
+    name.includes("english championship")
+  )
+    return "championship";
+
+  if (name.includes("league one"))
+    return "league-one";
+
+  if (name.includes("league two"))
+    return "league-two";
+
+  return name.replace(/\s+/g, "-");
+};
+
+const newMatchId = (row) =>
+  [
+    "tfmatch",
+    row.season,
+    canonicalCompetition(row.competition),
+    canonicalClub(row.homeName),
+    canonicalClub(row.awayName),
+    row.date ?? "date-tbc",
+  ].join(":");
+
+const sourceKey = (provider, providerId) =>
+  `${provider}|${providerId}`;
+
+const isMissing = (value) =>
+  value == null ||
+  value === "" ||
+  (Array.isArray(value) && value.length === 0);
+
+const fieldPriority = (config, field) =>
+  config.fieldPriority?.[field] ??
+  config.defaultPriority ??
+  0;
+
+/*
+ * Preserve permanent Ticket Frame match IDs.
+ *
+ * If a provider changes a kickoff/date because a match is postponed,
+ * its provider ID still points to the same permanent TFD match.
+ */
+const previousIds = new Map();
+
+if (existsSync(outputPath)) {
+  const previous = JSON.parse(
+    readFileSync(outputPath, "utf8"),
+  );
+
+  for (const seasons of Object.values(
+    previous.competitions ?? {},
+  )) {
+    for (const bundle of Object.values(seasons ?? {})) {
+      for (const match of bundle.fixtures ?? []) {
+        for (const source of match.sources ?? []) {
+          previousIds.set(
+            sourceKey(source.provider, source.providerId),
+            match.id,
+          );
+        }
+      }
+    }
+  }
+}
+
+const matches = new Map();
+const tables = new Map();
+
+for (const config of providerConfigs) {
+  const cachePath = resolve(process.cwd(), config.file);
+
+  if (!existsSync(cachePath)) {
+    console.warn(
+      `TFD provider cache missing: ${config.name} (${config.file})`,
+    );
+    continue;
+  }
+
+  const cache = JSON.parse(
+    readFileSync(cachePath, "utf8"),
+  );
+
+  for (const [competition, seasons] of Object.entries(
+    cache.competitions ?? {},
+  )) {
+    for (const [season, bundle] of Object.entries(
+      seasons ?? {},
+    )) {
+      const tableKey = `${competition}|${season}`;
+
+      if (!tables.has(tableKey) && bundle.table?.length) {
+        tables.set(tableKey, {
+          value: bundle.table,
+          provider: config.name,
+          priority: fieldPriority(config, "table"),
+        });
+      } else if (bundle.table?.length) {
+        const existingTable = tables.get(tableKey);
+        const candidatePriority = fieldPriority(config, "table");
+
+        if (candidatePriority > existingTable.priority) {
+          tables.set(tableKey, {
+            value: bundle.table,
+            provider: config.name,
+            priority: candidatePriority,
+          });
+        }
+      }
+
+      for (const row of bundle.fixtures ?? []) {
+        const providerId = String(
+          row.providerId ?? row.id,
+        );
+
+        const permanentId =
+          previousIds.get(
+            sourceKey(config.name, providerId),
+          ) ?? newMatchId(row);
+
+        const source = {
+          provider: config.name,
+          providerId,
+        };
+
+        let existing = matches.get(permanentId);
+
+        if (!existing) {
+          existing = {
+            id: permanentId,
+            sources: [],
+            fieldSource: {},
+            fieldPriority: {},
+          };
+
+          matches.set(permanentId, existing);
+        }
+
+        if (
+          !existing.sources.some(
+            (item) =>
+              item.provider === source.provider &&
+              item.providerId === source.providerId,
+          )
+        ) {
+          existing.sources.push(source);
+        }
+
+        for (const [field, value] of Object.entries(row)) {
+          if (
+            field === "id" ||
+            field === "providerId" ||
+            value == null
+          ) {
+            continue;
+          }
+
+          const candidatePriority =
+            fieldPriority(config, field);
+
+          const currentValue = existing[field];
+          const currentPriority =
+            existing.fieldPriority[field] ?? -1;
+
+          /*
+           * Every approved provider may contribute every useful field.
+           *
+           * Missing values are always fillable.
+           * Existing values are replaced only by a source with a
+           * higher priority for THAT PARTICULAR FIELD.
+           */
+          if (
+            isMissing(currentValue) ||
+            candidatePriority > currentPriority
+          ) {
+            existing[field] = value;
+            existing.fieldSource[field] = config.name;
+            existing.fieldPriority[field] =
+              candidatePriority;
+          }
+        }
+      }
+    }
+  }
+}
+
+const database = {
+  schemaVersion: 2,
+  generatedAt: new Date().toISOString(),
+
+  sourcePolicy:
+    "TFD field-by-field merge: user-confirmed data remains external and authoritative; every approved provider may fill useful fields; conflicting provider values are selected by per-field priority; permanent TFD match IDs are preserved by provider references.",
+
+  providers: providerConfigs.map((config) => ({
+    name: config.name,
+    file: config.file,
+  })),
+
+  competitions: {},
+};
+
+for (const row of matches.values()) {
+  /*
+   * fieldPriority is internal merge bookkeeping.
+   * fieldSource is retained permanently so TFD can explain
+   * where each displayed value came from.
+   */
+  delete row.fieldPriority;
+
+  const competition =
+    row.competition || "Unknown competition";
+
+  database.competitions[competition] ??= {};
+
+  database.competitions[competition][row.season] ??= {
+    fixtures: [],
+    table: [],
+    tableSource: null,
+  };
+
+  database.competitions[competition][
+    row.season
+  ].fixtures.push(row);
+}
+
+for (const [key, tableRecord] of tables) {
+  const split = key.lastIndexOf("|");
+  const competition = key.slice(0, split);
+  const season = key.slice(split + 1);
+
+  database.competitions[competition] ??= {};
+
+  database.competitions[competition][season] ??= {
+    fixtures: [],
+    table: [],
+    tableSource: null,
+  };
+
+  database.competitions[competition][season].table =
+    tableRecord.value;
+
+  database.competitions[competition][season].tableSource =
+    tableRecord.provider;
+}
+
+for (const seasons of Object.values(
+  database.competitions,
+)) {
+  for (const bundle of Object.values(seasons)) {
+    bundle.fixtures.sort((a, b) =>
+      (a.kickoff ?? a.date ?? "9999").localeCompare(
+        b.kickoff ?? b.date ?? "9999",
+      ),
+    );
+  }
+}
+
+writeFileSync(
+  outputPath,
+  `${JSON.stringify(database, null, 2)}\n`,
+  "utf8",
+);
+
+console.log(
+  `Ticket Frame Data: ${matches.size} unique matches from ${providerConfigs.length} approved providers`,
+);
+
+console.log(
+  "TFD policy: field-by-field provider merge with permanent match IDs",
+);

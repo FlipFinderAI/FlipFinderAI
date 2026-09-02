@@ -1,0 +1,178 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { findBundledLeagueForClub, getBundledClubFixtures, localKickoff } from "./fixtures";
+import { clubNamesMatch, normaliseFixtureText } from "./ticketText";
+
+export type CachedFixture = {
+  opponent: string;
+  homeAway: "home" | "away";
+  date: string;
+  kickoff?: string | null;
+  competition: string;
+  season: string;
+  venue?: string | null;
+  homeScore?: number | null;
+  awayScore?: number | null;
+  attendance?: number | null;
+  homeScorers?: string[];
+  awayScorers?: string[];
+  homeShootoutScore?: number | null;
+  awayShootoutScore?: number | null;
+  shootoutWinner?: "home" | "away" | null;
+  homePenaltyScorers?: string[];
+  awayPenaltyScorers?: string[];
+};
+
+// V10 contains only fixtures rebuilt from the approved bundled providers.
+// Retired-provider cache generations are removed without touching saved tickets.
+const FIXTURE_CACHE_KEY = "ticket-frame.fixture-cache.v10";
+const RETIRED_FIXTURE_CACHE_KEYS = [
+  "ticket-frame.fixture-cache.v4",
+  "ticket-frame.fixture-cache.v5",
+  "ticket-frame.fixture-cache.v6",
+  "ticket-frame.fixture-cache.v7",
+  "ticket-frame.fixture-cache.v8",
+  "ticket-frame.fixture-cache.v9",
+];
+let retiredCachesCleared = false;
+type FixtureCacheEntry = { fetchedAt: number; fixtures: CachedFixture[] };
+type FixtureCacheShape = Record<string, FixtureCacheEntry>;
+
+function cacheKey(club: string, season: string) {
+  return `${normaliseFixtureText(club)}|${season}`;
+}
+
+async function readFixtureCache(): Promise<FixtureCacheShape> {
+  try {
+    if (!retiredCachesCleared) {
+      await AsyncStorage.multiRemove(RETIRED_FIXTURE_CACHE_KEYS);
+      retiredCachesCleared = true;
+    }
+    const raw = await AsyncStorage.getItem(FIXTURE_CACHE_KEY);
+    return raw ? (JSON.parse(raw) as FixtureCacheShape) : {};
+  } catch {
+    return {};
+  }
+}
+
+export async function loadCacheEntry(
+  club: string,
+  season: string,
+): Promise<FixtureCacheEntry | null> {
+  return (await readFixtureCache())[cacheKey(club, season)] ?? null;
+}
+
+export async function loadCachedFixtures(
+  club: string,
+  season: string,
+): Promise<CachedFixture[]> {
+  return (await loadCacheEntry(club, season))?.fixtures ?? [];
+}
+
+export async function saveCachedFixtures(
+  club: string,
+  season: string,
+  fixtures: CachedFixture[],
+): Promise<void> {
+  const cache = await readFixtureCache();
+  cache[cacheKey(club, season)] = { fetchedAt: Date.now(), fixtures };
+  await AsyncStorage.setItem(FIXTURE_CACHE_KEY, JSON.stringify(cache));
+}
+
+export function compareFixturesForPicker(a: CachedFixture, b: CachedFixture): number {
+  const iso = new Date().toISOString().slice(0, 10);
+  const aUpcoming = a.date >= iso;
+  const bUpcoming = b.date >= iso;
+  if (aUpcoming !== bUpcoming) return aUpcoming ? -1 : 1;
+  return aUpcoming ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date);
+}
+
+function apiSeason(season: string): string {
+  const match = season.trim().match(/^(\d{4})[\/-](\d{2}|\d{4})$/);
+  if (!match) return season;
+  return `${match[1]}-${Number(match[1]) + 1}`;
+}
+
+export async function fetchAndCacheFixtures(
+  club: string,
+  season: string,
+  opts?: { league?: string; forceRefresh?: boolean },
+): Promise<CachedFixture[]> {
+  const bundledSeason = apiSeason(season);
+  const resolvedLeague =
+    opts?.league ??
+    findBundledLeagueForClub(club, bundledSeason);
+
+  if (!resolvedLeague) {
+    return loadCachedFixtures(club, season);
+  }
+
+  const rows = getBundledClubFixtures(
+    club,
+    resolvedLeague,
+    bundledSeason,
+  );
+  const fixtures = rows.filter((row) => row.date).map((row) => {
+    const home = clubNamesMatch(row.homeName, club);
+    return {
+      opponent: home ? row.awayName : row.homeName,
+      homeAway: home ? "home" as const : "away" as const,
+      date: row.date ?? "",
+      kickoff: localKickoff(row.kickoff),
+      competition: row.competition ?? "",
+      season,
+      venue: null,
+      homeScore: row.homeScore,
+      awayScore: row.awayScore,
+      attendance: row.attendance ?? null,
+      homeScorers: row.homeScorers ?? [],
+      awayScorers: row.awayScorers ?? [],
+    } satisfies CachedFixture;
+  });
+  if (fixtures.length) {
+    await saveCachedFixtures(club, season, fixtures);
+    return fixtures;
+  }
+
+  // A forced refresh is authoritative: if TFD has no matching rows,
+  // never resurrect an older cache created under another club/league.
+  if (opts?.forceRefresh) {
+    await saveCachedFixtures(club, season, []);
+    return [];
+  }
+
+  return loadCachedFixtures(club, season);
+}
+
+export type FixtureCacheState = "fresh" | "stale" | "empty";
+
+export async function getFixtureCacheState(
+  club: string,
+  season: string,
+): Promise<{ state: FixtureCacheState; fetchedAt: number | null; count: number }> {
+  const entry = await loadCacheEntry(club, season);
+  const count = entry?.fixtures.length ?? 0;
+  return { state: count ? "fresh" : "empty", fetchedAt: entry?.fetchedAt ?? null, count };
+}
+
+export function matchFixtureForText(
+  text: string,
+  club: string,
+  fixtures: CachedFixture[],
+): CachedFixture | null {
+  const words = new Set(
+    normaliseFixtureText(text).split(" ").filter((word) => word.length >= 4),
+  );
+  let best: CachedFixture | null = null;
+  let bestScore = 0;
+  for (const fixture of fixtures) {
+    if (clubNamesMatch(fixture.opponent, club)) continue;
+    const score = normaliseFixtureText(fixture.opponent)
+      .split(" ")
+      .filter((word) => word.length >= 4 && words.has(word)).length;
+    if (score > bestScore) {
+      best = fixture;
+      bestScore = score;
+    }
+  }
+  return bestScore > 0 ? best : null;
+}
