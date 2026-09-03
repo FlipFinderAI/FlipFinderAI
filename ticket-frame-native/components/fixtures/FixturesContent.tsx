@@ -44,7 +44,7 @@ export default function FixturesContent({
     return (
       <FlatList
         data={fixtures}
-        keyExtractor={(row, index) => row.id || `${row.date}-${index}`}
+        keyExtractor={(row, index) => `${row.id || row.date}-${index}`}
         style={styles.list}
         contentContainerStyle={styles.listContent}
         ListHeaderComponent={

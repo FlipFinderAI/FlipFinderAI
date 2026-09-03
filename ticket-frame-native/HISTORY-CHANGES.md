@@ -1064,3 +1064,12 @@ Starting point: V4.0.83 Season Ticket carousel checkpoint.
 - No guessed, current or fallback date is inserted.
 - Auto Add was verified unchanged against V4.0.83.
 - TypeScript passed with increased Node heap.
+
+## V4.0.85
+- Source: verified V4.0.84 checkpoint.
+- Fixed duplicate fixture FlatList keys in `components/fixtures/FixturesContent.tsx`.
+- Changed fixture key extraction from the raw fixture ID/fallback to a unique rendered-row key.
+- No fixture records were removed or modified.
+- Verification:
+  - Device check passed.
+  - `NODE_OPTIONS="--max-old-space-size=8192" npx tsc --noEmit` passed with exit code 0.

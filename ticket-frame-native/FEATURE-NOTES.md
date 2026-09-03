@@ -950,3 +950,10 @@ Verification:
 - Existing score, result, ground and notes fields remain.
 - Auto Add was not changed.
 - TypeScript passed with increased Node heap.
+
+## V4.0.85
+- Fixed duplicate React list keys in the Fixtures screen.
+- Fixture FlatList rendering now generates a unique key for every displayed fixture even when upstream fixture IDs are duplicated.
+- Fixture data itself is unchanged.
+- Verified on device: Fixtures screen operates normally without the duplicate-key error.
+- TypeScript verification passed with increased Node heap.
