@@ -986,3 +986,11 @@ Verification:
 - A successfully resolved video keeps its durable local copy so subsequent playback is immediate and does not repeat the Photos/iCloud operation.
 - Duplicate taps are guarded so the same video cannot start multiple simultaneous resolution/copy operations.
 - Verified on physical iPhone: History fixture opens quickly, videos remain visible before playback, tapped video plays correctly, and subsequent playback uses the persisted local copy.
+
+## V4.0.88 — Football History persistent fixture-cache hydration
+- Football History now hydrates its in-memory fixture lookup from the already-persisted fixture cache after attendance history/storage are ready.
+- History remains cache-only in the foreground and does not reopen bundled TFD data when the user enters History.
+- Restores missing historical scores where the authoritative TFD and persistent fixture cache already contain the result.
+- Corrected season conversion used by the fixture-cache pipeline so forms such as 2025/26 resolve to the canonical 2025-2026 TFD season.
+- Verified on physical iPhone: previously missing 2025/26 scores, including Everton v Leeds, now display correctly.
+- Preserves the V4.0.86/V4.0.87 fast History architecture.

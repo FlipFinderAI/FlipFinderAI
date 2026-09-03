@@ -3702,6 +3702,48 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
       .catch(() => {})
       .finally(() => setAttendanceHistoryReady(true));
   }, []);
+
+  useEffect(() => {
+    if (!storageReady || !attendanceHistoryReady || !attendanceHistory.length) {
+      return;
+    }
+
+    let cancelled = false;
+
+    void (async () => {
+      const requests = Array.from(
+        new Map(
+          attendanceHistory
+            .filter((record) => record.club && record.season)
+            .map((record) => [
+              `${normaliseFixtureText(record.club)}|${record.season}`,
+              { club: record.club, season: record.season },
+            ]),
+        ).values(),
+      );
+
+      const hydrated: CachedFixture[] = [];
+
+      for (const request of requests) {
+        if (cancelled) return;
+
+        const cached = await loadCachedFixtures(
+          request.club,
+          request.season,
+        ).catch(() => []);
+
+        hydrated.push(...cached);
+
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+
+      if (!cancelled) setHistoryFixtures(hydrated);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [attendanceHistory, attendanceHistoryReady, storageReady]);
   useEffect(() => {
     if (!storageReady || !attendanceHistoryReady) return;
     void saveAttendanceHistory(attendanceHistory).catch(() => {});

@@ -255,9 +255,20 @@ export function compareFixturesForPicker(a: CachedFixture, b: CachedFixture): nu
 }
 
 function apiSeason(season: string): string {
-  const match = season.trim().match(/^(\d{4})[\/-](\d{2}|\d{4})$/);
-  if (!match) return season;
-  return `${match[1]}-${Number(match[1]) + 1}`;
+  const value = season.trim();
+  const separator = value.includes("/") ? "/" : value.includes("-") ? "-" : null;
+  if (!separator) return season;
+
+  const [startText, endText, ...extra] = value.split(separator);
+  if (extra.length || !/^\d{4}$/.test(startText) || !/^\d{2}$|^\d{4}$/.test(endText)) {
+    return season;
+  }
+
+  const start = Number(startText);
+  const end = Number(endText.length === 2 ? `${startText.slice(0, 2)}${endText}` : endText);
+  if (end !== start + 1) return season;
+
+  return `${start}-${end}`;
 }
 
 export async function fetchAndCacheFixtures(

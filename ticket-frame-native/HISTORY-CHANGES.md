@@ -1101,3 +1101,10 @@ Phone verification: PASS.
 - Persisted the resulting app-owned video file for cache-only future playback.
 - Added duplicate video-resolution protection.
 - Physical-device verification passed: fast fixture opening, cached video listing, single-video on-demand loading, successful playback, and immediate cached replay.
+
+## V4.0.88
+- Fixed Football History failing to consume persisted fixture-cache data.
+- Added cache-only History fixture hydration after stored attendance history becomes available.
+- Fixed malformed fixture-cache season conversion.
+- No foreground TFD scan was reintroduced.
+- Physical iPhone verification passed: missing 2025/26 scores restored and History remains fast.
