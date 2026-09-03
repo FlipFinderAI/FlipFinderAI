@@ -1090,3 +1090,14 @@ Temporary TFD performance logging and obsolete imports were removed after succes
 
 TypeScript verification: PASS.
 Phone verification: PASS.
+
+## V4.0.87
+- Added foreground-priority coordination for the persistent Match Media/Photos index.
+- Added persisted resolved-fixture tracking to avoid repeated dedicated Photos scans for completed fixtures.
+- Changed background Photos indexing to continue in controlled 1,000-asset logical blocks with yielding between blocks.
+- Added delayed background-index resume after leaving a History fixture.
+- Removed automatic full-video resolution/copying when Match Memory opens.
+- Added explicit on-demand video resolution: Apple Photos/iCloud is accessed for the selected video only when Play is tapped.
+- Persisted the resulting app-owned video file for cache-only future playback.
+- Added duplicate video-resolution protection.
+- Physical-device verification passed: fast fixture opening, cached video listing, single-video on-demand loading, successful playback, and immediate cached replay.

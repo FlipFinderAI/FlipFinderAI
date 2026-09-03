@@ -272,6 +272,10 @@ type MediaIndexState = {
   oldestIndexedCreationTime?: number;
   newestIndexedCreationTime?: number;
   fixtureRetryCursor?: number;
+  // Fixtures that have already completed their dedicated foreground media
+  // discovery. Reopening one of these fixtures is cache-only; the whole
+  // Photos date window is not queried again.
+  resolvedFixtureIds?: string[];
   activeAlbumId?: string;
   activeAlbumAfter?: string;
   completedAlbumIds?: string[];
@@ -428,14 +432,35 @@ async function indexAssets(
 }
 
 async function runPriorityFixture(fixture: MediaIndexFixture) {
-  const assets = await queryMatchPhotoAssets(fixture.matchDate);
-  // A prior background pass may have encountered an iCloud/shared asset while
-  // its lightweight GPS metadata was temporarily unavailable. Retry only the
-  // incomplete assets in this fixture's tight date window; classification
-  // still never downloads an original and still requires real stadium GPS.
-  await indexAssets(assets, [fixture], true);
   const state = await loadMediaIndexState();
-  publishFixtureAssets(state, fixture);
+  const resolvedFixtures = new Set(state.resolvedFixtureIds ?? []);
+
+  // Once this fixture has completed its dedicated Photos discovery, opening
+  // it again is cache-only. New media can still be associated later by the
+  // normal background library index, but we do not repeatedly rescan this
+  // fixture's Photos date window.
+  if (resolvedFixtures.has(fixture.recordId)) {
+    publishFixtureAssets(state, fixture);
+    return;
+  }
+
+  const assets = await queryMatchPhotoAssets(fixture.matchDate);
+
+  // A prior background pass may have encountered an iCloud/shared asset while
+  // its lightweight GPS metadata was temporarily unavailable. The first
+  // dedicated fixture scan may repair incomplete metadata, but after this
+  // completes the fixture itself becomes permanently cache-first.
+  await indexAssets(assets, [fixture], true);
+
+  const refreshedState = await loadMediaIndexState();
+  const refreshedResolvedFixtures = new Set(
+    refreshedState.resolvedFixtureIds ?? [],
+  );
+  refreshedResolvedFixtures.add(fixture.recordId);
+  refreshedState.resolvedFixtureIds = [...refreshedResolvedFixtures];
+
+  await saveMediaIndexState(refreshedState);
+  publishFixtureAssets(refreshedState, fixture);
 }
 
 function assetFallsInAnyFixtureWindow(
@@ -567,28 +592,64 @@ async function runMediaIndex() {
     await saveMediaIndexState(state);
   }
 
-  let after: string | undefined;
-  do {
+  // V4.0.87 — interruptible 1,000-item background work block.
+  //
+  // 1,000 remains the maximum logical block, but never ask Photos for all
+  // 1,000 in one native request. Ten pages of at most 100 give foreground
+  // work repeated opportunities to stop the invisible scan.
+  //
+  // Each completed page advances and saves its persistent creation-time
+  // boundary before the next page begins. Already-indexed assets therefore
+  // remain cached even if the user interrupts the rest of the block.
+  //
+  // Both photos and videos travel through exactly the same pages.
+  const BACKGROUND_BLOCK_SIZE = 1000;
+  const BACKGROUND_PAGE_SIZE = 100;
+  let processedInBlock = 0;
+
+  while (processedInBlock < BACKGROUND_BLOCK_SIZE) {
     if (mediaIndexStopped) return;
+
     if (priorityFixture) {
       const nextPriority = priorityFixture;
       priorityFixture = null;
       await runPriorityFixture(nextPriority);
-      continue;
     }
+
+    if (mediaIndexStopped) return;
+
+    const remaining = BACKGROUND_BLOCK_SIZE - processedInBlock;
+    const pageSize = Math.min(BACKGROUND_PAGE_SIZE, remaining);
+
     const page = await MediaLibrary.getAssetsAsync({
       mediaType: [MediaLibrary.MediaType.photo, MediaLibrary.MediaType.video],
-      first: 250,
-      after,
+      first: pageSize,
       sortBy: [[MediaLibrary.SortBy.creationTime, false]],
       ...(state.initialPassComplete && state.newestIndexedCreationTime
         ? { createdAfter: state.newestIndexedCreationTime }
         : !state.initialPassComplete && state.oldestIndexedCreationTime
-          ? { createdBefore: state.oldestIndexedCreationTime + 1 }
+          ? { createdBefore: state.oldestIndexedCreationTime }
           : {}),
     });
+
+    // A stop may have arrived while the native Photos request was in flight.
+    // Do not begin metadata work for that page if foreground work now owns
+    // the app.
+    if (mediaIndexStopped) return;
+
+    if (!page.assets.length) {
+      if (!state.initialPassComplete) {
+        state.initialPassComplete = true;
+        await saveMediaIndexState(state);
+      }
+      return;
+    }
+
     const unindexed = page.assets.filter((asset) => !state.assets[asset.id]);
     await indexAssets(unindexed, mediaIndexFixtures);
+
+    if (mediaIndexStopped) return;
+
     for (const asset of page.assets) {
       state.oldestIndexedCreationTime = Math.min(
         state.oldestIndexedCreationTime ?? asset.creationTime,
@@ -599,11 +660,53 @@ async function runMediaIndex() {
         asset.creationTime,
       );
     }
+
+    processedInBlock += page.assets.length;
+
+    if (!state.initialPassComplete && !page.hasNextPage) {
+      state.initialPassComplete = true;
+    }
+
+    // Page completion is the durable checkpoint. If foreground work arrives
+    // after this save, the next idle run resumes beyond this page.
     await saveMediaIndexState(state);
-    after = page.hasNextPage ? page.endCursor : undefined;
-  } while (after);
-  state.initialPassComplete = true;
-  await saveMediaIndexState(state);
+
+    if (!page.hasNextPage) return;
+
+    // Yield before asking Photos for another page.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+}
+
+async function waitForBackgroundMediaGap(milliseconds = 1500) {
+  const step = 100;
+  let elapsed = 0;
+
+  while (elapsed < milliseconds && !mediaIndexStopped) {
+    const wait = Math.min(step, milliseconds - elapsed);
+    await new Promise((resolve) => setTimeout(resolve, wait));
+    elapsed += wait;
+  }
+}
+
+async function runPersistentMediaIndex() {
+  while (!mediaIndexStopped) {
+    await runMediaIndex();
+
+    if (mediaIndexStopped) return;
+
+    const state = await loadMediaIndexState();
+
+    // The large historical Photos walk is complete. Do not sit in an endless
+    // loop re-querying an already-built library. A future app launch or a
+    // newly requested foreground fixture can perform bounded maintenance.
+    if (state.initialPassComplete) return;
+
+    // Background intentionally breathes between 1,000-item logical blocks.
+    // Foreground stop requests are noticed within at most ~100 ms here.
+    await waitForBackgroundMediaGap();
+  }
 }
 
 export function subscribeToMediaIndex(
@@ -617,22 +720,69 @@ export function subscribeToMediaIndex(
 
 export async function startMediaIndex(fixtures: MediaIndexFixture[]) {
   mediaIndexFixtures = fixtures;
-  mediaIndexStopped = false;
-  const state = await loadMediaIndexState();
-  for (const fixture of fixtures) publishFixtureAssets(state, fixture);
-  if (!mediaIndexRun) {
-    mediaIndexRun = runMediaIndex()
-      .catch((error) => console.warn("[media-index] failed", error))
-      .finally(() => { mediaIndexRun = null; });
+
+  if (!fixtures.length) return;
+
+  // Never start a second Photos worker beside an existing one. If foreground
+  // work is still finishing, wait for that coordinated queue to become free.
+  if (mediaIndexRun) {
+    const activeRun = mediaIndexRun;
+    await activeRun;
+
+    // Another caller may already have claimed the queue while we waited.
+    if (mediaIndexRun) return mediaIndexRun;
   }
-  return mediaIndexRun;
+
+  mediaIndexStopped = false;
+
+  const state = await loadMediaIndexState();
+
+  // Publishing these links is cache-only. No Photos scan is required.
+  for (const fixture of fixtures) publishFixtureAssets(state, fixture);
+
+  let run: Promise<void>;
+
+  run = runPersistentMediaIndex()
+    .catch((error) => console.warn("[media-index] failed", error))
+    .finally(() => {
+      if (mediaIndexRun === run) mediaIndexRun = null;
+    });
+
+  mediaIndexRun = run;
+  return run;
 }
 
 export function prioritizeMediaIndexFixture(fixture: MediaIndexFixture) {
   priorityFixture = fixture;
-  void startMediaIndex(mediaIndexFixtures.some((item) => item.recordId === fixture.recordId)
-    ? mediaIndexFixtures
-    : [fixture, ...mediaIndexFixtures]);
+
+  if (!mediaIndexFixtures.some((item) => item.recordId === fixture.recordId)) {
+    mediaIndexFixtures = [fixture, ...mediaIndexFixtures];
+  }
+
+  // Foreground owns Photos now. Ask any invisible general run to stop at its
+  // next safe boundary. Once that coordinated run has exited, resolve only
+  // the latest fixture requested by the user.
+  mediaIndexStopped = true;
+
+  const previousRun = mediaIndexRun;
+
+  const foregroundRun = (async () => {
+    if (previousRun) await previousRun;
+
+    const nextPriority = priorityFixture;
+    priorityFixture = null;
+    if (!nextPriority) return;
+
+    // Keep general indexing stopped. runPriorityFixture uses [fixture], so
+    // indexAssets deliberately allows this foreground work to complete.
+    await runPriorityFixture(nextPriority);
+  })()
+    .catch((error) => console.warn("[media-index] priority failed", error))
+    .finally(() => {
+      if (mediaIndexRun === foregroundRun) mediaIndexRun = null;
+    });
+
+  mediaIndexRun = foregroundRun;
 }
 
 export function stopMediaIndex() {

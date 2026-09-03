@@ -515,6 +515,7 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
   const resolvedMatchMediaSignatureRef = useRef<Record<string, string>>({});
   const [selectedMatchVideoUri, setSelectedMatchVideoUri] =
     useState<string | null>(null);
+  const resolvingMatchVideoAssetIdsRef = useRef<Set<string>>(new Set());
   const [expandedSeasonPhotoFixtureKey, setExpandedSeasonPhotoFixtureKey] =
     useState<string | null>(null);
   const matchPhotoWriteChainRef = useRef<Promise<void>>(Promise.resolve());
@@ -794,6 +795,148 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
     } finally {
       if (enlargedMatchPhotoRequestRef.current === requestId)
         setEnlargedMatchPhotoLoading(false);
+    }
+  };
+
+  const openReferencedMatchVideo = async (
+    recordId: string,
+    media: MatchMediaReference & { uri: string },
+  ) => {
+    // An existing Ticket Frame copy is instant and needs no Photos work.
+    if (media.localUri) {
+      const local = await FileSystem.getInfoAsync(media.localUri).catch(
+        () => null,
+      );
+
+      if (local?.exists && (local.size ?? 0) > 0) {
+        setSelectedMatchVideoUri((current) =>
+          current === media.localUri ? null : media.localUri!,
+        );
+        return;
+      }
+    }
+
+    // Do not allow repeated taps to start the same expensive operation twice.
+    if (resolvingMatchVideoAssetIdsRef.current.has(media.assetId)) return;
+    resolvingMatchVideoAssetIdsRef.current.add(media.assetId);
+
+    try {
+      // The user's explicit Play action owns the Photos queue.
+      await stopMediaIndex();
+
+      let sourceUri: string | undefined;
+
+      if (media.assetId.startsWith("selected-")) {
+        if (media.uri && !media.uri.startsWith("ph://")) {
+          sourceUri = media.uri;
+        }
+      } else {
+        const assetInfo = await MediaLibrary.getAssetInfoAsync(
+          media.assetId,
+          {
+            shouldDownloadFromNetwork: true,
+          },
+        );
+
+        sourceUri =
+          assetInfo.localUri ??
+          (assetInfo.uri && !assetInfo.uri.startsWith("ph://")
+            ? assetInfo.uri
+            : undefined);
+      }
+
+      if (!sourceUri) {
+        throw new Error("Apple Photos returned no usable video file");
+      }
+
+      const directory =
+        `${FileSystem.documentDirectory}match-memories/`;
+
+      await FileSystem.makeDirectoryAsync(directory, {
+        intermediates: true,
+      });
+
+      const sourceName = media.fileName ?? sourceUri;
+      const extensionMatch = sourceName
+        .split("#")[0]
+        .split("?")[0]
+        .match(/\.([a-z0-9]{2,5})$/i);
+
+      const extension =
+        extensionMatch?.[1]?.toLowerCase() ?? "mov";
+
+      const sourceKey = await Crypto.digestStringAsync(
+        Crypto.CryptoDigestAlgorithm.SHA256,
+        `${recordId}|${media.assetId}|video-playback`,
+      );
+
+      const destination =
+        `${directory}${recordId.replace(/[^a-z0-9-]/gi, "-")}-` +
+        `${sourceKey.slice(0, 24)}.${extension}`;
+
+      const existing =
+        await FileSystem.getInfoAsync(destination);
+
+      if (!existing.exists || !(existing.size ?? 0)) {
+        await FileSystem.copyAsync({
+          from: sourceUri,
+          to: destination,
+        });
+      }
+
+      const copied =
+        await FileSystem.getInfoAsync(destination);
+
+      if (!copied.exists || !(copied.size ?? 0)) {
+        throw new Error("Downloaded video was empty");
+      }
+
+      const durableMedia = {
+        ...media,
+        localUri: destination,
+        uri: destination,
+      };
+
+      addMatchMediaReferences(recordId, [durableMedia]);
+
+      setResolvedMatchMedia((current) => {
+        const existingMedia = current[recordId] ?? [];
+
+        return {
+          ...current,
+          [recordId]: [
+            ...existingMedia.filter(
+              (item) => item.assetId !== durableMedia.assetId,
+            ),
+            durableMedia,
+          ],
+        };
+      });
+
+      setSelectedMatchVideoUri(destination);
+
+      console.log(
+        "[MATCH-VIDEO-ON-DEMAND]",
+        JSON.stringify({
+          assetId: media.assetId,
+          destination,
+          size: copied.size,
+        }),
+      );
+    } catch (error) {
+      console.warn(
+        "Could not open Match Memory video",
+        error,
+      );
+
+      Alert.alert(
+        "Video unavailable",
+        "Ticket Frame could not download this video from Apple Photos. Check your connection and Photos access, then try again.",
+      );
+    } finally {
+      resolvingMatchVideoAssetIdsRef.current.delete(
+        media.assetId,
+      );
     }
   };
 
@@ -3756,12 +3899,18 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
               reference.type === "photo" && !durableUri && !previewUri;
 
             const displayInfo =
-              needsResolvedPhoto || reference.type === "video"
+              needsResolvedPhoto
                 ? await MediaLibrary.getAssetInfoAsync(
                     reference.assetId,
                     {
-                      shouldDownloadFromNetwork:
-                        reference.type === "photo",
+                      // This effect runs for the match the user explicitly
+                  // opened. Allow Photos to make the selected photo OR video
+                  // locally available so Ticket Frame can create/reuse its
+                  // durable Match Memory copy.
+                  //
+                  // Background classification remains metadata-only and does
+                  // not download full iCloud originals.
+                  shouldDownloadFromNetwork: true,
                     },
                   ).catch(() => null)
                 : null;
@@ -3804,74 +3953,12 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
 
           let uri = durableUri;
 
-          // Apple Photos can return a protected PhotoData/Metadata file URL.
-          // AVPlayer cannot open that URL directly. For videos, first copy the
-          // Photos asset into Ticket Frame's own Documents storage and play the
-          // app-owned file instead.
-          if (reference.type === "video" && !uri && photosUri) {
-            try {
-              const directory =
-                `${FileSystem.documentDirectory}match-memories/`;
-              await FileSystem.makeDirectoryAsync(directory, {
-                intermediates: true,
-              });
-
-              const extensionMatch = (
-                reference.fileName ?? photosUri
-              )
-                .split("#")[0]
-                .split("?")[0]
-                .match(/\.([a-z0-9]{2,5})$/i);
-
-              const extension =
-                extensionMatch?.[1]?.toLowerCase() ?? "mov";
-
-              const sourceKey = await Crypto.digestStringAsync(
-                Crypto.CryptoDigestAlgorithm.SHA256,
-                `${recordId}|${reference.assetId}|video-playback`,
-              );
-
-              const destination =
-                `${directory}${recordId.replace(/[^a-z0-9-]/gi, "-")}-` +
-                `${sourceKey.slice(0, 24)}.${extension}`;
-
-              const existing =
-                await FileSystem.getInfoAsync(destination);
-
-              if (!existing.exists || !existing.size) {
-                await FileSystem.copyAsync({
-                  from: photosUri,
-                  to: destination,
-                });
-              }
-
-              const copied =
-                await FileSystem.getInfoAsync(destination);
-
-              if (copied.exists && copied.size) {
-                uri = destination;
-                console.log(
-                  "[MATCH-VIDEO-COPY]",
-                  JSON.stringify({
-                    assetId: reference.assetId,
-                    destination,
-                    size: copied.size,
-                  }),
-                );
-              }
-            } catch (error) {
-              console.log(
-                "[MATCH-VIDEO-COPY-ERROR]",
-                JSON.stringify({
-                  assetId: reference.assetId,
-                  source: photosUri,
-                  error:
-                    error instanceof Error
-                      ? error.message
-                      : String(error),
-                }),
-              );
-            }
+          // Opening Match Memory stays lightweight. A video keeps its
+          // stable Photos identity until the user explicitly taps Play.
+          if (reference.type === "video" && !uri) {
+            uri =
+              reference.previewUri ??
+              `ph://${reference.assetId}`;
           }
 
           // Photos can safely continue using the existing resolution path.
@@ -3886,8 +3973,11 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
             uri,
           };
 
-          if (reference.type === "video" && uri !== photosUri) {
-            resolvedReference.localUri = uri;
+          if (
+            reference.localUri &&
+            uri === reference.localUri
+          ) {
+            resolvedReference.localUri = reference.localUri;
           }
 
           // Reveal each item as soon as it resolves; Promise.all below is only
@@ -6606,9 +6696,10 @@ const handleTileDrop = (id: string, tx: number, ty: number) => {
     ) return;
     let cancelled = false;
 
-    // V4.0.86 — foreground user activity wins.
-    // Make one delayed background indexing attempt rather than repeatedly
-    // restarting Photos work every ten seconds for twenty minutes.
+    // V4.0.87 — foreground user activity always wins.
+    // Start one coordinated persistent builder after launch. It advances in
+    // resumable 1,000-item logical blocks rather than spawning competing
+    // Photos workers or repeatedly rescanning already indexed assets.
     const run = () => {
       if (cancelled) return;
 
@@ -6619,11 +6710,19 @@ const handleTileDrop = (id: string, tx: number, ty: number) => {
       });
     };
 
-    // V4.0.86 PERFORMANCE DIAGNOSTIC:
-    // Automatic Photos indexing is temporarily disabled.
-    // User-triggered Auto Add remains available. This test determines whether
-    // background media work is responsible for global UI blocking.
-    const startupTimer: ReturnType<typeof setTimeout> | null = null;
+    // V4.0.87 — resume the persistent photo + video cache quietly.
+    //
+    // Wait until launch/restore interactions have settled, then resume the
+    // persistent media index. Each 1,000-item block is made from interruptible
+    // 100-item Photos pages and permanently checkpoints completed work.
+    //
+    // Foreground actions still stop/pre-empt invisible work. Once the user
+    // releases the foreground media lane, the builder resumes from its saved
+    // boundary rather than starting the library again.
+    const startupTimer: ReturnType<typeof setTimeout> | null = setTimeout(
+      run,
+      5000,
+    );
 
     return () => {
       cancelled = true;
@@ -6638,13 +6737,40 @@ const handleTileDrop = (id: string, tx: number, ty: number) => {
   ]);
 
   useEffect(() => {
-    if (!selectedHistoryRecordId) return;
-    const fixture = mediaIndexFixtures.find(
-      (item) => item.recordId === selectedHistoryRecordId,
-    );
-    if (!fixture) return;
-    prioritizeMediaIndexFixture(fixture);
-  }, [mediaIndexFixtures, selectedHistoryRecordId]);
+    let resumeTimer: ReturnType<typeof setTimeout> | null = null;
+    let cancelled = false;
+
+    if (selectedHistoryRecordId) {
+      const fixture = mediaIndexFixtures.find(
+        (item) => item.recordId === selectedHistoryRecordId,
+      );
+
+      if (fixture) {
+        // Explicit user work owns the Photos queue immediately.
+        prioritizeMediaIndexFixture(fixture);
+      }
+    } else if (mediaIndexFixtures.length && photoMemoriesEnabled) {
+      // Do not restart invisible work the instant a fixture closes. Give the
+      // user five quiet seconds first; if another fixture opens this effect is
+      // cleaned up and the pending restart disappears.
+      resumeTimer = setTimeout(() => {
+        void MediaLibrary.getPermissionsAsync().then((permission) => {
+          if (!cancelled && permission.granted) {
+            void startMediaIndex(mediaIndexFixtures);
+          }
+        });
+      }, 5000);
+    }
+
+    return () => {
+      cancelled = true;
+      if (resumeTimer) clearTimeout(resumeTimer);
+    };
+  }, [
+    mediaIndexFixtures,
+    photoMemoriesEnabled,
+    selectedHistoryRecordId,
+  ]);
 
   useEffect(() => {
     if (!selectedHistoryRecordId) return;
@@ -11062,13 +11188,28 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                             )
                           }
                           delayLongPress={400}
-                          onPress={() =>
-                            mediaEditMode
-                              ? toggleMediaSelection(mediaKey)
-                              : setSelectedMatchVideoUri((current) =>
-                                  current === media.uri ? null : media.uri,
-                                )
-                          }
+                          onPress={() => {
+                            if (mediaEditMode) {
+                              toggleMediaSelection(mediaKey);
+                              return;
+                            }
+
+                            const playableUri =
+                              media.localUri ?? media.uri;
+
+                            if (
+                              media.localUri &&
+                              selectedMatchVideoUri === playableUri
+                            ) {
+                              setSelectedMatchVideoUri(null);
+                              return;
+                            }
+
+                            void openReferencedMatchVideo(
+                              selectedHistoryRecord.id,
+                              media,
+                            );
+                          }}
                           style={({ pressed }) => [
                             s.collectionCard,
                             {

@@ -975,3 +975,14 @@ Verification:
 - Current Season home fixture list displays the complete ordered home fixture collection.
 - Temporary performance diagnostics removed after successful device verification.
 - Phone verification completed successfully.
+
+## V4.0.87 — Foreground-first persistent media cache
+- Match media indexing now builds persistently in the background in logical 1,000-asset blocks while yielding between work.
+- Explicit user activity takes priority over invisible Photos indexing; opening a History fixture stops/yields background media work and promotes that fixture.
+- Completed fixture media discovery is persisted so reopening an already-resolved fixture is cache-first rather than repeatedly scanning its Photos date window.
+- Background media indexing resumes after a quiet period when the user leaves the selected History fixture.
+- Match Memory videos remain visible from cached lightweight media references without downloading/copying the full video when a fixture opens.
+- Full video resolution from Apple Photos/iCloud is now on demand: only the video explicitly tapped by the user is made locally available and copied to Ticket Frame storage.
+- A successfully resolved video keeps its durable local copy so subsequent playback is immediate and does not repeat the Photos/iCloud operation.
+- Duplicate taps are guarded so the same video cannot start multiple simultaneous resolution/copy operations.
+- Verified on physical iPhone: History fixture opens quickly, videos remain visible before playback, tapped video plays correctly, and subsequent playback uses the persisted local copy.
