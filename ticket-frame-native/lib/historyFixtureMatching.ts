@@ -15,6 +15,7 @@ export function normaliseHistorySeasonKey(
 export function fixtureForAttendance(
   record: AttendanceRecord,
   historyFixtures: CachedFixture[],
+  options?: { allowBundledFallback?: boolean },
 ): CachedFixture | undefined {
   const targetSeason = normaliseHistorySeasonKey(record.season);
   const matchesRecord = (fixture: CachedFixture) =>
@@ -27,7 +28,12 @@ export function fixtureForAttendance(
 
   // If History has not hydrated this cup fixture, consult bundled TFD
   // directly. TFD contains league, domestic cup and European competitions.
-  if (!candidates.length && record.club && targetSeason) {
+  if (
+    options?.allowBundledFallback !== false &&
+    !candidates.length &&
+    record.club &&
+    targetSeason
+  ) {
     candidates = getBundledClubFixtures(record.club, "", targetSeason)
       .filter(
         (fixture) =>

@@ -370,6 +370,11 @@ async function indexAssets(
 ) {
   const state = await loadMediaIndexState();
   for (let offset = 0; offset < assets.length; offset += 20) {
+    // Invisible indexing must yield immediately when foreground work asks
+    // it to stop. Priority fixture work is allowed to finish because that
+    // work was explicitly promoted by the user's current action.
+    if (mediaIndexStopped && fixtures === mediaIndexFixtures) return;
+
     // Foreground fixture requests pre-empt the general page between small
     // bridge batches. This bounds the wait without allowing a second Photos
     // scan to compete with the coordinated queue.
@@ -493,11 +498,25 @@ async function indexNextAlbumPage(state: MediaIndexState) {
 
 async function runMediaIndex() {
   const state = await loadMediaIndexState();
+
+  // Foreground always wins. If the user has opened/prioritised a specific
+  // match, resolve only its tight match-date Photos window before doing any
+  // invisible cache/index maintenance.
+  if (priorityFixture) {
+    const nextPriority = priorityFixture;
+    priorityFixture = null;
+    await runPriorityFixture(nextPriority);
+  }
+
+  if (mediaIndexStopped) return;
+
   // Fixture links are persisted. Rebuild only descriptors the current build
   // has never seen; rescanning every indexed asset for every fixture on each
   // heartbeat can monopolise the JS thread and freeze History/startup.
   let rebuiltFixtureLinks = false;
   for (const fixture of mediaIndexFixtures) {
+    if (mediaIndexStopped) return;
+
     if (Object.prototype.hasOwnProperty.call(
       state.fixtureAssetIds,
       fixture.recordId,
@@ -519,7 +538,12 @@ async function runMediaIndex() {
   // paged once and checkpointed. Filter by every fixture time window before
   // requesting GPS, so one pass can populate all seasons without repeating
   // the entire album for every unmatched match.
-  if (state.initialPassComplete && mediaIndexFixtures.length && !priorityFixture)
+  if (
+    !mediaIndexStopped &&
+    state.initialPassComplete &&
+    mediaIndexFixtures.length &&
+    !priorityFixture
+  )
     await indexNextAlbumPage(state);
 
   // Once the main pass is complete, each app-session heartbeat repairs a
@@ -533,6 +557,7 @@ async function runMediaIndex() {
       (fixture) => fixture.matchDate <= new Date().toISOString().slice(0, 10),
     );
     for (let count = 0; count < Math.min(3, pastFixtures.length); count += 1) {
+      if (mediaIndexStopped) return;
       if (priorityFixture) break;
       const fixture = pastFixtures[cursor % pastFixtures.length];
       await runPriorityFixture(fixture);

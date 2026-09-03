@@ -957,3 +957,21 @@ Verification:
 - Fixture data itself is unchanged.
 - Verified on device: Fixtures screen operates normally without the duplicate-key error.
 - TypeScript verification passed with increased Node heap.
+
+## V4.0.86 — Verified performance and interaction priority
+
+- History now opens and responds immediately from cached/persistent state.
+- Removed the History-on-entry complete season-cache rebuild that could steal the first user interaction.
+- History W/D/L summary uses cache-only fixture/result matching.
+- History fixture matching supports disabling expensive bundled fallback for foreground summary rendering.
+- Foreground user actions take priority over invisible media/background processing.
+- Auto Add no longer waits for or immediately restarts general background media indexing.
+- Media indexing preserves resumable progress while yielding to foreground work.
+- Historical fixture loading and manual Add Match improvements retained.
+- Generic historical season parsing corrected.
+- Hosted fixture database merge improvements retained.
+- Manual historical picker/carousel fixes retained.
+- Home Wallet ticket auto-positioning retained while preserving full ticket graphics.
+- Current Season home fixture list displays the complete ordered home fixture collection.
+- Temporary performance diagnostics removed after successful device verification.
+- Phone verification completed successfully.

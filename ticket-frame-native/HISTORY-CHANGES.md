@@ -1073,3 +1073,20 @@ Starting point: V4.0.83 Season Ticket carousel checkpoint.
 - Verification:
   - Device check passed.
   - `NODE_OPTIONS="--max-old-space-size=8192" npx tsc --noEmit` passed with exit code 0.
+
+## V4.0.86
+
+Verified on device after performance and interaction-priority work.
+
+History is now cache-first for its foreground summary/render path and no longer rebuilds every represented season merely because History was opened. This removed the delayed second render that could interfere with the first tap.
+
+Foreground actions including History interaction and explicit media/Auto Add work take priority over invisible background processing. Persistent media-index progress is retained for later resumption.
+
+Wallet automatic positioning remains enabled when opening lower tickets and full ticket images/graphics remain visible.
+
+Historical/manual fixture picker improvements, generic season parsing fix, hosted fixture merge work, current-season home fixture display changes, and the React Native Picker patch are included.
+
+Temporary TFD performance logging and obsolete imports were removed after successful phone testing.
+
+TypeScript verification: PASS.
+Phone verification: PASS.

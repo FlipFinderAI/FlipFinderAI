@@ -146,44 +146,90 @@ export function mergeHistoryRecords(
   secondary: AttendanceRecord[],
 ): AttendanceRecord[] {
   const merged: AttendanceRecord[] = [];
-  // Start empty so duplicates already stored within either input are also
-  // collapsed. The underlying records remain untouched and recoverable.
+
+  // V4.0.86 PERFORMANCE:
+  // The old implementation scanned every already-merged History record for
+  // every input record. Keep the exact same sameMatchIdentity() rules, but
+  // restrict dated match comparisons to records on the same exact date.
+  //
+  // Records that cannot safely use match identity keep the existing
+  // ticket-link-only duplicate rule.
+  const datedIndexes = new Map<string, number[]>();
+  const ticketIndexes = new Map<string, number>();
+
   for (const record of [...primary, ...secondary]) {
-    const duplicateIndex = merged.findIndex((existing) =>
-      existing.opponent && record.opponent
-        ? sameMatchIdentity(existing, record)
-        : Boolean(
-            existing.ticketId &&
-              record.ticketId &&
-              existing.ticketId === record.ticketId,
-          ),
-    );
+    let duplicateIndex = -1;
+
+    if (record.opponent && record.matchDate) {
+      const candidates = datedIndexes.get(record.matchDate) ?? [];
+
+      for (const index of candidates) {
+        const existing = merged[index];
+
+        if (
+          existing.opponent &&
+          sameMatchIdentity(existing, record)
+        ) {
+          duplicateIndex = index;
+          break;
+        }
+      }
+    } else if (record.ticketId) {
+      duplicateIndex = ticketIndexes.get(record.ticketId) ?? -1;
+    }
+
     if (duplicateIndex < 0) {
+      const index = merged.length;
       merged.push(record);
-    } else {
-      // Preserve the richer manual/season attendance record while attaching
-      // its physical ticket evidence so tapping History can open that ticket.
-      // The accepted ticket is authoritative for fixture identity and side:
-      // stale manual rows must not turn an away ticket back into a home game
-      // after the app is reopened.
-      merged[duplicateIndex] = {
-        ...merged[duplicateIndex],
-        club: merged[duplicateIndex].club || record.club,
-        opponent: merged[duplicateIndex].opponent || record.opponent,
-        matchDate: merged[duplicateIndex].matchDate || record.matchDate,
-        season: merged[duplicateIndex].season || record.season,
-        competition:
-          record.competition ?? merged[duplicateIndex].competition,
-        ground: record.ground ?? merged[duplicateIndex].ground,
-        homeAway: record.ticketId ? record.homeAway : merged[duplicateIndex].homeAway,
-        result: merged[duplicateIndex].result ?? record.result,
-        homeScore: merged[duplicateIndex].homeScore ?? record.homeScore,
-        awayScore: merged[duplicateIndex].awayScore ?? record.awayScore,
-        notes: merged[duplicateIndex].notes ?? record.notes,
-        ticketId: merged[duplicateIndex].ticketId ?? record.ticketId,
-      };
+
+      if (record.opponent && record.matchDate) {
+        const candidates = datedIndexes.get(record.matchDate);
+
+        if (candidates) {
+          candidates.push(index);
+        } else {
+          datedIndexes.set(record.matchDate, [index]);
+        }
+      }
+
+      if (record.ticketId) {
+        ticketIndexes.set(record.ticketId, index);
+      }
+
+      continue;
+    }
+
+    // Preserve the richer manual/season attendance record while attaching
+    // its physical ticket evidence so tapping History can open that ticket.
+    // Merge precedence is intentionally unchanged from the previous
+    // implementation.
+    const existing = merged[duplicateIndex];
+
+    const updated: AttendanceRecord = {
+      ...existing,
+      club: existing.club || record.club,
+      opponent: existing.opponent || record.opponent,
+      matchDate: existing.matchDate || record.matchDate,
+      season: existing.season || record.season,
+      competition: record.competition ?? existing.competition,
+      ground: record.ground ?? existing.ground,
+      homeAway: record.ticketId ? record.homeAway : existing.homeAway,
+      result: existing.result ?? record.result,
+      homeScore: existing.homeScore ?? record.homeScore,
+      awayScore: existing.awayScore ?? record.awayScore,
+      notes: existing.notes ?? record.notes,
+      ticketId: existing.ticketId ?? record.ticketId,
+    };
+
+    merged[duplicateIndex] = updated;
+
+    // A merge can attach a ticket link to an existing match. Keep that link
+    // indexed for later records using the ticket-only fallback.
+    if (updated.ticketId) {
+      ticketIndexes.set(updated.ticketId, duplicateIndex);
     }
   }
+
   return merged;
 }
 

@@ -1,5 +1,5 @@
 import { Asset } from "expo-asset";
-import * as FileSystem from "expo-file-system";
+import * as FileSystem from "expo-file-system/legacy";
 import * as SQLite from "expo-sqlite";
 
 import type { FixtureRow } from "./fixtures";
@@ -38,6 +38,15 @@ const PACK_ASSETS: Record<HistoricalPackId, number> = {
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 let primePromise: Promise<void> | null = null;
+
+// V4.0.86 — fast Manual Add history lookup.
+// Keep only specifically requested seasons in memory so Manual Add does not
+// need to import an entire decade pack into SQLite before showing fixtures.
+const historicalSeasonMemoryCache = new Map<string, FixtureRow[]>();
+const historicalPackReadPromises = new Map<
+  HistoricalPackId,
+  Promise<HistoricalPack>
+>();
 
 function sleep(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -117,29 +126,43 @@ async function packIsCurrent(
 async function readPack(
   packId: HistoricalPackId,
 ): Promise<HistoricalPack> {
-  const asset = Asset.fromModule(PACK_ASSETS[packId]);
+  const existing = historicalPackReadPromises.get(packId);
+  if (existing) return existing;
 
-  await asset.downloadAsync();
+  const promise = (async () => {
+    const asset = Asset.fromModule(PACK_ASSETS[packId]);
 
-  const uri = asset.localUri ?? asset.uri;
+    await asset.downloadAsync();
 
-  if (!uri) {
-    throw new Error(`No local URI for historical pack ${packId}`);
+    const uri = asset.localUri ?? asset.uri;
+
+    if (!uri) {
+      throw new Error(`No local URI for historical pack ${packId}`);
+    }
+
+    const raw = await FileSystem.readAsStringAsync(uri);
+    const pack = JSON.parse(raw) as HistoricalPack;
+
+    if (
+      pack.schemaVersion !== 1 ||
+      pack.packId !== packId ||
+      pack.sourceVersion !== HISTORICAL_SOURCE_VERSION ||
+      !Array.isArray(pack.fixtures)
+    ) {
+      throw new Error(`Invalid historical pack ${packId}`);
+    }
+
+    return pack;
+  })();
+
+  historicalPackReadPromises.set(packId, promise);
+
+  try {
+    return await promise;
+  } catch (error) {
+    historicalPackReadPromises.delete(packId);
+    throw error;
   }
-
-  const raw = await FileSystem.readAsStringAsync(uri);
-  const pack = JSON.parse(raw) as HistoricalPack;
-
-  if (
-    pack.schemaVersion !== 1 ||
-    pack.packId !== packId ||
-    pack.sourceVersion !== HISTORICAL_SOURCE_VERSION ||
-    !Array.isArray(pack.fixtures)
-  ) {
-    throw new Error(`Invalid historical pack ${packId}`);
-  }
-
-  return pack;
 }
 
 export async function importHistoricalPack(
@@ -223,23 +246,26 @@ export async function getHistoricalSeasonFixtures(
 
   if (!packId) return [];
 
-  await importHistoricalPack(packId);
+  const cached = historicalSeasonMemoryCache.get(season);
+  if (cached) return cached;
 
-  const db = await getDb();
-  const rows = await db.getAllAsync<{ payload: string }>(
-    `SELECT payload
-       FROM historical_fixtures
-      WHERE season = ?`,
-    season,
-  );
+  // Fast path for Manual Add:
+  // read only the relevant historical pack and return the requested season
+  // immediately. Do not block the picker on importing every fixture from the
+  // whole decade into SQLite.
+  const pack = await readPack(packId);
 
-  return rows
-    .map((row) => JSON.parse(row.payload) as FixtureRow)
+  const fixtures = pack.fixtures
+    .filter((fixture) => fixture.season === season)
     .sort((a, b) =>
       (a.kickoff ?? a.date ?? "9999").localeCompare(
         b.kickoff ?? b.date ?? "9999",
       ),
     );
+
+  historicalSeasonMemoryCache.set(season, fixtures);
+
+  return fixtures;
 }
 
 export async function getHistoricalClubFixtures(

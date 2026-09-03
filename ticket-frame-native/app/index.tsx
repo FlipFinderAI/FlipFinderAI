@@ -5,8 +5,7 @@ import {
   AppState,
   Dimensions,
   Image,
-  InteractionManager,
-  Keyboard,
+    Keyboard,
   Linking,
   Pressable,
   SafeAreaView,
@@ -199,7 +198,6 @@ import {
   scoresForAttendance,
 } from "@/lib/historyDerivation";
 import { fixtureForAttendance } from "@/lib/historyFixtureMatching";
-import { primeHistoricalPacksInOrder } from "@/lib/historicalMatchStore";
 import {
   historyStadiumRows,
   uniqueHistoryStadiumCount,
@@ -452,6 +450,18 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
   );
   const [seasonFilter, setSeasonFilter] = useState("All Seasons");
   const [historySearch, setHistorySearch] = useState("");
+
+  // V4.0.86 — Matches Attended is the default Football History view.
+  // Seasons are collapsed independently and stay as the user left them when
+  // opening a Match Memory and returning.
+  const [expandedMatchHistorySeasons, setExpandedMatchHistorySeasons] =
+    useState<Set<string>>(() => new Set());
+
+  // V4.0.86 — Seasons view renders large seasons lazily.
+  // This is deliberately separate from Matches Attended expansion state.
+  const [expandedSeasonHistorySeasons, setExpandedSeasonHistorySeasons] =
+    useState<Set<string>>(() => new Set());
+
   const [selectedHistoryRecordId, setSelectedHistoryRecordId] =
     useState<string | null>(null);
   const [historySelectionMode, setHistorySelectionMode] = useState(false);
@@ -602,12 +612,128 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
   };
 
   const openSavedMatchPhoto = (uri: string) => {
+    // Legacy ph:// entries are resolved when their Match Memory opens.
+    // Never send an unresolved Apple Photos identifier to React Native Image.
+    if (uri.startsWith("ph://")) {
+      setEnlargedMatchPhotoError(
+        "This photo is still being prepared from Apple Photos. Try again in a moment.",
+      );
+      return;
+    }
+
     enlargedMatchPhotoRequestRef.current += 1;
     enlargedMatchPhotoRetryRef.current = () => openSavedMatchPhoto(uri);
     setEnlargedMatchPhotoError(null);
     setEnlargedMatchPhotoLoading(true);
     setEnlargedMatchPhotoUri(uri);
   };
+
+  useEffect(() => {
+    if (!selectedHistoryRecordId) return;
+
+    const stored = matchPhotos[selectedHistoryRecordId] ?? [];
+    const legacyPhotos = stored.filter((uri) => uri.startsWith("ph://"));
+
+    if (!legacyPhotos.length) return;
+
+    let cancelled = false;
+
+    const resolveLegacyPhotos = async () => {
+      const replacements = new Map<string, string>();
+      const directory = `${FileSystem.documentDirectory}match-memories/`;
+
+      await FileSystem.makeDirectoryAsync(directory, {
+        intermediates: true,
+      }).catch(() => {});
+
+      for (const uri of legacyPhotos) {
+        if (cancelled) return;
+
+        try {
+          const assetId = uri.slice("ph://".length);
+
+          const info = await MediaLibrary.getAssetInfoAsync(assetId, {
+            shouldDownloadFromNetwork: true,
+          });
+
+          const sourceUri =
+            info.localUri ??
+            (info.uri && !info.uri.startsWith("ph://")
+              ? info.uri
+              : undefined);
+
+          if (!sourceUri) continue;
+
+          const sourceName = info.filename ?? sourceUri;
+          const extension =
+            sourceName
+              .split("?")[0]
+              ?.match(/\.([a-zA-Z0-9]{2,5})$/)?.[1]
+              ?.toLowerCase() ?? "jpg";
+
+          const digest = await Crypto.digestStringAsync(
+            Crypto.CryptoDigestAlgorithm.SHA256,
+            `${selectedHistoryRecordId}|${assetId}|legacy-photo`,
+          );
+
+          const destination =
+            `${directory}${selectedHistoryRecordId.replace(
+              /[^a-zA-Z0-9_-]/g,
+              "-",
+            )}-${digest.slice(0, 20)}.${extension}`;
+
+          const existing = await FileSystem.getInfoAsync(destination);
+
+          if (!existing.exists || !(existing.size ?? 0)) {
+            await FileSystem.copyAsync({
+              from: sourceUri,
+              to: destination,
+            });
+          }
+
+          const copied = await FileSystem.getInfoAsync(destination);
+
+          if (copied.exists && (copied.size ?? 0) > 0) {
+            replacements.set(uri, destination);
+          }
+        } catch (error) {
+          console.warn(
+            "Could not migrate legacy Match Memory photo",
+            uri,
+            error,
+          );
+        }
+      }
+
+      if (cancelled || !replacements.size) return;
+
+      setMatchPhotos((current) => {
+        const currentPhotos = current[selectedHistoryRecordId] ?? [];
+
+        const nextPhotos = Array.from(
+          new Set(
+            currentPhotos.map(
+              (uri) => replacements.get(uri) ?? uri,
+            ),
+          ),
+        );
+
+        const next = {
+          ...current,
+          [selectedHistoryRecordId]: nextPhotos,
+        };
+
+        persistMatchPhotos(next);
+        return next;
+      });
+    };
+
+    void resolveLegacyPhotos();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedHistoryRecordId]);
 
   const openReferencedMatchPhoto = async (
     recordId: string,
@@ -953,6 +1079,18 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
   const [fixtureSuggestions, setFixtureSuggestions] = useState<CachedFixture[]>([]);
   const [manualFixturePool, setManualFixturePool] = useState<FixtureRow[]>([]);
   const [manualFixtureLoading, setManualFixtureLoading] = useState(false);
+  const manualFixtureLoadRequestRef = useRef(0);
+
+  // V4.0.86 — Manual Add wheels use pending values until the user explicitly
+  // confirms each step. This prevents an iOS wheel from loading historical
+  // data while it is still spinning and lets completed wheels collapse.
+  const [manualPickerStep, setManualPickerStep] = useState(0);
+  const [manualPendingSeason, setManualPendingSeason] = useState("");
+  const manualSeasonWheelValueRef = useRef("");
+  const [manualPendingCompetition, setManualPendingCompetition] = useState("");
+  const [manualPendingHomeTeam, setManualPendingHomeTeam] = useState("");
+  const [manualPendingAwayTeam, setManualPendingAwayTeam] = useState("");
+
   const [manualHomeTeam, setManualHomeTeam] = useState("");
   const [manualAwayTeam, setManualAwayTeam] = useState("");
   const [manualDateDay, setManualDateDay] = useState("");
@@ -970,6 +1108,9 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
   const [homeWalletOpenTicketId, setHomeWalletOpenTicketId] =
     useState<string | undefined>();
   const homeWalletOpenY = useSharedValue(0);
+
+  const homeScrollRef = useRef<ScrollView>(null);
+  const homeWalletSectionYRef = useRef(0);
   const [fullFrameSeason, setFullFrameSeason] = useState("All Tickets");
   const [fullFrameSeasonMenuOpen, setFullFrameSeasonMenuOpen] = useState(false);
   const [homeFixturesProfileId, setHomeFixturesProfileId] = useState<
@@ -3601,16 +3742,40 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
             // Classification uses the fast persistent GPS cache, while
             // Match Memory display asks Photos for the full usable asset URI.
             const metadataInfo = await cachedMatchAssetInfo(reference.assetId);
+
+            // V4.0.86 — React Native Image cannot render Apple's ph://
+            // identifiers directly. Resolve History photos to a real local
+            // file URI before exposing them to the Match Memory UI.
+            const previewUri =
+              reference.previewUri &&
+              !reference.previewUri.startsWith("ph://")
+                ? reference.previewUri
+                : undefined;
+
+            const needsResolvedPhoto =
+              reference.type === "photo" && !durableUri && !previewUri;
+
             const displayInfo =
-              reference.type === "photo" && reference.previewUri
-                ? null
-                : await MediaLibrary.getAssetInfoAsync(
+              needsResolvedPhoto || reference.type === "video"
+                ? await MediaLibrary.getAssetInfoAsync(
                     reference.assetId,
-                    { shouldDownloadFromNetwork: false },
-                  ).catch(() => null);
+                    {
+                      shouldDownloadFromNetwork:
+                        reference.type === "photo",
+                    },
+                  ).catch(() => null)
+                : null;
+
+            const resolvedPhotosUri =
+              displayInfo?.localUri ??
+              (displayInfo?.uri && !displayInfo.uri.startsWith("ph://")
+                ? displayInfo.uri
+                : undefined);
 
             photosUri =
-              reference.previewUri ?? displayInfo?.localUri ?? displayInfo?.uri;
+              durableUri ??
+              previewUri ??
+              resolvedPhotosUri;
             const location = metadataInfo?.location ?? displayInfo?.location;
             if (location && selectedGround) {
               const milesFromGround = distanceMiles(
@@ -4395,12 +4560,14 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
       }
       const limitedPhotoAccess = permission.accessPrivileges === "limited";
 
-      // Auto Add's first responsibility is the persistent all-season index.
-      // Await it here so every strict date+stadium GPS association has been
-      // published into History (and therefore the season wheel) before the
-      // completion message or the legacy season-ticket follow-up runs.
-      await startMediaIndex(mediaIndexFixtures);
-
+      // Foreground Auto Add owns the Photos lane.
+      //
+      // Do not make this user-requested action wait for the resumable general
+      // media index. Auto Add performs its own targeted date/GPS discovery
+      // below and persists every trusted association it finds.
+      //
+      // Invisible indexing remains stopped while Auto Add is active so it
+      // cannot compete with the user's foreground action.
       const clubName = ticketCollectionClubName ?? favouriteClub.name;
       const fixtures = getAllBundledClubFixtures(clubName).filter(
         (fixture) => Boolean(fixture.date),
@@ -4413,6 +4580,34 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
 
       const mediaByFixture = new Map<string, MediaLibrary.Asset[]>();
       const assetsByDate = new Map<string, MediaLibrary.Asset[]>();
+
+      // Auto Add must not discard a historical photo merely because the
+      // currently hydrated/bundled fixture cache is missing that exact date.
+      //
+      // Restrict the repair path to seasons already represented by confirmed
+      // History. This lets GPS repair incomplete historical fixture coverage
+      // without turning every Auto Add into an unrestricted whole-library
+      // metadata scan.
+      const confirmedHistorySeasonStarts = new Set(
+        attendanceHistory
+          .filter((record) => record.confirmed)
+          .map((record) => {
+            const season = String(record.season ?? "").trim();
+            const match = season.match(/^(\d{4})[-/]/);
+            return match ? Number(match[1]) : NaN;
+          })
+          .filter((year) => Number.isFinite(year)),
+      );
+
+      const dateFallsInConfirmedHistorySeason = (date: Date) => {
+        const year = date.getFullYear();
+        const month = date.getMonth() + 1;
+
+        // English football season: Jul-Dec belongs to this calendar year's
+        // season start; Jan-Jun belongs to the previous calendar year's start.
+        const seasonStart = month >= 7 ? year : year - 1;
+        return confirmedHistorySeasonStarts.has(seasonStart);
+      };
       const refreshedAssetInfoById = new Map<
         string,
         MediaLibrary.AssetInfo
@@ -4471,9 +4666,15 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
             const taken = new Date(asset.creationTime);
             const date = `${taken.getFullYear()}-${String(taken.getMonth() + 1).padStart(2, "0")}-${String(taken.getDate()).padStart(2, "0")}`;
 
-            // Normal behaviour remains exact-date matching. Old media is also
-            // inspected so GPS can suggest a date-unknown historical fixture.
-            return fixturesByDate.has(date) || taken.getFullYear() < 2000;
+            // Exact dated fixtures remain the fastest path. Also inspect media
+            // from seasons already represented in confirmed History so GPS can
+            // repair a missing/incomplete fixture cache. Pre-2000 retains its
+            // explicit-confirmation fallback and is never silently accepted.
+            return (
+              fixturesByDate.has(date) ||
+              dateFallsInConfirmedHistorySeason(taken) ||
+              taken.getFullYear() < 2000
+            );
           });
           for (const asset of possible) {
             const taken = new Date(asset.creationTime);
@@ -4520,14 +4721,62 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
                 continue;
               }
 
+              // V4.0.86 — demand-resolve a missing historical fixture only
+              // for this GPS-backed photo date. Do not broaden foreground
+              // History or scan historical seasons generally.
+              //
+              // This fixes post-2000 photos whose exact date is absent from
+              // the normal bundled club fixture map. The season store is
+              // queried once on demand and the resolved rows are then added
+              // to this Auto Add run's date cache.
+              let dateFixtures = fixturesByDate.get(date) ?? [];
+
+              if (!dateFixtures.length && taken.getFullYear() >= 2000) {
+                const season = canonicalSeason(date);
+                const seasonStart = Number(season.match(/^(\d{4})/)?.[1]);
+
+                if (season && Number.isFinite(seasonStart)) {
+                  try {
+                    const apiSeason = `${seasonStart}-${seasonStart + 1}`;
+                    const historicalRows =
+                      seasonStart < 2007
+                        ? await getHistoricalSeasonFixtures(apiSeason)
+                        : getBundledCompetitionNamesForSeason(apiSeason).flatMap(
+                            (competition) =>
+                              getBundledCompetitionFixtures(
+                                competition,
+                                apiSeason,
+                              ),
+                          );
+
+                    dateFixtures = historicalRows.filter(
+                      (fixture) =>
+                        fixture.date === date &&
+                        (
+                          clubNamesMatch(fixture.homeName, clubName) ||
+                          clubNamesMatch(fixture.awayName, clubName)
+                        ),
+                    );
+
+                    if (dateFixtures.length) {
+                      fixturesByDate.set(date, dateFixtures);
+                    }
+                  } catch {
+                    // Missing historical data is unknown, never guessed.
+                    dateFixtures = [];
+                  }
+                }
+              }
+
               const seasons = new Set(
-                (fixturesByDate.get(date) ?? []).map((fixture) =>
+                dateFixtures.map((fixture) =>
                   canonicalSeason(fixture.date),
                 ),
               );
               for (const season of seasons)
                 if (season) incrementSeasonStat(season, "gpsAssets");
-              const candidates = (fixturesByDate.get(date) ?? [])
+
+              const candidates = dateFixtures
                 .map((fixture) => {
                   const ground =
                     (fixture.venue
@@ -5077,16 +5326,10 @@ Accept only if these photos are from this match. Choose Another Match for anothe
       );
       setAutoDiscoveryCompleted(true);
 
-      // Startup priority:
-      //   1. 2007/08+ TFD data
-      //   2. Photos / media indexing and GPS processing
-      //   3. 2000/01-2006/07 historical pack
-      //   4. 1990s
-      //   5. 1980s
-      //   6. older history
-      //
-      // Completed packs persist in SQLite and are skipped on later launches.
-      void primeHistoricalPacksInOrder();
+      // V4.0.86 — foreground user actions always win.
+      // Do not immediately start the heavy historical SQLite primer after
+      // Auto Add. Manual Add / History must remain responsive once Auto Add
+      // finishes. Historical seasons are loaded on demand instead.
     } catch (error) {
       console.warn("[history-auto-add] failed", error);
       Alert.alert(
@@ -5095,8 +5338,10 @@ Accept only if these photos are from this match. Choose Another Match for anothe
       );
     } finally {
       setPhotoAction(null);
-      if (photoMemoriesEnabled && mediaIndexFixtures.length)
-        void startMediaIndex(mediaIndexFixtures);
+
+      // Keep invisible media indexing paused after this explicit foreground
+      // scan. The resumable cache can continue later from its saved boundary;
+      // it must never delay Auto Add or the user's next interaction.
     }
   }
   useEffect(() => {
@@ -5819,6 +6064,23 @@ const closeHomeWalletTicket = useCallback(() => {
   homeWalletOpenY.value = 0;
 }, [homeWalletOpenY]);
 
+const openHomeWalletTicket = useCallback(
+  (ticketId: string) => {
+    homeWalletOpenY.value = 0;
+    setHomeWalletOpenTicketId(ticketId);
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        homeScrollRef.current?.scrollTo({
+          y: Math.max(0, homeWalletSectionYRef.current),
+          animated: true,
+        });
+      });
+    });
+  },
+  [homeWalletOpenY],
+);
+
 const homeWalletOpenGesture = Gesture.Pan()
   .onUpdate((event) => {
     homeWalletOpenY.value = Math.max(0, event.translationY);
@@ -6135,67 +6397,15 @@ const handleTileDrop = (id: string, tx: number, ty: number) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [homeFixturesProfileId]);
 
-  // PERFORMANCE: History is a read-only consumer of the fixture cache.
-  // Opening History must never rebuild/refetch every represented season.
-  // The normal fixture/data pipelines keep this cache populated; History
-  // simply reads the already-known rows after its first frame has painted.
-  useEffect(() => {
-    if (!storageReady || activeTab !== "history") return;
+  // V4.0.86 INTERACTION PRIORITY:
+  // History must open and respond immediately from already-held/persistent
+  // state. Do not rebuild the complete per-season fixture cache merely because
+  // the user entered History; that secondary state update can steal the first
+  // interaction and causes unnecessary re-rendering.
+  //
+  // Fixture/data pipelines populate the persistent cache elsewhere.
+  // History remains a read-only consumer of the data it already has.
 
-    let cancelled = false;
-    const seasons = Array.from(
-      new Set(
-        [
-          ...tickets.map((ticket) => ticket.seasonKey),
-          ...attendanceHistory.map((record) => record.season),
-          ...seasonTicketProfiles.map((profile) => profile.seasonKey),
-        ].filter(
-          (season): season is string =>
-            /^\d{4}\/\d{2}$/.test(season ?? ""),
-        ),
-      ),
-    );
-
-    const interactionTask = InteractionManager.runAfterInteractions(() => {
-      void (async () => {
-        const cachedBySeason = await Promise.all(
-          seasons.map((season) =>
-            loadCachedFixtures(ticketCollectionClub.name, season),
-          ),
-        );
-        if (cancelled) return;
-
-        const unique = new Map<string, CachedFixture>();
-        for (const rows of cachedBySeason) {
-          for (const row of rows) {
-            const key =
-              `${row.season}|${row.date}|${normaliseFixtureText(row.opponent)}`;
-            const existing = unique.get(key);
-            if (
-              !existing ||
-              (existing.homeScore == null && row.homeScore != null)
-            ) {
-              unique.set(key, row);
-            }
-          }
-        }
-
-        setHistoryFixtures(Array.from(unique.values()));
-      })();
-    });
-
-    return () => {
-      cancelled = true;
-      interactionTask.cancel();
-    };
-  }, [
-    activeTab,
-    attendanceHistory,
-    seasonTicketProfiles,
-    storageReady,
-    ticketCollectionClub.name,
-    tickets,
-  ]);
 
   // Repair attendances saved before neutral FA Cup venues were preserved.
   // The nominal first-listed club is not the home ground for semi-finals or
@@ -6395,27 +6605,29 @@ const handleTileDrop = (id: string, tx: number, ty: number) => {
       !mediaIndexFixtures.length
     ) return;
     let cancelled = false;
-    // Run independently of History for the first twenty minutes of this app
-    // session. A fixed delay guarantees startup work begins even when React
-    // interactions/animations remain active; the heartbeat resumes any pass
-    // that completed, paused or observed newly available Photos metadata.
-    const sessionEndsAt =
-      mediaIndexSessionStartedAtRef.current + 20 * 60 * 1000;
+
+    // V4.0.86 — foreground user activity wins.
+    // Make one delayed background indexing attempt rather than repeatedly
+    // restarting Photos work every ten seconds for twenty minutes.
     const run = () => {
-      if (cancelled || Date.now() >= sessionEndsAt) return;
+      if (cancelled) return;
+
       void MediaLibrary.getPermissionsAsync().then((permission) => {
-        if (!cancelled && permission.granted)
+        if (!cancelled && permission.granted) {
           void startMediaIndex(mediaIndexFixtures);
+        }
       });
     };
-    // Let the persisted UI and History become interactive before Photos work
-    // begins. An opened fixture still jumps to the front of the same queue.
-    const startupTimer = setTimeout(run, 8000);
-    const heartbeat = setInterval(run, 10 * 1000);
+
+    // V4.0.86 PERFORMANCE DIAGNOSTIC:
+    // Automatic Photos indexing is temporarily disabled.
+    // User-triggered Auto Add remains available. This test determines whether
+    // background media work is responsible for global UI blocking.
+    const startupTimer: ReturnType<typeof setTimeout> | null = null;
+
     return () => {
       cancelled = true;
-      clearTimeout(startupTimer);
-      clearInterval(heartbeat);
+      if (startupTimer) clearTimeout(startupTimer);
     };
   }, [
     attendanceHistoryReady,
@@ -7619,6 +7831,8 @@ useEffect(() => {
   }
 
   async function loadManualFixturePoolForSeason(season: string) {
+    const requestId = ++manualFixtureLoadRequestRef.current;
+
     setManualFixtureLoading(true);
     setManualFixturePool([]);
 
@@ -7644,11 +7858,33 @@ useEffect(() => {
           (a.date ?? "9999").localeCompare(b.date ?? "9999"),
       );
 
+      if (requestId !== manualFixtureLoadRequestRef.current) return;
+
       setManualFixturePool(uniqueFixtures);
-    } catch {
+    } catch (error) {
+      if (requestId !== manualFixtureLoadRequestRef.current) return;
+
+      console.warn(
+        "[manual-history] fixture load failed",
+        season,
+        error,
+      );
+
       setManualFixturePool([]);
+
+      const message =
+        error instanceof Error
+          ? error.message
+          : String(error);
+
+      Alert.alert(
+        "Historical fixtures could not load",
+        `${season}: ${message}`,
+      );
     } finally {
-      setManualFixtureLoading(false);
+      if (requestId === manualFixtureLoadRequestRef.current) {
+        setManualFixtureLoading(false);
+      }
     }
   }
 
@@ -7717,6 +7953,10 @@ useEffect(() => {
   }
 
   async function openAddMatchForm() {
+    // Invalidate any older Manual Add load. Opening the screen should be
+    // immediate; historical data is loaded only after CONFIRM SEASON.
+    manualFixtureLoadRequestRef.current += 1;
+
     setDraftMatch({
       club: "",
       opponent: "",
@@ -7733,14 +7973,20 @@ useEffect(() => {
       resultOverride: null,
     });
 
+    setManualFixturePool([]);
+    setManualFixtureLoading(false);
+    setManualPickerStep(0);
+    setManualPendingSeason(activeSeason);
+    manualSeasonWheelValueRef.current = activeSeason;
+    setManualPendingCompetition("");
+    setManualPendingHomeTeam("");
+    setManualPendingAwayTeam("");
     setManualHomeTeam("");
     setManualAwayTeam("");
     setManualDateDay("");
     setManualDateMonth("");
     setManualDateBlank(false);
     setShowAddMatch(true);
-
-    await loadManualFixturePoolForSeason(activeSeason);
   }
 
   function applySuggestion(fixture: CachedFixture) {
@@ -8215,18 +8461,16 @@ Choose one team. Its colours automatically control the Club Colours frame style.
           a.date.localeCompare(b.date) || a.opponent.localeCompare(b.opponent),
       );
     const currentSeason = seasonForDate(new Date());
-    const today = new Date().toLocaleDateString("en-CA");
     const isCurrentSeasonProfile =
       homeFixturesProfile.seasonKey === currentSeason;
-    const homeFixturesList = isCurrentSeasonProfile
-      ? orderedHomeFixtures
-          .filter(
-            (fixture) =>
-              fixture.date >= today &&
-              fixture.played !== true,
-          )
-          .slice(0, 1)
-      : orderedHomeFixtures;
+
+    // V4.0.87 — A Current Season season ticket must expose the complete
+    // home-fixture list, not only the next unplayed match.
+    //
+    // The fixture itself is the stable record. Scores/results enrich that
+    // same cached fixture when they become available; an unplayed fixture is
+    // never hidden merely because it does not have a result yet.
+    const homeFixturesList = orderedHomeFixtures;
     // Attendance matching REQUIRES the actual fixture date (lib guard).
     const isSeasonAttended = (fixture: { opponent: string; date: string }) =>
       isSeasonFixtureAttended(attendanceHistory, fixture);
@@ -8253,12 +8497,10 @@ Choose one team. Its colours automatically control the Club Colours frame style.
             🎟 SEASON TICKET PROFILE
           </Text>
           <Text style={[s.title, { color: "#17221c", fontSize: 26 }]}>
-            {isCurrentSeasonProfile ? "Next Match" : "My Home Fixtures"}
+            My Home Fixtures
           </Text>
           <Text style={[s.helpText, { marginTop: 2, marginBottom: 16 }]}>
-            {isCurrentSeasonProfile
-              ? `${homeFixturesProfile.club} · ${homeFixturesProfile.seasonKey} — your next home match.`
-              : `${homeFixturesProfile.club} · ${homeFixturesProfile.seasonKey} — home fixtures only. Tap I ATTENDED to confirm the match. Seat details are optional.`}
+            {`${homeFixturesProfile.club} · ${homeFixturesProfile.seasonKey} — all home fixtures for the season. Results are added to these fixtures as they become available.`}
           </Text>
 
           {!profileFixtures || profileFixtures.length === 0 ? (
@@ -8289,9 +8531,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
           homeFixturesList.length === 0 ? (
             <View style={[s.collectionCard, { borderColor: "#c9c2b1" }]}>
               <Text style={s.helpText}>
-                {isCurrentSeasonProfile
-                  ? "No upcoming home match found yet."
-                  : "No home fixtures found for this season yet."}
+                No home fixtures found for this season yet.
               </Text>
             </View>
           ) : null}
@@ -8641,6 +8881,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
   }
 
   if (activeTab === "history") {
+
     // HISTORY CORRECTION FOUNDATION — derivation logic is unchanged in
     // V3.9.4. This release only redesigns how the archive is presented.
     const derivedFromTickets = deriveAttendancesFromTickets(
@@ -8689,7 +8930,6 @@ Choose one team. Its colours automatically control the Club Colours frame style.
       .slice(0, 6);
 
     // ---------- archive view data ----------
-
     const newestFirst = newestConfirmedHistory(mergedHistory);
     const competitionOptions = historyCompetitionOptions(mergedHistory);
     const competitionSelector = (
@@ -8736,6 +8976,30 @@ Choose one team. Its colours automatically control the Club Colours frame style.
         ? filteredMatches
         : [...filteredMatches].reverse();
 
+    // V4.0.86 — Matches Attended is organised as a season concertina.
+    // Collapsed seasons render no match cards, which keeps History responsive.
+    const matchHistorySeasonGroups = new Map<string, AttendanceRecord[]>();
+
+    for (const record of orderedMatches) {
+      const seasonKey = record.season?.trim() || "Season not set";
+      const records = matchHistorySeasonGroups.get(seasonKey);
+
+      if (records) {
+        records.push(record);
+      } else {
+        matchHistorySeasonGroups.set(seasonKey, [record]);
+      }
+    }
+
+    const orderedMatchHistorySeasonGroups =
+      Array.from(matchHistorySeasonGroups.entries());
+
+    const allMatchHistorySeasonsOpen =
+      orderedMatchHistorySeasonGroups.length > 0 &&
+      orderedMatchHistorySeasonGroups.every(([season]) =>
+        expandedMatchHistorySeasons.has(season),
+      );
+
     // Stadiums: each ground appears once; repeat matches add visits.
     const stadiumRows = historyStadiumRows(mergedHistory).filter(
       (stadium) =>
@@ -8752,10 +9016,86 @@ Choose one team. Its colours automatically control the Club Colours frame style.
         recordMatchesHistorySearch(record),
     );
     const seasonStadiums = uniqueHistoryStadiumCount(seasonMatches);
-    // PERFORMANCE: resolve each History fixture only once per render.
-    // fixtureForAttendance can scan the hydrated fixture collection and,
-    // when necessary, bundled TFD. Scores, results, summaries and match cards
-    // must all reuse the same resolved fixture instead of repeating that work.
+
+    // V4.0.86 — Never mount every historical match just because Seasons opens.
+    // All Seasons is grouped by season. A selected season only becomes a
+    // concertina when it contains more than 15 matches.
+    const seasonHistoryGroups = new Map<string, AttendanceRecord[]>();
+
+    for (const record of seasonMatches) {
+      const seasonKey = record.season?.trim() || "Season not set";
+      const records = seasonHistoryGroups.get(seasonKey);
+
+      if (records) {
+        records.push(record);
+      } else {
+        seasonHistoryGroups.set(seasonKey, [record]);
+      }
+    }
+
+    const orderedSeasonHistoryGroups =
+      Array.from(seasonHistoryGroups.entries());
+
+    const seasonHistoryNeedsConcertina =
+      seasonFilter === "All Seasons" || seasonMatches.length > 15;
+    // V4.0.86 PERFORMANCE:
+    // fixtureForAttendance's first lookup requires an exact match date.
+    // Index hydrated fixtures by date once, then give the matcher only that
+    // small date bucket instead of making every History record scan the full
+    // fixture collection. Its existing season/club matching and bundled-data
+    // fallback remain unchanged, so this improves speed without changing
+    // which fixture is considered correct.
+    const historyFixturesByDate = new Map<string, CachedFixture[]>();
+
+    for (const fixture of historyFixtures) {
+      const dateKey = fixture.date;
+      if (!dateKey) continue;
+
+      const existing = historyFixturesByDate.get(dateKey);
+      if (existing) existing.push(fixture);
+      else historyFixturesByDate.set(dateKey, [fixture]);
+    }
+
+    // Foreground History must only use data already in memory/storage.
+    // It must never open bundled historical football data just to calculate
+    // the W/D/L header.
+    const cachedFixtureForRecord = (
+      record: AttendanceRecord,
+    ): CachedFixture | undefined => {
+      if (!record.matchDate) return undefined;
+
+      const candidates =
+        historyFixturesByDate.get(record.matchDate) ?? [];
+
+      if (!candidates.length) return undefined;
+
+      const targetSeason = String(record.season ?? "")
+        .trim()
+        .replace(
+          /^(\d{4})\/(?:\d{2}|\d{4})$/,
+          (_, year) => `${year}-${Number(year) + 1}`,
+        );
+
+      const exact = candidates.find((fixture) => {
+        const fixtureSeason = String(fixture.season ?? "")
+          .trim()
+          .replace(
+            /^(\d{4})\/(?:\d{2}|\d{4})$/,
+            (_, year) => `${year}-${Number(year) + 1}`,
+          );
+
+        return (
+          fixture.date === record.matchDate &&
+          fixtureSeason === targetSeason &&
+          clubNamesMatch(fixture.opponent, record.opponent)
+        );
+      });
+
+      return exact;
+    };
+
+    // Match cards can still resolve more detail when actually opened/rendered.
+    // The cache avoids resolving the same visible record twice.
     const historyFixtureByRecordId = new Map<
       string,
       CachedFixture | undefined
@@ -8765,7 +9105,20 @@ Choose one team. Its colours automatically control the Club Colours frame style.
       if (historyFixtureByRecordId.has(record.id)) {
         return historyFixtureByRecordId.get(record.id);
       }
-      const fixture = fixtureForAttendance(record, historyFixtures);
+
+      const cached = cachedFixtureForRecord(record);
+
+      if (cached) {
+        historyFixtureByRecordId.set(record.id, cached);
+        return cached;
+      }
+
+      // Foreground History is cache-only. Missing enrichment must not
+      // make navigation open bundled historical football datasets.
+      const fixture = fixtureForAttendance(record, [], {
+        allowBundledFallback: false,
+      });
+
       historyFixtureByRecordId.set(record.id, fixture);
       return fixture;
     };
@@ -8777,8 +9130,54 @@ Choose one team. Its colours automatically control the Club Colours frame style.
       record: AttendanceRecord,
     ): AttendanceResult | null =>
       resultForAttendance(record, fixtureForRecord(record));
-    const seasonResults = attendanceResultCounts(seasonMatches, resultForRecord);
-    const matchResults = attendanceResultCounts(orderedMatches, resultForRecord);
+
+    // FAST summary path:
+    // 1. saved result
+    // 2. saved scores
+    // 3. already-hydrated fixture
+    // 4. unknown
+    //
+    // Never perform hidden historical lookup here.
+    const cachedResultForRecord = (
+      record: AttendanceRecord,
+    ): AttendanceResult | null => {
+      if (record.result) return record.result;
+
+      if (
+        record.homeScore != null &&
+        record.awayScore != null
+      ) {
+        return resultForAttendance(record);
+      }
+
+      const fixture = cachedFixtureForRecord(record);
+
+      return fixture
+        ? resultForAttendance(record, fixture)
+        : null;
+    };
+
+    const countHistoryResults = (
+      records: AttendanceRecord[],
+    ) => {
+      let win = 0;
+      let draw = 0;
+      let loss = 0;
+
+      for (const record of records) {
+        const result = cachedResultForRecord(record);
+
+        if (result === "win") win += 1;
+        else if (result === "draw") draw += 1;
+        else if (result === "loss") loss += 1;
+      }
+
+      return { win, draw, loss };
+    };
+
+    const seasonResults = countHistoryResults(seasonMatches);
+    const matchResults = countHistoryResults(orderedMatches);
+
     const seasonTicketCount =
       seasonFilter === "All Seasons"
         ? Array.from(ticketsPerSeason.values()).reduce((a, b) => a + b, 0)
@@ -8790,6 +9189,90 @@ Choose one team. Its colours automatically control the Club Colours frame style.
       <HistoryBackButton onPress={onPress} label={label} />
     );
 
+    // V4.0.86 — The three History statistics are also the permanent History
+    // navigation. Matches Attended is the default; the active section is
+    // highlighted using the user's favourite-club colour.
+    const historySectionTabs = (
+      <View style={[s.historyCountsRow, { marginBottom: 20 }]}>
+        {(
+          [
+            ["MATCHES ATTENDED", counts.matches, "matches"],
+            ["STADIUMS ATTENDED", counts.grounds, "stadiums"],
+            ["SEASONS", counts.seasons, "seasons"],
+          ] as const
+        ).map(([label, value, target]) => {
+          const activeTarget =
+            historyView === "home" || historyView === "matches"
+              ? "matches"
+              : historyView;
+
+          const active = activeTarget === target;
+
+          return (
+            <Pressable
+              key={label}
+              onPress={() => {
+                setCompetitionMenuOpen(false);
+
+                if (target === "matches") {
+                  setHistoryView("home");
+                } else {
+                  setHistoryView(target);
+                }
+              }}
+              style={[
+                s.historyCountCard,
+                {
+                  borderColor: favouriteClub.primary,
+                  backgroundColor: active
+                    ? favouriteClub.primary
+                    : `${favouriteClub.primary}0d`,
+                },
+              ]}
+              accessibilityRole="button"
+              accessibilityState={{ selected: active }}
+            >
+              <Text
+                style={[
+                  s.historyCountNumber,
+                  {
+                    color: active
+                      ? readableTextColour(favouriteClub.primary)
+                      : visibleInkOnCream(favouriteClub.primary),
+                  },
+                ]}
+              >
+                {value}
+              </Text>
+
+              <Text
+                style={[
+                  s.historyCountLabel,
+                  active && {
+                    color: readableTextColour(favouriteClub.primary),
+                  },
+                ]}
+                numberOfLines={2}
+              >
+                {label}
+              </Text>
+
+              <Text
+                style={[
+                  s.hxCardCta,
+                  active && {
+                    color: readableTextColour(favouriteClub.primary),
+                  },
+                ]}
+              >
+                {active ? "SELECTED" : "VIEW →"}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    );
+
     const hxShell = (content: React.ReactNode) => (
       <>
         <SafeAreaView style={[s.safe, { backgroundColor: "#f5f1e8" }]}>
@@ -8798,7 +9281,10 @@ Choose one team. Its colours automatically control the Club Colours frame style.
             style={{ backgroundColor: "#f5f1e8" }}
             contentContainerStyle={[s.page, { paddingBottom: 120 }]}
             onScroll={(event) => {
-              if (historyView === "matches" && !selectedHistoryRecordId) {
+              if (
+                (historyView === "matches" || historyView === "home") &&
+                !selectedHistoryRecordId
+              ) {
                 historyScrollOffsetRef.current =
                   event.nativeEvent.contentOffset.y;
               }
@@ -9114,10 +9600,166 @@ Choose one team. Its colours automatically control the Club Colours frame style.
         );
       } finally {
         setPhotoAction(null);
-        if (photoMemoriesEnabled && mediaIndexFixtures.length)
-          void startMediaIndex(mediaIndexFixtures);
+
+        // Foreground interaction wins.
+        // Do not immediately restart invisible Photos indexing after an
+        // explicit user media search. The persistent index keeps its saved
+        // progress and can resume later from that boundary.
       }
     };
+
+    const renderMatchHistoryConcertina = () => (
+      <>
+        <View style={[s.hxSortRow, { marginBottom: 12 }]}>
+          {(["newest", "oldest"] as const).map((order) => (
+            <Pressable
+              key={order}
+              onPress={() => setMatchSortOrder(order)}
+              style={[
+                s.hxSortChip,
+                matchSortOrder === order && s.hxSortChipOn,
+              ]}
+            >
+              <Text
+                style={[
+                  s.hxSortChipText,
+                  matchSortOrder === order && { color: "#fffaf2" },
+                ]}
+              >
+                {order === "newest" ? "NEWEST FIRST" : "OLDEST FIRST"}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+
+        <View
+          style={{
+            flexDirection: "row",
+            justifyContent: "flex-end",
+            marginBottom: 12,
+          }}
+        >
+          <Pressable
+            onPress={() => {
+              if (allMatchHistorySeasonsOpen) {
+                setExpandedMatchHistorySeasons(new Set());
+              } else {
+                setExpandedMatchHistorySeasons(
+                  new Set(
+                    orderedMatchHistorySeasonGroups.map(
+                      ([season]) => season,
+                    ),
+                  ),
+                );
+              }
+            }}
+            style={({ pressed }) => [
+              s.hxSortChip,
+              { opacity: pressed ? 0.6 : 1 },
+            ]}
+            accessibilityLabel={
+              allMatchHistorySeasonsOpen
+                ? "Close all match history seasons"
+                : "Open all match history seasons"
+            }
+          >
+            <Text style={s.hxSortChipText}>
+              {allMatchHistorySeasonsOpen
+                ? "CLOSE ALL SEASONS"
+                : "OPEN ALL SEASONS"}
+            </Text>
+          </Pressable>
+        </View>
+
+        {orderedMatchHistorySeasonGroups.map(
+          ([season, seasonRecords]) => {
+            const expanded =
+              expandedMatchHistorySeasons.has(season);
+
+            return (
+              <View key={season} style={{ marginBottom: 10 }}>
+                <Pressable
+                  onPress={() =>
+                    setExpandedMatchHistorySeasons((current) => {
+                      const next = new Set(current);
+
+                      if (next.has(season)) {
+                        next.delete(season);
+                      } else {
+                        next.add(season);
+                      }
+
+                      return next;
+                    })
+                  }
+                  accessibilityRole="button"
+                  accessibilityState={{ expanded }}
+                  accessibilityLabel={`${season}, ${seasonRecords.length} ${
+                    seasonRecords.length === 1 ? "match" : "matches"
+                  }`}
+                  style={({ pressed }) => ({
+                    minHeight: 56,
+                    borderWidth: 2,
+                    borderColor: favouriteClub.primary,
+                    borderRadius: 12,
+                    backgroundColor: "#fffdf8",
+                    paddingHorizontal: 14,
+                    paddingVertical: 10,
+                    flexDirection: "row",
+                    alignItems: "center",
+                    opacity: pressed ? 0.65 : 1,
+                  })}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text
+                      style={{
+                        color: "#17221c",
+                        fontSize: 18,
+                        fontWeight: "900",
+                      }}
+                    >
+                      {season}
+                    </Text>
+
+                    <Text
+                      style={{
+                        color: "#657069",
+                        fontSize: 12,
+                        fontWeight: "700",
+                        marginTop: 2,
+                      }}
+                    >
+                      {seasonRecords.length}{" "}
+                      {seasonRecords.length === 1
+                        ? "match"
+                        : "matches"}
+                    </Text>
+                  </View>
+
+                  <Ionicons
+                    name={
+                      expanded
+                        ? "chevron-up-outline"
+                        : "chevron-down-outline"
+                    }
+                    size={22}
+                    color={visibleInkOnCream(
+                      favouriteClub.primary,
+                    )}
+                  />
+                </Pressable>
+
+                {expanded ? (
+                  <View style={{ marginTop: 10 }}>
+                    {seasonRecords.map(renderMatchCard)}
+                  </View>
+                ) : null}
+              </View>
+            );
+          },
+        )}
+      </>
+    );
 
     const selectedHistoryRecord = selectedHistoryRecordId
       ? mergedHistory.find((record) => record.id === selectedHistoryRecordId)
@@ -9150,7 +9792,12 @@ Choose one team. Its colours automatically control the Club Colours frame style.
       // A season-ticket attendance has no individual fixture ticket. Use the
       // saved season card as its ticket-photo link in Match Memory.
       const linkedTicket = directlyLinkedTicket ?? seasonTicket;
-      const rawPhotos = matchPhotos[selectedHistoryRecord.id] ?? [];
+      // Never hand a legacy Apple Photos ph:// identifier directly to
+      // React Native Image. The effect above resolves it to a local file and
+      // then it appears here normally.
+      const rawPhotos = (matchPhotos[selectedHistoryRecord.id] ?? []).filter(
+        (uri) => !uri.startsWith("ph://"),
+      );
       const resolvedMedia =
         resolvedMatchMedia[selectedHistoryRecord.id] ?? [];
       const referencedPhotos = resolvedMedia.filter(
@@ -9795,7 +10442,8 @@ Choose one team. Its colours automatically control the Club Colours frame style.
         setSelectedMediaKeys(new Set());
         setSelectedMatchVideoUri(null);
         setEnlargedMatchPhotoUri(null);
-        restoreHistoryScrollRef.current = historyView === "matches";
+        restoreHistoryScrollRef.current =
+          historyView === "matches" || historyView === "home";
         setSelectedHistoryRecordId(null);
       };
 
@@ -10549,7 +11197,31 @@ Choose one team. Its colours automatically control the Club Colours frame style.
         ),
       ).sort((a, b) => a.localeCompare(b));
 
-      const manualCompetitionFixtures = draftMatch.competition
+      // V4.0.86 — display historically correct English league names
+    // without changing the stored TFD competition identity.
+    const manualCompetitionDisplayName = (
+      competition: string,
+      season: string = draftMatch.season,
+    ) => {
+      const startYear = Number(season.match(/^(\d{4})/)?.[1]);
+      if (!Number.isFinite(startYear)) return competition;
+
+      if (startYear <= 1991) {
+        if (competition === "Premier League") return "First Division";
+        if (competition === "Championship") return "Second Division";
+        if (competition === "League One") return "Third Division";
+        if (competition === "League Two") return "Fourth Division";
+      }
+
+      if (startYear >= 1992 && startYear <= 2003) {
+        if (competition === "Championship") return "First Division";
+        if (competition === "League One") return "Second Division";
+        if (competition === "League Two") return "Third Division";
+      }
+
+      return competition;
+    };
+const manualCompetitionFixtures = draftMatch.competition
         ? manualFixturePool.filter(
             (fixture) =>
               fixture.competition === draftMatch.competition,
@@ -10632,17 +11304,104 @@ Choose one team. Its colours automatically control the Club Colours frame style.
             </Text>
 
             <Text style={s.hxFormLabel}>1 · SEASON</Text>
-            <View style={[s.hxPickerWrap, { marginBottom: 12 }]}>
-              <Picker
-                selectedValue={draftMatch.season}
-                onValueChange={(value) => {
+
+            {manualPickerStep === 0 ? (
+              <>
+                <View
+                  style={[s.hxPickerWrap, { marginBottom: 8 }]}
+                >
+                  <Picker
+                    testID="tfd-manual-season"
+                    selectedValue={manualPendingSeason || draftMatch.season}
+                    onValueChange={(value) => {
+                      manualSeasonWheelValueRef.current = String(value);
+                    }}
+                    itemStyle={{
+                      fontSize: 20,
+                      fontWeight: "700",
+                      color: "#17221c",
+                    }}
+                  >
+                    {manualSeasonOptions.map((season) => (
+                      <Picker.Item
+                        key={season}
+                        label={season}
+                        value={season}
+                      />
+                    ))}
+                  </Picker>
+                </View>
+
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => {
+                    const season =
+                      manualSeasonWheelValueRef.current ||
+                      manualPendingSeason ||
+                      draftMatch.season;
+                    if (!season) return;
+
+                    setDraftMatch((current) => ({
+                      ...current,
+                      season,
+                      club: "",
+                      opponent: "",
+                      matchDate: "",
+                      competition: "",
+                      ground: "",
+                      homeAway: "home",
+                      homeScore: "",
+                      awayScore: "",
+                      fixtureId: null,
+                      fixtureDateStatus: null,
+                      resultOverride: null,
+                    }));
+
+                    setManualPendingCompetition("");
+                    setManualPendingHomeTeam("");
+                    setManualPendingAwayTeam("");
+                    setManualHomeTeam("");
+                    setManualAwayTeam("");
+                    setManualDateDay("");
+                    setManualDateMonth("");
+                    setManualDateBlank(false);
+                    setManualPickerStep(1);
+
+                    void loadManualFixturePoolForSeason(season);
+                  }}
+                  style={[
+                    s.hxSortChip,
+                    { alignSelf: "flex-start", marginBottom: 12 },
+                  ]}
+                >
+                  <Text style={s.hxSortChipText}>CONFIRM SEASON</Text>
+                </Pressable>
+              </>
+            ) : (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => {
+                  manualFixtureLoadRequestRef.current += 1;
+                  setManualFixtureLoading(false);
+                  setManualFixturePool([]);
+                  setManualPickerStep(0);
+                  setManualPendingSeason(draftMatch.season);
+                  manualSeasonWheelValueRef.current = draftMatch.season;
+                  setManualPendingCompetition("");
+                  setManualPendingHomeTeam("");
+                  setManualPendingAwayTeam("");
+                  setManualHomeTeam("");
+                  setManualAwayTeam("");
+                  setManualDateDay("");
+                  setManualDateMonth("");
+                  setManualDateBlank(false);
+
                   setDraftMatch((current) => ({
                     ...current,
-                    season: value,
+                    competition: "",
                     club: "",
                     opponent: "",
                     matchDate: "",
-                    competition: "",
                     ground: "",
                     homeAway: "home",
                     homeScore: "",
@@ -10651,98 +11410,73 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                     fixtureDateStatus: null,
                     resultOverride: null,
                   }));
-                  setManualHomeTeam("");
-                  setManualAwayTeam("");
-                  setManualDateDay("");
-                  setManualDateMonth("");
-                  setManualDateBlank(false);
-                  void loadManualFixturePoolForSeason(value);
                 }}
-                itemStyle={{
-                  fontSize: 20,
-                  fontWeight: "700",
-                  color: "#17221c",
-                }}
+                style={[
+                  s.hxSortChip,
+                  s.hxSortChipOn,
+                  { alignSelf: "flex-start", marginBottom: 12 },
+                ]}
               >
-                {manualSeasonOptions.map((season) => (
-                  <Picker.Item
-                    key={season}
-                    label={season}
-                    value={season}
-                  />
-                ))}
-              </Picker>
-            </View>
+                <Text style={[s.hxSortChipText, { color: "#fffaf2" }]}>
+                  {draftMatch.season} · CHANGE
+                </Text>
+              </Pressable>
+            )}
 
-            {manualFixtureLoading ? (
-              <Text style={[s.helpText, { marginBottom: 12 }]}>
-                Loading fixtures for {draftMatch.season}…
-              </Text>
-            ) : manualFixturePool.length === 0 ? (
-              <Text style={[s.helpText, { marginBottom: 12 }]}>
-                No TFD fixtures are available for this season yet.
-              </Text>
-            ) : (
-              <>
-                <Text style={s.hxFormLabel}>2 · DIVISION / LEAGUE / CUP</Text>
-                <View style={[s.hxPickerWrap, { marginBottom: 12 }]}>
-                  <Picker
-                    selectedValue={draftMatch.competition}
-                    onValueChange={(value) => {
-                      setDraftMatch((current) => ({
-                        ...current,
-                        competition: value,
-                        club: "",
-                        opponent: "",
-                        matchDate: "",
-                        ground: "",
-                        homeAway: "home",
-                        homeScore: "",
-                        awayScore: "",
-                        fixtureId: null,
-                        fixtureDateStatus: null,
-                        resultOverride: null,
-                      }));
-                      setManualHomeTeam("");
-                      setManualAwayTeam("");
-                      setManualDateDay("");
-                      setManualDateMonth("");
-                      setManualDateBlank(false);
-                    }}
-                    itemStyle={{
-                      fontSize: 18,
-                      fontWeight: "700",
-                      color: "#17221c",
-                    }}
-                  >
-                    <Picker.Item
-                      label="Choose division / league / cup"
-                      value=""
-                    />
-                    {manualCompetitionOptions.map((competition) => (
-                      <Picker.Item
-                        key={competition}
-                        label={competition}
-                        value={competition}
-                      />
-                    ))}
-                  </Picker>
-                </View>
+            {manualPickerStep >= 1 ? (
+              manualFixtureLoading ? (
+                <Text style={[s.helpText, { marginBottom: 12 }]}>
+                  Loading fixtures for {draftMatch.season}…
+                </Text>
+              ) : manualFixturePool.length === 0 ? (
+                <Text style={[s.helpText, { marginBottom: 12 }]}>
+                  No TFD fixtures are available for this season yet.
+                </Text>
+              ) : (
+                <>
+                  <Text style={s.hxFormLabel}>
+                    2 · DIVISION / LEAGUE / CUP
+                  </Text>
 
-                {draftMatch.competition ? (
-                  <>
-                    <Text style={s.hxFormLabel}>3 · HOME TEAM</Text>
-                    <View style={[s.hxPickerWrap, { marginBottom: 12 }]}>
-                      <Picker
-                        selectedValue={manualHomeTeam}
-                        onValueChange={(value) => {
-                          setManualHomeTeam(value);
-                          setManualAwayTeam("");
-                          setManualDateDay("");
-                          setManualDateMonth("");
-                          setManualDateBlank(false);
+                  {manualPickerStep === 1 ? (
+                    <>
+                      <View
+                  style={[s.hxPickerWrap, { marginBottom: 8 }]}
+                >
+                        <Picker
+                          selectedValue={manualPendingCompetition}
+                          onValueChange={(value) =>
+                            setManualPendingCompetition(value)
+                          }
+                          itemStyle={{
+                            fontSize: 18,
+                            fontWeight: "700",
+                            color: "#17221c",
+                          }}
+                        >
+                          <Picker.Item
+                            label="Choose division / league / cup"
+                            value=""
+                          />
+                          {manualCompetitionOptions.map((competition) => (
+                            <Picker.Item
+                              key={competition}
+                              label={manualCompetitionDisplayName(competition)}
+                              value={competition}
+                            />
+                          ))}
+                        </Picker>
+                      </View>
+
+                      <Pressable
+                        accessibilityRole="button"
+                        disabled={!manualPendingCompetition}
+                        onPress={() => {
+                          if (!manualPendingCompetition) return;
+
                           setDraftMatch((current) => ({
                             ...current,
+                            competition: manualPendingCompetition,
                             club: "",
                             opponent: "",
                             matchDate: "",
@@ -10754,62 +11488,293 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                             fixtureDateStatus: null,
                             resultOverride: null,
                           }));
-                        }}
-                        itemStyle={{
-                          fontSize: 18,
-                          fontWeight: "700",
-                          color: "#17221c",
-                        }}
-                      >
-                        <Picker.Item label="Choose home team" value="" />
-                        {manualHomeTeamOptions.map((team) => (
-                          <Picker.Item
-                            key={team}
-                            label={team}
-                            value={team}
-                          />
-                        ))}
-                      </Picker>
-                    </View>
-                  </>
-                ) : null}
 
-                {manualHomeTeam ? (
-                  <>
-                    <Text style={s.hxFormLabel}>4 · AWAY TEAM</Text>
-                    <View style={[s.hxPickerWrap, { marginBottom: 12 }]}>
-                      <Picker
-                        selectedValue={manualAwayTeam}
-                        onValueChange={(value) => {
-                          setManualAwayTeam(value);
-                          if (value) {
-                            applyManualFixtureSelection(
-                              draftMatch.competition,
-                              manualHomeTeam,
-                              value,
-                            );
-                          }
+                          setManualPendingHomeTeam("");
+                          setManualPendingAwayTeam("");
+                          setManualHomeTeam("");
+                          setManualAwayTeam("");
+                          setManualDateDay("");
+                          setManualDateMonth("");
+                          setManualDateBlank(false);
+                          setManualPickerStep(2);
                         }}
-                        itemStyle={{
-                          fontSize: 18,
-                          fontWeight: "700",
-                          color: "#17221c",
-                        }}
+                        style={[
+                          s.hxSortChip,
+                          {
+                            alignSelf: "flex-start",
+                            marginBottom: 12,
+                            opacity: manualPendingCompetition ? 1 : 0.45,
+                          },
+                        ]}
                       >
-                        <Picker.Item label="Choose away team" value="" />
-                        {manualAwayTeamOptions.map((team) => (
-                          <Picker.Item
-                            key={team}
-                            label={team}
-                            value={team}
-                          />
-                        ))}
-                      </Picker>
-                    </View>
-                  </>
-                ) : null}
-              </>
-            )}
+                        <Text style={s.hxSortChipText}>
+                          CONFIRM COMPETITION
+                        </Text>
+                      </Pressable>
+                    </>
+                  ) : (
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={() => {
+                        setManualPickerStep(1);
+                        setManualPendingCompetition(
+                          draftMatch.competition,
+                        );
+                        setManualPendingHomeTeam("");
+                        setManualPendingAwayTeam("");
+                        setManualHomeTeam("");
+                        setManualAwayTeam("");
+                        setManualDateDay("");
+                        setManualDateMonth("");
+                        setManualDateBlank(false);
+
+                        setDraftMatch((current) => ({
+                          ...current,
+                          club: "",
+                          opponent: "",
+                          matchDate: "",
+                          ground: "",
+                          homeAway: "home",
+                          homeScore: "",
+                          awayScore: "",
+                          fixtureId: null,
+                          fixtureDateStatus: null,
+                          resultOverride: null,
+                        }));
+                      }}
+                      style={[
+                        s.hxSortChip,
+                        s.hxSortChipOn,
+                        { alignSelf: "flex-start", marginBottom: 12 },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          s.hxSortChipText,
+                          { color: "#fffaf2" },
+                        ]}
+                      >
+                        {manualCompetitionDisplayName(draftMatch.competition)} · CHANGE
+                      </Text>
+                    </Pressable>
+                  )}
+
+                  {draftMatch.competition && manualPickerStep >= 2 ? (
+                    <>
+                      <Text style={s.hxFormLabel}>3 · HOME TEAM</Text>
+
+                      {manualPickerStep === 2 ? (
+                        <>
+                          <View
+                            style={[s.hxPickerWrap, { marginBottom: 8 }]}
+                          >
+                            <Picker
+                              selectedValue={manualPendingHomeTeam}
+                              onValueChange={(value) =>
+                                setManualPendingHomeTeam(value)
+                              }
+                              itemStyle={{
+                                fontSize: 18,
+                                fontWeight: "700",
+                                color: "#17221c",
+                              }}
+                            >
+                              <Picker.Item
+                                label="Choose home team"
+                                value=""
+                              />
+                              {manualHomeTeamOptions.map((team) => (
+                                <Picker.Item
+                                  key={team}
+                                  label={team}
+                                  value={team}
+                                />
+                              ))}
+                            </Picker>
+                          </View>
+
+                          <Pressable
+                            accessibilityRole="button"
+                            disabled={!manualPendingHomeTeam}
+                            onPress={() => {
+                              if (!manualPendingHomeTeam) return;
+
+                              setManualHomeTeam(manualPendingHomeTeam);
+                              setManualPendingAwayTeam("");
+                              setManualAwayTeam("");
+                              setManualDateDay("");
+                              setManualDateMonth("");
+                              setManualDateBlank(false);
+                              setManualPickerStep(3);
+                            }}
+                            style={[
+                              s.hxSortChip,
+                              {
+                                alignSelf: "flex-start",
+                                marginBottom: 12,
+                                opacity: manualPendingHomeTeam ? 1 : 0.45,
+                              },
+                            ]}
+                          >
+                            <Text style={s.hxSortChipText}>
+                              CONFIRM HOME TEAM
+                            </Text>
+                          </Pressable>
+                        </>
+                      ) : (
+                        <Pressable
+                          accessibilityRole="button"
+                          onPress={() => {
+                            setManualPickerStep(2);
+                            setManualPendingHomeTeam(manualHomeTeam);
+                            setManualPendingAwayTeam("");
+                            setManualAwayTeam("");
+                            setManualDateDay("");
+                            setManualDateMonth("");
+                            setManualDateBlank(false);
+
+                            setDraftMatch((current) => ({
+                              ...current,
+                              club: "",
+                              opponent: "",
+                              matchDate: "",
+                              ground: "",
+                              homeAway: "home",
+                              homeScore: "",
+                              awayScore: "",
+                              fixtureId: null,
+                              fixtureDateStatus: null,
+                              resultOverride: null,
+                            }));
+                          }}
+                          style={[
+                            s.hxSortChip,
+                            s.hxSortChipOn,
+                            { alignSelf: "flex-start", marginBottom: 12 },
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              s.hxSortChipText,
+                              { color: "#fffaf2" },
+                            ]}
+                          >
+                            {manualHomeTeam} · CHANGE
+                          </Text>
+                        </Pressable>
+                      )}
+                    </>
+                  ) : null}
+
+                  {manualHomeTeam && manualPickerStep >= 3 ? (
+                    <>
+                      <Text style={s.hxFormLabel}>4 · AWAY TEAM</Text>
+
+                      {manualPickerStep === 3 ? (
+                        <>
+                          <View
+                            style={[s.hxPickerWrap, { marginBottom: 8 }]}
+                          >
+                            <Picker
+                              selectedValue={manualPendingAwayTeam}
+                              onValueChange={(value) =>
+                                setManualPendingAwayTeam(value)
+                              }
+                              itemStyle={{
+                                fontSize: 18,
+                                fontWeight: "700",
+                                color: "#17221c",
+                              }}
+                            >
+                              <Picker.Item
+                                label="Choose away team"
+                                value=""
+                              />
+                              {manualAwayTeamOptions.map((team) => (
+                                <Picker.Item
+                                  key={team}
+                                  label={team}
+                                  value={team}
+                                />
+                              ))}
+                            </Picker>
+                          </View>
+
+                          <Pressable
+                            accessibilityRole="button"
+                            disabled={!manualPendingAwayTeam}
+                            onPress={() => {
+                              if (!manualPendingAwayTeam) return;
+
+                              setManualAwayTeam(manualPendingAwayTeam);
+
+                              applyManualFixtureSelection(
+                                draftMatch.competition,
+                                manualHomeTeam,
+                                manualPendingAwayTeam,
+                              );
+
+                              setManualPickerStep(4);
+                            }}
+                            style={[
+                              s.hxSortChip,
+                              {
+                                alignSelf: "flex-start",
+                                marginBottom: 12,
+                                opacity: manualPendingAwayTeam ? 1 : 0.45,
+                              },
+                            ]}
+                          >
+                            <Text style={s.hxSortChipText}>
+                              CONFIRM AWAY TEAM
+                            </Text>
+                          </Pressable>
+                        </>
+                      ) : (
+                        <Pressable
+                          accessibilityRole="button"
+                          onPress={() => {
+                            setManualPickerStep(3);
+                            setManualPendingAwayTeam(manualAwayTeam);
+                            setManualDateDay("");
+                            setManualDateMonth("");
+                            setManualDateBlank(false);
+
+                            setDraftMatch((current) => ({
+                              ...current,
+                              club: "",
+                              opponent: "",
+                              matchDate: "",
+                              ground: "",
+                              homeAway: "home",
+                              homeScore: "",
+                              awayScore: "",
+                              fixtureId: null,
+                              fixtureDateStatus: null,
+                              resultOverride: null,
+                            }));
+                          }}
+                          style={[
+                            s.hxSortChip,
+                            s.hxSortChipOn,
+                            { alignSelf: "flex-start", marginBottom: 12 },
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              s.hxSortChipText,
+                              { color: "#fffaf2" },
+                            ]}
+                          >
+                            {manualAwayTeam} · CHANGE
+                          </Text>
+                        </Pressable>
+                      )}
+                    </>
+                  ) : null}
+                </>
+              )
+            ) : null}
 
             {manualSelectedFixture ? (
               <>
@@ -10822,7 +11787,9 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                     marginBottom: 10,
                   }}
                 >
-                  <View style={[s.hxPickerWrap, { flex: 1 }]}>
+                  <View
+                    style={[s.hxPickerWrap, { flex: 1 }]}
+                  >
                     <Picker
                       selectedValue={manualDateDay}
                       enabled={!manualDateBlank}
@@ -10854,7 +11821,9 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                     </Picker>
                   </View>
 
-                  <View style={[s.hxPickerWrap, { flex: 1 }]}>
+                  <View
+                    style={[s.hxPickerWrap, { flex: 1 }]}
+                  >
                     <Picker
                       selectedValue={manualDateMonth}
                       enabled={!manualDateBlank}
@@ -10940,7 +11909,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                     {manualSelectedFixture.awayName}
                   </Text>
                   <Text style={s.collectionSub}>
-                    {draftMatch.competition} · {draftMatch.season}
+                    {manualCompetitionDisplayName(draftMatch.competition)} · {draftMatch.season}
                   </Text>
                 </View>
 
@@ -11054,7 +12023,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
     // ---------- MATCH HISTORY ----------
 
     if (
-      historyView === "matches" &&
+      (historyView === "matches" || historyView === "home") &&
       !selectedHistoryRecordId &&
       restoreHistoryScrollRef.current
     ) {
@@ -11070,9 +12039,9 @@ Choose one team. Its colours automatically control the Club Colours frame style.
     if (historyView === "matches") {
       return hxShell(
         <>
-          {hxBackButton(() => setHistoryView("home"))}
+          {historySectionTabs}
           <Text style={[s.title, { color: "#17221c", fontSize: 26 }]}>
-            Match History
+            Matches Attended
           </Text>
           <Text style={[s.helpText, { marginTop: 2, marginBottom: 14 }]}> 
             Every match you have attended.
@@ -11257,9 +12226,9 @@ Choose one team. Its colours automatically control the Club Colours frame style.
       }
       return hxShell(
         <>
-          {hxBackButton(() => setHistoryView("home"))}
+          {historySectionTabs}
           <Text style={[s.title, { color: "#17221c", fontSize: 26 }]}>
-            Stadium History
+            Stadiums Attended
           </Text>
           <Text style={[s.helpText, { marginTop: 2, marginBottom: 16 }]}> 
             Every stadium you have watched football at. Each ground appears
@@ -11309,15 +12278,18 @@ Choose one team. Its colours automatically control the Club Colours frame style.
     if (historyView === "seasons") {
       return hxShell(
         <>
-          {hxBackButton(() => setHistoryView("home"))}
+          {historySectionTabs}
           <Text style={[s.title, { color: "#17221c", fontSize: 26 }]}> 
-            Season History
+            Seasons
           </Text>
           <View style={{ marginTop: 12 }}>{historySearchBox}</View>
           <View style={[s.hxPickerWrap, { marginTop: 12 }]}> 
             <Picker
               selectedValue={seasonFilter}
-              onValueChange={(value) => setSeasonFilter(value)}
+              onValueChange={(value) => {
+                setSeasonFilter(value);
+                setExpandedSeasonHistorySeasons(new Set());
+              }}
               itemStyle={{ fontSize: 20, fontWeight: "700", color: "#17221c" }}
             >
               <Picker.Item label="All Seasons" value="All Seasons" />
@@ -11365,7 +12337,99 @@ Choose one team. Its colours automatically control the Club Colours frame style.
             </Text>
           </View>
           {seasonMatches.length ? (
-            seasonMatches.map(renderMatchCard)
+            seasonHistoryNeedsConcertina ? (
+              <View>
+                {orderedSeasonHistoryGroups.map(
+                  ([season, records]) => {
+                    const expanded =
+                      expandedSeasonHistorySeasons.has(season);
+
+                    return (
+                      <View key={season} style={{ marginBottom: 10 }}>
+                        <Pressable
+                          onPress={() =>
+                            setExpandedSeasonHistorySeasons((current) => {
+                              const next = new Set(current);
+
+                              if (next.has(season)) {
+                                next.delete(season);
+                              } else {
+                                next.add(season);
+                              }
+
+                              return next;
+                            })
+                          }
+                          accessibilityRole="button"
+                          accessibilityState={{ expanded }}
+                          accessibilityLabel={`${season}, ${records.length} ${
+                            records.length === 1 ? "match" : "matches"
+                          }`}
+                          style={({ pressed }) => ({
+                            minHeight: 56,
+                            borderWidth: 2,
+                            borderColor: favouriteClub.primary,
+                            borderRadius: 12,
+                            backgroundColor: "#fffdf8",
+                            paddingHorizontal: 14,
+                            paddingVertical: 10,
+                            flexDirection: "row",
+                            alignItems: "center",
+                            opacity: pressed ? 0.65 : 1,
+                          })}
+                        >
+                          <View style={{ flex: 1 }}>
+                            <Text
+                              style={{
+                                color: "#17221c",
+                                fontSize: 18,
+                                fontWeight: "900",
+                              }}
+                            >
+                              {season}
+                            </Text>
+
+                            <Text
+                              style={{
+                                color: "#657069",
+                                fontSize: 12,
+                                fontWeight: "700",
+                                marginTop: 2,
+                              }}
+                            >
+                              {records.length}{" "}
+                              {records.length === 1
+                                ? "match"
+                                : "matches"}
+                            </Text>
+                          </View>
+
+                          <Ionicons
+                            name={
+                              expanded
+                                ? "chevron-up-outline"
+                                : "chevron-down-outline"
+                            }
+                            size={22}
+                            color={visibleInkOnCream(
+                              favouriteClub.primary,
+                            )}
+                          />
+                        </Pressable>
+
+                        {expanded ? (
+                          <View style={{ marginTop: 10 }}>
+                            {records.map(renderMatchCard)}
+                          </View>
+                        ) : null}
+                      </View>
+                    );
+                  },
+                )}
+              </View>
+            ) : (
+              seasonMatches.map(renderMatchCard)
+            )
           ) : (
             <Text style={[s.helpText, { textAlign: "center", marginTop: 8 }]}>
               {seasonFilter === "All Seasons"
@@ -11382,8 +12446,16 @@ Choose one team. Its colours automatically control the Club Colours frame style.
     return (
       <SafeAreaView style={[s.safe, { backgroundColor: "#f5f1e8" }]}>
         <ScrollView
+          ref={historyScrollRef}
           style={{ backgroundColor: "#f5f1e8" }}
           contentContainerStyle={[s.page, { paddingBottom: 120 }]}
+          onScroll={(event) => {
+            if (!selectedHistoryRecordId) {
+              historyScrollOffsetRef.current =
+                event.nativeEvent.contentOffset.y;
+            }
+          }}
+          scrollEventThrottle={16}
           onScrollBeginDrag={Keyboard.dismiss}
           keyboardShouldPersistTaps="handled"
         >
@@ -11628,45 +12700,12 @@ Choose one team. Its colours automatically control the Club Colours frame style.
             </View>
           ) : null}
 
-          <View style={[s.historyCountsRow, { marginBottom: 20 }]}>
-            {(
-              [
-                ["MATCHES ATTENDED", counts.matches, "matches"],
-                ["STADIUMS ATTENDED", counts.grounds, "stadiums"],
-                ["SEASONS", counts.seasons, "seasons"],
-              ] as const
-            ).map(([label, value, target]) => (
-              <Pressable
-                key={label}
-                onPress={() => setHistoryView(target)}
-                style={[
-                  s.historyCountCard,
-                  {
-                    borderColor: favouriteClub.primary,
-                    backgroundColor: `${favouriteClub.primary}0d`,
-                  },
-                ]}
-              >
-                <Text
-                  style={[
-                    s.historyCountNumber,
-                    { color: visibleInkOnCream(favouriteClub.primary) },
-                  ]}
-                >
-                  {value}
-                </Text>
-                <Text style={s.historyCountLabel} numberOfLines={2}>
-                  {label}
-                </Text>
-                <Text style={s.hxCardCta}>VIEW →</Text>
-              </Pressable>
-            ))}
-          </View>
+          {historySectionTabs}
 
           {resolvedHistoryClubName ? (
             <View style={{ flexDirection: "row", gap: 6, marginBottom: 18 }}>
               <Pressable
-                disabled={photoAction === "auto" || autoDiscoveryCompleted}
+                disabled={photoAction === "auto"}
                 style={({ pressed }) => [
                   s.hxActionButton,
                   { minHeight: 50, paddingHorizontal: 4, paddingVertical: 6 },
@@ -11736,11 +12775,33 @@ Choose one team. Its colours automatically control the Club Colours frame style.
           {newestFirst.length ? (
             <>
               <Text style={[s.hxSectionTitle, { marginBottom: 10 }]}>
-                RECENT MATCHES
+                MATCHES ATTENDED
               </Text>
               {competitionSelector}
+
               {filteredMatches.length ? (
-                filteredMatches.slice(0, 3).map(renderMatchCard)
+                <View
+                  style={{
+                    flexDirection: "row",
+                    gap: 14,
+                    marginBottom: 14,
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <Text style={{ fontWeight: "800", color: "#1a7a3c" }}>
+                    {matchResults.win} W
+                  </Text>
+                  <Text style={{ fontWeight: "800", color: "#777777" }}>
+                    {matchResults.draw} D
+                  </Text>
+                  <Text style={{ fontWeight: "800", color: "#a03030" }}>
+                    {matchResults.loss} L
+                  </Text>
+                </View>
+              ) : null}
+
+              {filteredMatches.length ? (
+                renderMatchHistoryConcertina()
               ) : (
                 <Text
                   style={[s.helpText, { textAlign: "center", marginBottom: 18 }]}
@@ -11748,15 +12809,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                   No matches for this competition yet.
                 </Text>
               )}
-              {filteredMatches.length > 3 ? (
-                <Pressable
-                  onPress={() => setHistoryView("matches")}
-                  style={{ alignSelf: "flex-start", marginBottom: 18 }}
-                  hitSlop={8}
-                >
-                  <Text style={s.hxBackText}>VIEW ALL MATCHES →</Text>
-                </Pressable>
-              ) : null}
+
             </>
           ) : (
             <View
@@ -13814,6 +14867,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
     <SafeAreaView style={s.safe}>
       {oldSchoolHost}
       <ScrollView
+      ref={homeScrollRef}
       contentContainerStyle={s.page}
       onScrollBeginDrag={Keyboard.dismiss}
       keyboardShouldPersistTaps="handled"
@@ -14144,6 +15198,9 @@ Choose one team. Its colours automatically control the Club Colours frame style.
         </GestureDetector>
       ) : (
         <View
+          onLayout={(event) => {
+            homeWalletSectionYRef.current = event.nativeEvent.layout.y;
+          }}
           style={{
             width: "100%",
             paddingTop: 4,
@@ -14238,8 +15295,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                       <Pressable
                         key={ticket.id}
                         onPress={() => {
-                          homeWalletOpenY.value = 0;
-                          setHomeWalletOpenTicketId(ticket.id);
+                          openHomeWalletTicket(ticket.id);
                         }}
                         style={{
                           position: "absolute",
@@ -14291,8 +15347,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                   <Pressable
                     key={ticket.id}
                     onPress={() => {
-                      homeWalletOpenY.value = 0;
-                      setHomeWalletOpenTicketId(ticket.id);
+                      openHomeWalletTicket(ticket.id);
                     }}
                     onLongPress={() => showTicketActions(ticket)}
                     delayLongPress={450}

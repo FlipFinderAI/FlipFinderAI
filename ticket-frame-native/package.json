@@ -27,7 +27,8 @@
     "highlightly:daily": "node scripts/runHighlightlyDailyMaintenance.mjs",
     "providers:race": "node scripts/raceCurrentFootballProviders.mjs",
     "tfd:generate": "node scripts/generatePublicTfdSnapshot.mjs",
-    "tfd:publish": "node scripts/publishTfdToGitHub.mjs"
+    "tfd:publish": "node scripts/publishTfdToGitHub.mjs",
+    "postinstall": "patch-package"
   },
   "dependencies": {
     "@expo/vector-icons": "15.0.3",
@@ -77,6 +78,7 @@
     "@types/react": "~19.1.0",
     "eslint": "^9.25.0",
     "eslint-config-expo": "~10.0.0",
+    "patch-package": "^8.0.1",
     "typescript": "~5.9.2",
     "wrangler": "^4.127.1"
   }

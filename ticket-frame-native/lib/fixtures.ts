@@ -85,7 +85,30 @@ export function applyHostedMatchDatabase(value: unknown) {
   }
   if (Date.parse(candidate.generatedAt) <= Date.parse(matchDatabase.generatedAt))
     return false;
-  matchDatabase = candidate as FootballDataCache;
+
+  // V4.0.86 — hosted TFD updates must never erase valid bundled history.
+  // The bundled database is the complete base. A newer hosted snapshot may
+  // replace competitions/seasons it actually supplies, while seasons absent
+  // from that snapshot remain available from the bundled database.
+  const hosted = candidate as FootballDataCache;
+  const mergedCompetitions: FootballDataCache["competitions"] = {
+    ...matchDatabase.competitions,
+  };
+
+  for (const [competitionName, hostedSeasons] of Object.entries(
+    hosted.competitions,
+  )) {
+    mergedCompetitions[competitionName] = {
+      ...(matchDatabase.competitions[competitionName] ?? {}),
+      ...hostedSeasons,
+    };
+  }
+
+  matchDatabase = {
+    ...hosted,
+    competitions: mergedCompetitions,
+  };
+
   return true;
 }
 function namesMatch(a: string, b: string): boolean {
