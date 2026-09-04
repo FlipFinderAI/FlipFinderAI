@@ -994,3 +994,12 @@ Verification:
 - Corrected season conversion used by the fixture-cache pipeline so forms such as 2025/26 resolve to the canonical 2025-2026 TFD season.
 - Verified on physical iPhone: previously missing 2025/26 scores, including Everton v Leeds, now display correctly.
 - Preserves the V4.0.86/V4.0.87 fast History architecture.
+
+## V4.0.91 — Background photo indexing and History photo viewer
+- Added resumable iOS background photo/media indexing using expo-background-task.
+- Background indexing is bounded to a small checkpointed pass and never starts a second Photos worker.
+- Foreground app activity preempts invisible photo indexing so user actions keep priority.
+- Persisted fixture descriptors allow later iOS background opportunities to resume useful indexing, including clearing stale descriptors when the fixture list becomes empty.
+- History Match Memory photos now open from the already-visible thumbnail immediately while full-resolution Apple Photos/iCloud resolution continues separately.
+- Added swipe navigation and pinch-to-zoom for History photos with an always-available close control.
+- A failed full-resolution upgrade no longer replaces a usable thumbnail with a false error.

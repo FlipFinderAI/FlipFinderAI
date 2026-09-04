@@ -1108,3 +1108,10 @@ Phone verification: PASS.
 - Fixed malformed fixture-cache season conversion.
 - No foreground TFD scan was reintroduced.
 - Physical iPhone verification passed: missing 2025/26 scores restored and History remains fast.
+
+## V4.0.91
+- Added bounded, resumable iOS background Photos indexing with foreground preemption.
+- Added persisted background media-index fixture descriptors and empty-list clearing.
+- Added History Match Memory swipe gallery and pinch-to-zoom.
+- History photo expansion now starts from the displayed thumbnail and silently upgrades to the durable/full-resolution copy when available.
+- Suppressed false full-resolution/iCloud error state when a usable thumbnail remains available.

@@ -294,7 +294,42 @@ let mediaIndexState: MediaIndexState | null = null;
 let mediaIndexLoad: Promise<MediaIndexState> | null = null;
 let mediaIndexRun: Promise<void> | null = null;
 let mediaIndexFixtures: MediaIndexFixture[] = [];
+const MEDIA_INDEX_FIXTURES_KEY = "ticket-frame.media-index-fixtures.v1";
 let priorityFixture: MediaIndexFixture | null = null;
+
+async function persistMediaIndexFixtures(fixtures: MediaIndexFixture[]) {
+  await AsyncStorage.setItem(
+    MEDIA_INDEX_FIXTURES_KEY,
+    JSON.stringify(fixtures),
+  );
+}
+
+async function restoreMediaIndexFixtures() {
+  if (mediaIndexFixtures.length) return mediaIndexFixtures;
+
+  const raw = await AsyncStorage.getItem(MEDIA_INDEX_FIXTURES_KEY);
+  if (!raw) return mediaIndexFixtures;
+
+  try {
+    const parsed = JSON.parse(raw) as MediaIndexFixture[];
+
+    mediaIndexFixtures = parsed.filter((fixture) =>
+      Boolean(
+        fixture &&
+          typeof fixture.recordId === "string" &&
+          typeof fixture.matchDate === "string" &&
+          typeof fixture.ground?.latitude === "number" &&
+          Number.isFinite(fixture.ground.latitude) &&
+          typeof fixture.ground?.longitude === "number" &&
+          Number.isFinite(fixture.ground.longitude),
+      ),
+    );
+  } catch {
+    mediaIndexFixtures = [];
+  }
+
+  return mediaIndexFixtures;
+}
 let mediaIndexStopped = false;
 const mediaIndexListeners = new Set<(
   recordId: string,
@@ -521,8 +556,14 @@ async function indexNextAlbumPage(state: MediaIndexState) {
   await saveMediaIndexState(state);
 }
 
-async function runMediaIndex() {
+async function runMediaIndex(
+  options: {
+    maxBackgroundPages?: number;
+    includeMaintenance?: boolean;
+  } = {},
+) {
   const state = await loadMediaIndexState();
+  const includeMaintenance = options.includeMaintenance ?? true;
 
   // Foreground always wins. If the user has opened/prioritised a specific
   // match, resolve only its tight match-date Photos window before doing any
@@ -564,6 +605,7 @@ async function runMediaIndex() {
   // requesting GPS, so one pass can populate all seasons without repeating
   // the entire album for every unmatched match.
   if (
+    includeMaintenance &&
     !mediaIndexStopped &&
     state.initialPassComplete &&
     mediaIndexFixtures.length &&
@@ -576,7 +618,11 @@ async function runMediaIndex() {
   // indexed while Photos temporarily withheld its GPS; revisiting several
   // fixtures at a time restores those associations across older seasons
   // without a competing whole-library rescan.
-  if (state.initialPassComplete && mediaIndexFixtures.length) {
+  if (
+    includeMaintenance &&
+    state.initialPassComplete &&
+    mediaIndexFixtures.length
+  ) {
     let cursor = state.fixtureRetryCursor ?? 0;
     const pastFixtures = mediaIndexFixtures.filter(
       (fixture) => fixture.matchDate <= new Date().toISOString().slice(0, 10),
@@ -603,8 +649,13 @@ async function runMediaIndex() {
   // remain cached even if the user interrupts the rest of the block.
   //
   // Both photos and videos travel through exactly the same pages.
-  const BACKGROUND_BLOCK_SIZE = 1000;
   const BACKGROUND_PAGE_SIZE = 100;
+  const maxBackgroundPages = Math.max(
+    1,
+    Math.floor(options.maxBackgroundPages ?? 10),
+  );
+  const BACKGROUND_BLOCK_SIZE =
+    BACKGROUND_PAGE_SIZE * maxBackgroundPages;
   let processedInBlock = 0;
 
   while (processedInBlock < BACKGROUND_BLOCK_SIZE) {
@@ -718,8 +769,35 @@ export function subscribeToMediaIndex(
   };
 }
 
+export async function runBackgroundMediaIndexPass() {
+  await restoreMediaIndexFixtures();
+  if (!mediaIndexFixtures.length) return;
+
+  // Never create a second Photos worker. If foreground or another index run
+  // already owns the queue, the background opportunity is deliberately skipped.
+  if (mediaIndexRun) return;
+
+  mediaIndexStopped = false;
+
+  let run: Promise<void>;
+
+  run = runMediaIndex({
+    maxBackgroundPages: 1,
+    includeMaintenance: false,
+  })
+    .catch((error) => console.warn("[media-index] background pass failed", error))
+    .finally(() => {
+      if (mediaIndexRun === run) mediaIndexRun = null;
+      mediaIndexStopped = true;
+    });
+
+  mediaIndexRun = run;
+  await run;
+}
+
 export async function startMediaIndex(fixtures: MediaIndexFixture[]) {
   mediaIndexFixtures = fixtures;
+  await persistMediaIndexFixtures(fixtures);
 
   if (!fixtures.length) return;
 

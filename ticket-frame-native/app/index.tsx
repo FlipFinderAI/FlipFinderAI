@@ -54,6 +54,7 @@ import MatchMemoryVideoPlayer from "@/components/matchMemory/MatchMemoryVideoPla
 import {
   HistoryBackButton,
   MatchPhotoViewer,
+  type MatchPhotoViewerItem,
 } from "@/components/history/HistoryControls";
 import HistoryCompetitionSelector from "@/components/history/HistoryCompetitionSelector";
 import {
@@ -152,6 +153,7 @@ import {
 import { ticketGridPercentSize, ticketGridShape } from "@/lib/ticketGridLayout";
 import { fetchMatchWeather, type MatchWeather } from "@/lib/matchWeather";
 import "@/lib/notificationSetup";
+import { setBackgroundMediaIndexEnabled } from "@/lib/backgroundMediaIndex";
 import {
   ParkingSearchModule,
   SiriShortcutsModule,
@@ -527,6 +529,9 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
   const [enlargedMatchPhotoUri, setEnlargedMatchPhotoUri] = useState<string | null>(null);
   const [enlargedMatchPhotoLoading, setEnlargedMatchPhotoLoading] = useState(false);
   const [enlargedMatchPhotoError, setEnlargedMatchPhotoError] = useState<string | null>(null);
+  const [enlargedMatchPhotoItems, setEnlargedMatchPhotoItems] =
+    useState<MatchPhotoViewerItem[]>([]);
+  const [enlargedMatchPhotoIndex, setEnlargedMatchPhotoIndex] = useState(0);
   const enlargedMatchPhotoRetryRef = useRef<(() => void) | null>(null);
   const enlargedMatchPhotoRequestRef = useRef(0);
   const [photoAction, setPhotoAction] = useState<"choose" | "find" | "auto" | null>(null);
@@ -614,6 +619,8 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
     setEnlargedMatchPhotoUri(null);
     setEnlargedMatchPhotoLoading(false);
     setEnlargedMatchPhotoError(null);
+    setEnlargedMatchPhotoItems([]);
+    setEnlargedMatchPhotoIndex(0);
   };
 
   const openSavedMatchPhoto = (uri: string) => {
@@ -750,13 +757,46 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
       void openReferencedMatchPhoto(recordId, media);
     };
     setEnlargedMatchPhotoError(null);
-    setEnlargedMatchPhotoLoading(true);
-    setEnlargedMatchPhotoUri(media.localUri ?? media.uri);
+
+    const immediateUri = media.uri;
+    const hasImmediatePreview =
+      !!immediateUri && !immediateUri.startsWith("ph://");
+    const galleryKey = `asset:${media.assetId}`;
+
+    const updateGalleryItem = (
+      update: Partial<MatchPhotoViewerItem>,
+    ) => {
+      setEnlargedMatchPhotoItems((current) =>
+        current.map((item) =>
+          item.key === galleryKey ? { ...item, ...update } : item,
+        ),
+      );
+    };
+
+    // V4.0.92 — open Match Memory photos instantly with the best already
+    // available local/thumbnail image. The original can continue resolving
+    // from Apple Photos/iCloud in the background without hiding the preview.
+    setEnlargedMatchPhotoUri(immediateUri);
+    setEnlargedMatchPhotoLoading(!hasImmediatePreview);
+    updateGalleryItem({
+      uri: immediateUri,
+      loading: true,
+      error: null,
+    });
 
     try {
       if (media.localUri) {
         const localInfo = await FileSystem.getInfoAsync(media.localUri);
-        if (localInfo.exists && (localInfo.size ?? 0) > 0) return;
+        if (localInfo.exists && (localInfo.size ?? 0) > 0) {
+          updateGalleryItem({
+            uri: media.localUri,
+            loading: false,
+            error: null,
+          });
+          if (enlargedMatchPhotoRequestRef.current === requestId)
+            setEnlargedMatchPhotoUri(media.localUri);
+          return;
+        }
       }
 
       // Join any original-photo request already running for this asset.
@@ -815,17 +855,44 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
         throw new Error("Downloaded photo was empty");
 
       addMatchMediaReferences(recordId, [{ ...media, localUri: destination }]);
+      updateGalleryItem({
+        uri: destination,
+        loading: false,
+        error: null,
+      });
       if (enlargedMatchPhotoRequestRef.current === requestId) {
         setEnlargedMatchPhotoUri(destination);
         setEnlargedMatchPhotoError(null);
       }
     } catch (error) {
       console.warn("Could not open full-size Match Memory photo", error);
-      if (enlargedMatchPhotoRequestRef.current === requestId)
-        setEnlargedMatchPhotoError(
-          "Ticket Frame could not download this photo from Apple Photos. Check your connection and Photos access, then try again.",
-        );
+
+      if (hasImmediatePreview) {
+        updateGalleryItem({
+          uri: immediateUri,
+          loading: false,
+          error: null,
+        });
+
+        if (enlargedMatchPhotoRequestRef.current === requestId) {
+          setEnlargedMatchPhotoUri(immediateUri);
+          setEnlargedMatchPhotoError(null);
+        }
+      } else {
+        updateGalleryItem({
+          loading: false,
+          error:
+            "Ticket Frame could not download this photo from Apple Photos. Check your connection and Photos access, then try again.",
+        });
+
+        if (enlargedMatchPhotoRequestRef.current === requestId) {
+          setEnlargedMatchPhotoError(
+            "Ticket Frame could not download this photo from Apple Photos. Check your connection and Photos access, then try again.",
+          );
+        }
+      }
     } finally {
+      updateGalleryItem({ loading: false });
       if (enlargedMatchPhotoRequestRef.current === requestId)
         setEnlargedMatchPhotoLoading(false);
     }
@@ -3933,7 +4000,10 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
         (selectedHomeClub ? findGroundForClub(selectedHomeClub) : undefined)
       : undefined;
     const signature = references
-      .map((reference) => `${reference.assetId}:${reference.type}:${reference.localUri ?? ""}`)
+      .map(
+        (reference) =>
+          `${reference.assetId}:${reference.type}:${reference.localUri ?? ""}:${reference.previewUri ?? ""}`,
+      )
       .join("|");
 
     if (resolvedMatchMediaSignatureRef.current[recordId] === signature) {
@@ -3974,32 +4044,41 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
               reference.type === "photo" && !durableUri && !previewUri;
 
             let displayInfo: MediaLibrary.AssetInfo | null = null;
+            let thumbnailUri: string | undefined;
 
             if (needsResolvedPhoto) {
-              const thumbnailUri = await NativeModules.HistoryPhotoThumbnailModule
-                ?.thumbnail(reference.assetId, 900, 900)
-                .catch(() => null);
+              const generatedThumbnailUri =
+                await NativeModules.HistoryPhotoThumbnailModule
+                  ?.thumbnail(reference.assetId, 900, 900)
+                  .catch(() => null);
+
+              thumbnailUri = generatedThumbnailUri ?? undefined;
 
               if (thumbnailUri && !cancelled) {
                 setResolvedMatchMedia((current) => {
                   const existing = current[recordId] ?? [];
-                  if (
-                    existing.some(
-                      (item) => item.assetId === reference.assetId,
-                    )
-                  ) {
-                    return current;
-                  }
+                  const thumbnailReference = {
+                    ...reference,
+                    uri: thumbnailUri!,
+                  };
+
+                  const next = existing.some(
+                    (item) => item.assetId === reference.assetId,
+                  )
+                    ? existing.map((item) =>
+                        item.assetId === reference.assetId
+                          ? {
+                              ...item,
+                              ...thumbnailReference,
+                              localUri: item.localUri ?? reference.localUri,
+                            }
+                          : item,
+                      )
+                    : [...existing, thumbnailReference];
 
                   return {
                     ...current,
-                    [recordId]: [
-                      ...existing,
-                      {
-                        ...reference,
-                        uri: thumbnailUri,
-                      },
-                    ],
+                    [recordId]: next,
                   };
                 });
               }
@@ -4052,6 +4131,7 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
             photosUri =
               durableUri ??
               previewUri ??
+              thumbnailUri ??
               resolvedPhotosUri;
             // V4.0.89 — once History has successfully resolved a photo,
             // keep an app-owned copy so a cold restart can display it without
@@ -6860,6 +6940,43 @@ const handleTileDrop = (id: string, tx: number, ty: number) => {
   }, [deletedHistoryMatchKeys, matchMediaReferencesReady, mediaIndexCandidates]);
 
   useEffect(() => {
+    void (async () => {
+      try {
+        await setBackgroundMediaIndexEnabled(photoMemoriesEnabled);
+
+        if (__DEV__ && photoMemoriesEnabled) {
+          const BackgroundTask = await import("expo-background-task");
+          const TaskManager = await import("expo-task-manager");
+          const {
+            BACKGROUND_MEDIA_INDEX_TASK,
+          } = await import("@/lib/backgroundMediaIndex");
+
+          const registered = await TaskManager.isTaskRegisteredAsync(
+            BACKGROUND_MEDIA_INDEX_TASK,
+          );
+          const status = await BackgroundTask.getStatusAsync();
+
+          console.log("[media-index] background debug", {
+            registered,
+            status,
+          });
+
+          if (registered) {
+            const triggered =
+              await BackgroundTask.triggerTaskWorkerForTestingAsync();
+
+            console.log("[media-index] background test trigger", {
+              triggered,
+            });
+          }
+        }
+      } catch (error) {
+        console.warn("[media-index] background registration failed", error);
+      }
+    })();
+  }, [photoMemoriesEnabled]);
+
+  useEffect(() => {
     if (
       !storageReady ||
       !attendanceHistoryReady ||
@@ -8072,7 +8189,13 @@ useEffect(() => {
     };
     void handleSiriAction();
     const subscription = AppState.addEventListener("change", (state) => {
-      if (state === "active") void handleSiriAction();
+      if (state === "active") {
+        // Foreground user activity always wins over invisible Photos indexing.
+        // Any checkpointed background pass can resume on a later idle/background
+        // opportunity rather than competing with what the user is doing now.
+        void stopMediaIndex();
+        void handleSiriAction();
+      }
     });
     return () => subscription.remove();
   }, [attendanceHistoryReady, siriEnabled, storageReady, tickets]);
@@ -9615,19 +9738,24 @@ Choose one team. Its colours automatically control the Club Colours frame style.
             />
           ) : null;
         })()}
-        {enlargedMatchPhotoUri ? (
+        {enlargedMatchPhotoItems.length ? (
           <MatchPhotoViewer
-            uri={enlargedMatchPhotoUri}
-            loading={enlargedMatchPhotoLoading}
-            error={enlargedMatchPhotoError}
+            items={enlargedMatchPhotoItems}
+            initialIndex={enlargedMatchPhotoIndex}
+            onIndexChange={setEnlargedMatchPhotoIndex}
             onClose={closeEnlargedMatchPhoto}
             onRetry={() => enlargedMatchPhotoRetryRef.current?.()}
-            onLoadStart={() => setEnlargedMatchPhotoLoading(true)}
-            onLoadEnd={() => setEnlargedMatchPhotoLoading(false)}
-            onImageError={() => {
-              if (enlargedMatchPhotoLoading) return;
-              setEnlargedMatchPhotoError(
-                "Ticket Frame could not display this photo. Tap try again to request it from Apple Photos.",
+            onImageError={(index) => {
+              setEnlargedMatchPhotoItems((current) =>
+                current.map((item, itemIndex) =>
+                  itemIndex === index && !item.loading
+                    ? {
+                        ...item,
+                        error:
+                          "Ticket Frame could not display this photo.",
+                      }
+                    : item,
+                ),
               );
             }}
           />
@@ -11270,10 +11398,37 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                           onPress={() =>
                             mediaEditMode
                               ? toggleMediaSelection(mediaKey)
-                              : void openReferencedMatchPhoto(
-                                  selectedHistoryRecord.id,
-                                  media,
-                                )
+                              : (() => {
+                                  const galleryItems: MatchPhotoViewerItem[] = [
+                                    ...groupSavedPhotos.map((uri) => ({
+                                      key: `saved:${uri}`,
+                                      uri,
+                                    })),
+                                    ...groupReferencedPhotos.map((item) => ({
+                                      key: `asset:${item.assetId}`,
+                                      uri: item.uri,
+                                    })),
+                                  ];
+                                  const targetIndex = galleryItems.findIndex(
+                                    (item) =>
+                                      item.key === `asset:${media.assetId}`,
+                                  );
+                                  const safeIndex = Math.max(0, targetIndex);
+
+                                  setEnlargedMatchPhotoItems(
+                                    galleryItems.map((item, index) =>
+                                      index === safeIndex
+                                        ? { ...item, loading: true, error: null }
+                                        : item,
+                                    ),
+                                  );
+                                  setEnlargedMatchPhotoIndex(safeIndex);
+                                  setEnlargedMatchPhotoUri(media.uri);
+                                  void openReferencedMatchPhoto(
+                                    selectedHistoryRecord.id,
+                                    media,
+                                  );
+                                })()
                           }
                           onLongPress={() =>
                             Alert.alert(

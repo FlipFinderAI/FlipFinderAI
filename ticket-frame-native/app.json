@@ -21,7 +21,11 @@
         ],
         "UIFileSharingEnabled": true,
         "UIBackgroundModes": [
-          "location"
+          "location",
+          "processing"
+        ],
+        "BGTaskSchedulerPermittedIdentifiers": [
+          "com.expo.modules.backgroundtask.processing"
         ]
       }
     },
@@ -62,7 +66,8 @@
       "expo-notifications",
       "expo-video",
       "expo-sqlite",
-      "expo-asset"
+      "expo-asset",
+      "expo-background-task"
     ],
     "experiments": {
       "typedRoutes": true

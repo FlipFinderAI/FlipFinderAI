@@ -62,10 +62,15 @@
     <string>Ticket Frame reads the date and location of authorised match-day photos to group them privately and suggest nearby places with Apple Maps.</string>
     <key>NSPhotoLibraryAddUsageDescription</key>
     <string>Ticket Frame saves only the ticket frames and match-memory photos you explicitly choose to export.</string>
-    <key>UIBackgroundModes</key>
-    <array>
-      <string>location</string>
-    </array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.expo.modules.backgroundtask.processing</string>
+	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+		<string>processing</string>
+	</array>
     <key>NSUserActivityTypes</key>
     <array>
       <string>$(PRODUCT_BUNDLE_IDENTIFIER).expo.index_route</string>
