@@ -7,6 +7,7 @@ import {
   Image,
     Keyboard,
   Linking,
+  NativeModules,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -513,6 +514,9 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
   const [selectedMediaKeys, setSelectedMediaKeys] = useState<Set<string>>(new Set());
   const promptedMediaLocationGroupsRef = useRef<Set<string>>(new Set());
   const resolvedMatchMediaSignatureRef = useRef<Record<string, string>>({});
+  const historyPhotoResolutionPromisesRef = useRef<
+    Map<string, Promise<MediaLibrary.AssetInfo | null>>
+  >(new Map());
   const [selectedMatchVideoUri, setSelectedMatchVideoUri] =
     useState<string | null>(null);
   const resolvingMatchVideoAssetIdsRef = useRef<Set<string>>(new Set());
@@ -755,10 +759,39 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
         if (localInfo.exists && (localInfo.size ?? 0) > 0) return;
       }
 
-      // Fetch only the tapped original. History thumbnails remain lightweight.
-      const assetInfo = await MediaLibrary.getAssetInfoAsync(media.assetId, {
-        shouldDownloadFromNetwork: true,
-      });
+      // Join any original-photo request already running for this asset.
+      // Tapping an instant thumbnail must not start a second iCloud download.
+      let assetInfo: MediaLibrary.AssetInfo | null = null;
+      const inFlight =
+        historyPhotoResolutionPromisesRef.current.get(media.assetId);
+
+      if (inFlight) {
+        assetInfo = await inFlight;
+      } else {
+        const request = MediaLibrary.getAssetInfoAsync(media.assetId, {
+          shouldDownloadFromNetwork: true,
+        }).catch(() => null);
+
+        historyPhotoResolutionPromisesRef.current.set(
+          media.assetId,
+          request,
+        );
+
+        try {
+          assetInfo = await request;
+        } finally {
+          if (
+            historyPhotoResolutionPromisesRef.current.get(media.assetId) ===
+            request
+          ) {
+            historyPhotoResolutionPromisesRef.current.delete(media.assetId);
+          }
+        }
+      }
+
+      if (!assetInfo)
+        throw new Error("Apple Photos returned no usable file");
+
       const sourceUri = assetInfo.localUri ?? assetInfo.uri;
       if (!sourceUri) throw new Error("Apple Photos returned no usable file");
 
@@ -3940,22 +3973,75 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
             const needsResolvedPhoto =
               reference.type === "photo" && !durableUri && !previewUri;
 
-            const displayInfo =
-              needsResolvedPhoto
-                ? await MediaLibrary.getAssetInfoAsync(
-                    reference.assetId,
-                    {
-                      // This effect runs for the match the user explicitly
-                  // opened. Allow Photos to make the selected photo OR video
-                  // locally available so Ticket Frame can create/reuse its
-                  // durable Match Memory copy.
-                  //
-                  // Background classification remains metadata-only and does
-                  // not download full iCloud originals.
-                  shouldDownloadFromNetwork: true,
-                    },
-                  ).catch(() => null)
-                : null;
+            let displayInfo: MediaLibrary.AssetInfo | null = null;
+
+            if (needsResolvedPhoto) {
+              const thumbnailUri = await NativeModules.HistoryPhotoThumbnailModule
+                ?.thumbnail(reference.assetId, 900, 900)
+                .catch(() => null);
+
+              if (thumbnailUri && !cancelled) {
+                setResolvedMatchMedia((current) => {
+                  const existing = current[recordId] ?? [];
+                  if (
+                    existing.some(
+                      (item) => item.assetId === reference.assetId,
+                    )
+                  ) {
+                    return current;
+                  }
+
+                  return {
+                    ...current,
+                    [recordId]: [
+                      ...existing,
+                      {
+                        ...reference,
+                        uri: thumbnailUri,
+                      },
+                    ],
+                  };
+                });
+              }
+
+              const inFlight =
+                historyPhotoResolutionPromisesRef.current.get(
+                  reference.assetId,
+                );
+
+              if (inFlight) {
+                displayInfo = await inFlight;
+              } else {
+                const request = MediaLibrary.getAssetInfoAsync(
+                  reference.assetId,
+                  {
+                    // The selected History photo may need its iCloud original,
+                    // but concurrent renders must share the same expensive
+                    // Photos request instead of downloading it repeatedly.
+                    shouldDownloadFromNetwork: true,
+                  },
+                ).catch(() => null);
+
+                historyPhotoResolutionPromisesRef.current.set(
+                  reference.assetId,
+                  request,
+                );
+
+                try {
+                  displayInfo = await request;
+                } finally {
+                  if (
+                    historyPhotoResolutionPromisesRef.current.get(
+                      reference.assetId,
+                    ) === request
+                  ) {
+                    historyPhotoResolutionPromisesRef.current.delete(
+                      reference.assetId,
+                    );
+                  }
+                }
+              }
+            }
 
             const resolvedPhotosUri =
               displayInfo?.localUri ??
@@ -9539,7 +9625,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
             onLoadStart={() => setEnlargedMatchPhotoLoading(true)}
             onLoadEnd={() => setEnlargedMatchPhotoLoading(false)}
             onImageError={() => {
-              setEnlargedMatchPhotoLoading(false);
+              if (enlargedMatchPhotoLoading) return;
               setEnlargedMatchPhotoError(
                 "Ticket Frame could not display this photo. Tap try again to request it from Apple Photos.",
               );

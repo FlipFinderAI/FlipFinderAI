@@ -12,6 +12,7 @@
 		77DD86796EDF22663D2935A0 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 749F3D7A9B173ED187005E8E /* PrivacyInfo.xcprivacy */; };
 		A17C4A012F00100100AA0001 /* ParkingSearchModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = A17C4A002F00100100AA0001 /* ParkingSearchModule.swift */; };
 		A17C4A032F00100100AA0001 /* ParkingSearchModuleBridge.m in Sources */ = {isa = PBXBuildFile; fileRef = A17C4A022F00100100AA0001 /* ParkingSearchModuleBridge.m */; };
+		A17C4A052F00100100AA0001 /* HistoryPhotoThumbnailModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = A17C4A042F00100100AA0001 /* HistoryPhotoThumbnailModule.swift */; };
 		BB2F792D24A3F905000567C9 /* Expo.plist in Resources */ = {isa = PBXBuildFile; fileRef = BB2F792C24A3F905000567C9 /* Expo.plist */; };
 		C39BF8D2DDF4FE1D6F89EA87 /* libPods-TicketFrame.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 47975AC013B089FB4B907902 /* libPods-TicketFrame.a */; };
 		CA57F9DA3037A311004B591A /* TicketFrameShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = CA57F9D03037A310004B591A /* TicketFrameShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -53,6 +54,7 @@
 		749F3D7A9B173ED187005E8E /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xml; name = PrivacyInfo.xcprivacy; path = TicketFrame/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		A17C4A002F00100100AA0001 /* ParkingSearchModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ParkingSearchModule.swift; path = TicketFrame/ParkingSearchModule.swift; sourceTree = "<group>"; };
 		A17C4A022F00100100AA0001 /* ParkingSearchModuleBridge.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = ParkingSearchModuleBridge.m; path = TicketFrame/ParkingSearchModuleBridge.m; sourceTree = "<group>"; };
+		A17C4A042F00100100AA0001 /* HistoryPhotoThumbnailModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = HistoryPhotoThumbnailModule.swift; path = TicketFrame/HistoryPhotoThumbnailModule.swift; sourceTree = "<group>"; };
 		AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = SplashScreen.storyboard; path = TicketFrame/SplashScreen.storyboard; sourceTree = "<group>"; };
 		BB2F792C24A3F905000567C9 /* Expo.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = Expo.plist; sourceTree = "<group>"; };
 		CA57F9D03037A310004B591A /* TicketFrameShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TicketFrameShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -112,6 +114,7 @@
 				F11748412D0307B40044C1D9 /* AppDelegate.swift */,
 				A17C4A002F00100100AA0001 /* ParkingSearchModule.swift */,
 				A17C4A022F00100100AA0001 /* ParkingSearchModuleBridge.m */,
+				A17C4A042F00100100AA0001 /* HistoryPhotoThumbnailModule.swift */,
 				F11748442D0722820044C1D9 /* TicketFrame-Bridging-Header.h */,
 				BB2F792B24A3F905000567C9 /* Supporting */,
 				13B07FB51A68108700A75B9A /* Images.xcassets */,
@@ -471,6 +474,7 @@
 				F11748422D0307B40044C1D9 /* AppDelegate.swift in Sources */,
 				A17C4A012F00100100AA0001 /* ParkingSearchModule.swift in Sources */,
 				A17C4A032F00100100AA0001 /* ParkingSearchModuleBridge.m in Sources */,
+				A17C4A052F00100100AA0001 /* HistoryPhotoThumbnailModule.swift in Sources */,
 				F35AEDA7F289FB7B8F91AD2E /* ExpoModulesProvider.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

@@ -40,3 +40,18 @@ RCT_EXTERN_METHOD(consumePendingAction:(RCTPromiseResolveBlock)resolve
 }
 
 @end
+
+@interface RCT_EXTERN_MODULE(HistoryPhotoThumbnailModule, NSObject)
+
+RCT_EXTERN_METHOD(thumbnail:(NSString *)assetId
+                  width:(nonnull NSNumber *)width
+                  height:(nonnull NSNumber *)height
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
++ (BOOL)requiresMainQueueSetup
+{
+  return NO;
+}
+
+@end
