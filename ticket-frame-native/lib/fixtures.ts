@@ -309,11 +309,137 @@ export async function getClubFixtureSummaries(
 
 export type TableResult = { rows: TableRow[]; season: string };
 
+function calculatedTeamRow(
+  fixtures: FixtureRow[],
+  target: TableRow,
+): TableRow | null {
+  const row: TableRow = {
+    teamId: target.teamId,
+    name: target.name,
+    played: 0,
+    win: 0,
+    draw: 0,
+    loss: 0,
+    goalsFor: 0,
+    goalsAgainst: 0,
+    goalDifference: 0,
+    points: 0,
+  };
+
+  for (const fixture of fixtures) {
+    const isHome =
+      (target.teamId && fixture.homeId === target.teamId) ||
+      namesMatch(fixture.homeName, target.name);
+    const isAway =
+      (target.teamId && fixture.awayId === target.teamId) ||
+      namesMatch(fixture.awayName, target.name);
+
+    if (!isHome && !isAway) continue;
+    if (fixture.homeScore == null || fixture.awayScore == null) continue;
+
+    const homeScore = Number(fixture.homeScore);
+    const awayScore = Number(fixture.awayScore);
+
+    if (!Number.isFinite(homeScore) || !Number.isFinite(awayScore)) continue;
+
+    const goalsFor = isHome ? homeScore : awayScore;
+    const goalsAgainst = isHome ? awayScore : homeScore;
+
+    row.played += 1;
+    row.goalsFor += goalsFor;
+    row.goalsAgainst += goalsAgainst;
+
+    if (goalsFor > goalsAgainst) {
+      row.win += 1;
+      row.points += 3;
+    } else if (goalsFor < goalsAgainst) {
+      row.loss += 1;
+    } else {
+      row.draw += 1;
+      row.points += 1;
+    }
+  }
+
+  if (!row.played) return null;
+
+  row.goalDifference = row.goalsFor - row.goalsAgainst;
+  return row;
+}
+
+function sameTableStats(a: TableRow, b: TableRow): boolean {
+  return (
+    a.played === b.played &&
+    a.win === b.win &&
+    a.draw === b.draw &&
+    a.loss === b.loss &&
+    a.goalsFor === b.goalsFor &&
+    a.goalsAgainst === b.goalsAgainst &&
+    a.goalDifference === b.goalDifference &&
+    a.points === b.points
+  );
+}
+
+function reconcileDuplicateTableRows(
+  rows: TableRow[],
+  fixtures: FixtureRow[],
+): TableRow[] {
+  const result: TableRow[] = [];
+  const handled = new Set<number>();
+
+  for (let index = 0; index < rows.length; index += 1) {
+    if (handled.has(index)) continue;
+
+    const groupIndexes = rows
+      .map((candidate, candidateIndex) => ({ candidate, candidateIndex }))
+      .filter(
+        ({ candidate }) =>
+          (rows[index].teamId &&
+            candidate.teamId &&
+            rows[index].teamId === candidate.teamId) ||
+          namesMatch(rows[index].name, candidate.name),
+      )
+      .map(({ candidateIndex }) => candidateIndex);
+
+    groupIndexes.forEach((candidateIndex) => handled.add(candidateIndex));
+
+    if (groupIndexes.length === 1) {
+      result.push(rows[index]);
+      continue;
+    }
+
+    const calculated = calculatedTeamRow(fixtures, rows[index]);
+    const matchingStoredRow = calculated
+      ? groupIndexes
+          .map((candidateIndex) => rows[candidateIndex])
+          .find((candidate) => sameTableStats(candidate, calculated))
+      : null;
+
+    result.push(matchingStoredRow ?? calculated ?? rows[index]);
+  }
+
+  return result.sort(
+    (a, b) =>
+      b.points - a.points ||
+      b.goalDifference - a.goalDifference ||
+      b.goalsFor - a.goalsFor ||
+      a.name.localeCompare(b.name),
+  );
+}
+
 export async function fetchLeagueTable(
   leagueLabel: string,
   season: string = CURRENT_SEASON,
 ): Promise<TableResult> {
-  return { rows: footballSeason(leagueLabel, season)?.table ?? [], season };
+  const bundle = footballSeason(leagueLabel, season);
+  if (!bundle) return { rows: [], season };
+
+  return {
+    rows: reconcileDuplicateTableRows(
+      bundle.table ?? [],
+      bundle.fixtures ?? [],
+    ),
+    season,
+  };
 }
 
 export async function fetchLeagueTableWithFallback(

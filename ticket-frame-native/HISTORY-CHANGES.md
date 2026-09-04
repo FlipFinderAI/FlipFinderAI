@@ -1115,3 +1115,10 @@ Phone verification: PASS.
 - Added History Match Memory swipe gallery and pinch-to-zoom.
 - History photo expansion now starts from the displayed thumbnail and silently upgrades to the durable/full-resolution copy when available.
 - Suppressed false full-resolution/iCloud error state when a usable thumbnail remains available.
+
+## V4.0.92
+- Improved Favourite Club foreground responsiveness and deferred invisible background work.
+- Prevented Favourite Club changes from synchronously rebuilding History media candidates.
+- Added safe duplicate league-table reconciliation using scored fixture evidence while preserving the existing complete stored table.
+- Moved Fixtures/League Table bottom navigation into the FlatList footer so it scrolls with page content.
+- Verified on phone before checkpoint.

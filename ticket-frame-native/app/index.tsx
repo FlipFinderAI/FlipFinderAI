@@ -4704,17 +4704,22 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
       const year = start - index;
       return `${year}/${String(year + 1).slice(-2)}`;
     });
-    void (async () => {
-      // Highest priority: the favourite club's five-season fixture/result
-      // library. Every recognition and picker reads these snapshots first.
-      for (const season of fiveSeasons) {
-        if (cancelled) return;
-        const cached = await loadCachedFixtures(favouriteClub.name, season);
-        if (!cached.length)
-          await fetchAndCacheFixtures(favouriteClub.name, season, {
-            league: favouriteClub.league,
-          });
-      }
+    const preloadTimer = setTimeout(() => {
+      if (cancelled) return;
+      void (async () => {
+        // Foreground club selection always wins. Give React time to paint the
+        // newly selected club before any invisible multi-season cache work.
+        for (const season of fiveSeasons) {
+          if (cancelled) return;
+          const cached = await loadCachedFixtures(favouriteClub.name, season);
+          if (cancelled) return;
+          if (!cached.length)
+            await fetchAndCacheFixtures(favouriteClub.name, season, {
+              league: favouriteClub.league,
+            });
+          if (cancelled) return;
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
       if (cancelled) return;
       // Lower priority: make a future club change fast. Current-season rows
       // are warmed first, then older seasons, one small request at a time so
@@ -4740,9 +4745,12 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
           }).catch(() => []);
         await new Promise((resolve) => setTimeout(resolve, 250));
       }
-    })();
+      })();
+    }, 1500);
+
     return () => {
       cancelled = true;
+      clearTimeout(preloadTimer);
     };
   }, [
     activeSeason,
@@ -6791,7 +6799,16 @@ const handleTileDrop = (id: string, tx: number, ty: number) => {
   // a deliberate full discovery.
 
   const mediaIndexCandidates = useMemo(() => {
-    const clubName = ticketCollectionClubName ?? favouriteClub.name;
+    // Favourite Club is presentation/preference state. Changing it must not
+    // synchronously rebuild the History photo-discovery universe.
+    //
+    // Prefer the actual ticket collection owner. If there is no collection
+    // owner yet, use an established attendance/history club. With neither,
+    // there is no fixture-derived History media work to perform.
+    const historyClubName =
+      attendanceHistory.find((record) => record.club?.trim())?.club?.trim() ??
+      null;
+    const clubName = ticketCollectionClubName ?? historyClubName;
     const candidates = new Map<string, {
       descriptor: Parameters<typeof prioritizeMediaIndexFixture>[0];
       record?: AttendanceRecord;
@@ -6808,6 +6825,8 @@ const handleTileDrop = (id: string, tx: number, ty: number) => {
         stadiumName: ground.stadium,
       });
     }
+    if (!clubName) return candidates;
+
     for (const fixture of getAllBundledClubFixtures(clubName)) {
       if (!fixture.date) continue;
       const isHome = clubNamesMatch(fixture.homeName, clubName);
@@ -6850,7 +6869,7 @@ const handleTileDrop = (id: string, tx: number, ty: number) => {
       });
     }
     return candidates;
-  }, [attendanceHistory, favouriteClub.name, ticketCollectionClubName]);
+  }, [attendanceHistory, ticketCollectionClubName]);
 
   const mediaIndexFixtures = useMemo(
     () => [...mediaIndexCandidates.values()].map((item) => item.descriptor),
@@ -7108,12 +7127,16 @@ const handleTileDrop = (id: string, tx: number, ty: number) => {
   }, []);
 
   useEffect(() => {
-    // V3.9.2 — Home shares the Fixtures pipeline, so load on both tabs.
+    // Home shares the Fixtures pipeline, but a Favourite Club tap must paint
+    // before cache/table work begins. A second club selection cancels this
+    // pending load before it starts.
     if (activeTab !== "fixtures" && activeTab !== "frames") return;
-    const run = async () => {
-      await loadFixtures();
-    };
-    void run();
+
+    const fixtureTimer = setTimeout(() => {
+      void loadFixtures();
+    }, 250);
+
+    return () => clearTimeout(fixtureTimer);
   }, [activeTab, loadFixtures]);
 
 useEffect(() => {
@@ -7606,6 +7629,7 @@ useEffect(() => {
       ]);
     };
     return (
+      <>
       <View
         style={[
           s.nextMatchCard,
@@ -7842,6 +7866,8 @@ useEffect(() => {
           </View>
         ) : null}
 
+      </View>
+      <View>
         <Text style={[s.helpText, { marginTop: 12, marginBottom: 0, fontWeight: "800" }]}>STADIUM INFORMATION</Text>
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
           <Pressable
@@ -8009,6 +8035,7 @@ useEffect(() => {
           </View>
         ) : null}
       </View>
+      </>
     );
   };
   const isFavouriteClubFixture = (fixture: FixtureRow) => {
@@ -13712,9 +13739,8 @@ const manualCompetitionFixtures = draftMatch.competition
           nextMatchCard={renderNextMatchCard(nextMatch)}
           renderFixtureRow={renderFixtureRow}
           renderTableRow={renderTableRow}
+          footer={bottomNav()}
         />
-
-        {bottomNav()}
       </SafeAreaView>
     );
   }

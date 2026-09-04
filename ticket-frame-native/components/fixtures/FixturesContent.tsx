@@ -21,6 +21,7 @@ export default function FixturesContent({
   nextMatchCard,
   renderFixtureRow,
   renderTableRow,
+  footer,
 }: {
   mode: FixtureMode;
   loading: boolean;
@@ -31,6 +32,7 @@ export default function FixturesContent({
   nextMatchCard: ReactElement | null;
   renderFixtureRow: ListRenderItem<FixtureRow>;
   renderTableRow: ListRenderItem<TableRow>;
+  footer: ReactElement | null;
 }) {
   const hasFixtures = fixtures.length > 0;
   const hasTable = tableRows.length > 0;
@@ -57,6 +59,7 @@ export default function FixturesContent({
           <FixturesEmpty>No fixtures found for this season yet.</FixturesEmpty>
         }
         renderItem={renderFixtureRow}
+        ListFooterComponent={footer}
       />
     );
   }
@@ -78,6 +81,7 @@ export default function FixturesContent({
           <FixturesEmpty>No league table published yet.</FixturesEmpty>
         }
         renderItem={renderTableRow}
+        ListFooterComponent={footer}
       />
     );
   }

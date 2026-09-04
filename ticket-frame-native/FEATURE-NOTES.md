@@ -1003,3 +1003,10 @@ Verification:
 - History Match Memory photos now open from the already-visible thumbnail immediately while full-resolution Apple Photos/iCloud resolution continues separately.
 - Added swipe navigation and pinch-to-zoom for History photos with an always-available close control.
 - A failed full-resolution upgrade no longer replaces a usable thumbnail with a false error.
+
+## V4.0.92 — Foreground responsiveness and live-data integrity
+- Favourite Club selection now paints immediately before lower-priority fixture/cache work begins.
+- History media indexing no longer synchronously rebuilds from Favourite Club changes.
+- Duplicate/conflicting stored league-table rows are reconciled against scored fixtures without rebuilding an incomplete whole table.
+- Fixtures and League Table bottom navigation now belongs to the scrolling page content instead of appearing fixed to the screen bottom.
+- Phone verified: My Club selection responsive, League Table correct, Fixtures/Table navigation attached to page content.
