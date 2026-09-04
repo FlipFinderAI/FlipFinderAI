@@ -3967,6 +3967,51 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
               durableUri ??
               previewUri ??
               resolvedPhotosUri;
+            // V4.0.89 — once History has successfully resolved a photo,
+            // keep an app-owned copy so a cold restart can display it without
+            // asking Photos/iCloud for the same image again.
+            if (
+              reference.type === "photo" &&
+              !durableUri &&
+              resolvedPhotosUri
+            ) {
+              try {
+                const memoryDirectory =
+                  `${FileSystem.documentDirectory}match-memories/`;
+                await FileSystem.makeDirectoryAsync(memoryDirectory, {
+                  intermediates: true,
+                });
+
+                const safeAssetId = reference.assetId.replace(
+                  /[^a-zA-Z0-9._-]/g,
+                  "_",
+                );
+                const extension =
+                  reference.fileName?.match(/\.[a-zA-Z0-9]+$/)?.[0] ?? ".jpg";
+                const destination =
+                  `${memoryDirectory}history-${safeAssetId}${extension}`;
+
+                const existingCopy =
+                  await FileSystem.getInfoAsync(destination).catch(() => null);
+
+                if (!existingCopy?.exists || !existingCopy.size) {
+                  await FileSystem.copyAsync({
+                    from: resolvedPhotosUri,
+                    to: destination,
+                  });
+                }
+
+                durableUri = destination;
+
+                addMatchMediaReferences(recordId, [
+                  { ...reference, localUri: destination },
+                ]);
+              } catch {
+                // Keep using the Photos result for this session if creation
+                // of the durable app-owned copy fails.
+              }
+            }
+
             const location = metadataInfo?.location ?? displayInfo?.location;
             if (location && selectedGround) {
               const milesFromGround = distanceMiles(
