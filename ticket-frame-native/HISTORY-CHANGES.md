@@ -1122,3 +1122,5 @@ Phone verification: PASS.
 - Added safe duplicate league-table reconciliation using scored fixture evidence while preserving the existing complete stored table.
 - Moved Fixtures/League Table bottom navigation into the FlatList footer so it scrolls with page content.
 - Verified on phone before checkpoint.
+
+- 2026-09-06: Verified Auto Add ground/date matching fixes on device. Corrected current/historical stadium coordinates, added historical tenancy periods, and confirmed date-aware resolver across Arsenal, Brighton, Coventry, Rotherham, Wimbledon and AFC Wimbledon.

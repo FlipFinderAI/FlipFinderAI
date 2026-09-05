@@ -36,25 +36,63 @@ function normaliseClubName(name: string) {
     .replace(/[^a-z0-9]/g, "");
 }
 
-export function findGroundForClub(clubName: string) {
-  const active = FOOTBALL_GROUNDS.filter((g) => g.league !== "Historical");
+export function findGroundForClub(
+  clubName: string,
+  matchDate?: string | null,
+) {
   const target = normaliseClubName(clubName);
   if (!target) return null;
-  const direct = active.find(
-    (g) =>
-      normaliseClubName(g.club) === target ||
-      normaliseClubName(g.stadium) === target,
-  );
-  if (direct) return direct;
+
   const alias = CLUB_GROUND_ALIASES[target];
-  if (alias)
-    return active.find((g) => normaliseClubName(g.club) === normaliseClubName(alias)) ?? null;
+  const resolvedTarget = normaliseClubName(alias ?? clubName);
+  const date = matchDate?.slice(0, 10) || null;
+
+  const available = FOOTBALL_GROUNDS.filter((ground) => {
+    // Calls without a fixture date retain the existing behaviour: use the
+    // present-day ground only.
+    if (!date) return ground.league !== "Historical";
+
+    // Date-aware matching includes historical grounds, but only while that
+    // stadium was in use.
+    if (ground.fromDate && date < ground.fromDate) return false;
+    if (ground.toDate && date > ground.toDate) return false;
+
+    return true;
+  });
+
+  const directMatches = available.filter((ground) => {
+    const groundClub = normaliseClubName(ground.club);
+    const groundStadium = normaliseClubName(ground.stadium);
+
+    return (
+      groundClub === target ||
+      groundClub === resolvedTarget ||
+      groundStadium === target
+    );
+  });
+
+  // When a fixture date is known, an explicitly dated historical/temporary
+  // tenancy wins over the generic present-day ground. This handles clubs
+  // such as Coventry that temporarily played home matches elsewhere.
+  const direct =
+    date
+      ? directMatches.find((ground) => ground.league === "Historical") ??
+        directMatches[0]
+      : directMatches[0];
+
+  if (direct) return direct;
+
   return (
-    active.find(
-      (g) =>
-        target.includes(normaliseClubName(g.club)) ||
-        normaliseClubName(g.club).includes(target),
-    ) ?? null
+    available.find((ground) => {
+      const groundClub = normaliseClubName(ground.club);
+
+      return (
+        target.includes(groundClub) ||
+        groundClub.includes(target) ||
+        resolvedTarget.includes(groundClub) ||
+        groundClub.includes(resolvedTarget)
+      );
+    }) ?? null
   );
 }
 

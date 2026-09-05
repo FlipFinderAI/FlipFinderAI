@@ -1010,3 +1010,5 @@ Verification:
 - Duplicate/conflicting stored league-table rows are reconciled against scored fixtures without rebuilding an incomplete whole table.
 - Fixtures and League Table bottom navigation now belongs to the scrolling page content instead of appearing fixed to the screen bottom.
 - Phone verified: My Club selection responsive, League Table correct, Fixtures/Table navigation attached to page content.
+
+- Verified date-aware historical/current ground matching and corrected UK ground coordinates used by Auto Add. Added temporary/historical tenancies for Wimbledon/AFC Wimbledon, Brighton and Coventry. Reviewed/manual Auto Add photos now persist correctly beyond the automatic 1-mile filter.

@@ -467,6 +467,18 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
 
   const [selectedHistoryRecordId, setSelectedHistoryRecordId] =
     useState<string | null>(null);
+
+  // Auto Add review for uncertain fixture-date media.
+  // Nothing is persisted until the user confirms the selected assets.
+  const [autoAddMediaReview, setAutoAddMediaReview] = useState<{
+    fixture: FixtureRow;
+    assets: MediaLibrary.Asset[];
+    selectedAssetIds: Set<string>;
+  } | null>(null);
+
+  const autoAddMediaReviewResolveRef = useRef<
+    ((assets: MediaLibrary.Asset[] | null) => void) | null
+  >(null);
   const [historySelectionMode, setHistorySelectionMode] = useState(false);
   const [selectedHistoryDeleteIds, setSelectedHistoryDeleteIds] =
     useState<Set<string>>(new Set());
@@ -3874,49 +3886,9 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
     ).catch(() => {});
   }, [deletedHistoryMatchKeys, deletedHistoryMatchesReady, storageReady]);
 
-  useEffect(() => {
-    if (!storageReady || tickets.length !== 0) return;
-
-    const clearDeletedTicketMatchMemory = async () => {
-      // Clear live Match Memory state first so stale state cannot write itself
-      // back into AsyncStorage after the persistent stores are removed.
-      setMatchPhotos({});
-      setMatchMediaReferences({});
-      setResolvedMatchMedia({});
-      setPhotoCandidates({});
-      setMatchdayMediaAssignments({});
-      setMatchdayCustomLocations({});
-      setAutoPhotoMatchedRecordIds(new Set());
-
-      setMediaEditMode(false);
-      setSelectedMediaKeys(new Set());
-      setSelectedMatchVideoUri(null);
-      setEnlargedMatchPhotoUri(null);
-      setSelectedHistoryRecordId(null);
-
-      matchMediaReferencesRef.current = {};
-      autoPhotoScannedRecordsRef.current = new Set();
-      resolvedMatchMediaSignatureRef.current = {};
-
-      await Promise.all([
-        AsyncStorage.removeItem("ticket-frame.attendance-history.v1"),
-        AsyncStorage.removeItem(GROUND_VISITS_KEY),
-        AsyncStorage.removeItem(MATCH_PHOTOS_KEY),
-        AsyncStorage.removeItem(MATCH_MEDIA_REFERENCES_KEY),
-        AsyncStorage.removeItem(MATCHDAY_EXPERIENCES_KEY),
-        AsyncStorage.removeItem(MATCHDAY_MEDIA_ASSIGNMENTS_KEY),
-        AsyncStorage.removeItem(MATCHDAY_CUSTOM_LOCATIONS_KEY),
-        AsyncStorage.removeItem(AUTO_PHOTO_MATCHED_KEY),
-        AsyncStorage.removeItem(AUTO_MEDIA_SCANNED_KEY),
-      ]);
-
-      console.log(
-        "[MATCH-MEMORY-RESET] live state and stored Match Memory cleared",
-      );
-    };
-
-    void clearDeletedTicketMatchMemory();
-  }, [storageReady, tickets]);
+  // Match Memory is not globally cleared when there are zero tickets.
+  // Football History and photo-discovery records can legitimately exist
+  // independently of saved tickets. Ticket deletion performs targeted cleanup.
 
   useEffect(() => {
     void AsyncStorage.getItem(MATCH_PHOTOS_KEY)
@@ -3933,9 +3905,43 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
     void AsyncStorage.getItem(MATCH_MEDIA_REFERENCES_KEY)
       .then((raw) => {
         if (!raw) return;
-        setMatchMediaReferences(
-          JSON.parse(raw) as Record<string, MatchMediaReference[]>,
-        );
+
+        const stored =
+          JSON.parse(raw) as Record<string, MatchMediaReference[]>;
+
+        setMatchMediaReferences((current) => {
+          const next = { ...stored };
+
+          // Never let a late startup read overwrite media that has already
+          // been added during the current app session.
+          for (const [recordId, currentReferences] of Object.entries(current)) {
+            const byAssetId = new Map(
+              (next[recordId] ?? []).map((reference) => [
+                reference.assetId,
+                reference,
+              ]),
+            );
+
+            for (const reference of currentReferences) {
+              const previous = byAssetId.get(reference.assetId);
+              byAssetId.set(
+                reference.assetId,
+                previous
+                  ? {
+                      ...previous,
+                      ...reference,
+                      localUri: reference.localUri ?? previous.localUri,
+                    }
+                  : reference,
+              );
+            }
+
+            next[recordId] = [...byAssetId.values()];
+          }
+
+          matchMediaReferencesRef.current = next;
+          return next;
+        });
       })
       .catch(() => {})
       .finally(() => setMatchMediaReferencesReady(true));
@@ -4200,7 +4206,14 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
                     assignment.placeKind === "station" ||
                     assignment.placeKind === "metro"),
               );
-              if (milesFromGround > 1 && !belongsToExperience) return null;
+              // The 1-mile rule protects automatic GPS matching only.
+              // Media the user explicitly selected/approved must remain
+              // visible even when its saved Photos GPS is inaccurate.
+              if (
+                milesFromGround > 1 &&
+                !belongsToExperience &&
+                reference.source !== "manual"
+              ) return null;
             }
           }
 
@@ -4860,7 +4873,16 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
   }
 
   function runHistoryAutoAdd() {
-    if (photoAction === "auto") return;
+    console.warn("[history-auto-add] BUTTON PRESSED", {
+      photoAction,
+      autoDiscoveryCompleted,
+    });
+    if (photoAction === "auto") {
+      console.warn("[history-auto-add] BLOCKED photoAction=auto");
+      return;
+    }
+
+    console.warn("[history-auto-add] SHOWING MODE ALERT");
 
     Alert.alert(
       "Auto Add",
@@ -4869,13 +4891,74 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
         { text: "Cancel", style: "cancel" },
         {
           text: "Add New",
-          onPress: () => void runHistoryAutoAddMode("new"),
+          onPress: () => {
+            console.warn("[history-auto-add] ADD NEW SELECTED");
+            void runHistoryAutoAddMode("new");
+          },
         },
         {
           text: "Add All",
-          onPress: () => void runHistoryAutoAddMode("all"),
+          onPress: () => {
+            console.warn("[history-auto-add] ADD ALL SELECTED");
+            void runHistoryAutoAddMode("all");
+          },
         },
       ],
+    );
+  }
+
+  function reviewAutoAddFixtureMedia(
+    fixture: FixtureRow,
+    assets: MediaLibrary.Asset[],
+  ): Promise<MediaLibrary.Asset[] | null> {
+    return new Promise((resolve) => {
+      autoAddMediaReviewResolveRef.current = resolve;
+
+      setAutoAddMediaReview({
+        fixture,
+        assets,
+        selectedAssetIds: new Set(assets.map((asset) => asset.id)),
+      });
+    });
+  }
+
+  function toggleAutoAddReviewAsset(assetId: string) {
+    setAutoAddMediaReview((current) => {
+      if (!current) return current;
+
+      const selectedAssetIds = new Set(current.selectedAssetIds);
+
+      if (selectedAssetIds.has(assetId)) {
+        selectedAssetIds.delete(assetId);
+      } else {
+        selectedAssetIds.add(assetId);
+      }
+
+      return {
+        ...current,
+        selectedAssetIds,
+      };
+    });
+  }
+
+  function finishAutoAddMediaReview(addSelected: boolean) {
+    const review = autoAddMediaReview;
+    const resolve = autoAddMediaReviewResolveRef.current;
+
+    autoAddMediaReviewResolveRef.current = null;
+    setAutoAddMediaReview(null);
+
+    if (!resolve) return;
+
+    if (!addSelected || !review) {
+      resolve(null);
+      return;
+    }
+
+    resolve(
+      review.assets.filter((asset) =>
+        review.selectedAssetIds.has(asset.id),
+      ),
     );
   }
 
@@ -4884,14 +4967,18 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
 
     // Foreground discovery owns the single Photos lane. Let the resumable
     // background page finish/pause before the legacy Auto Add workflow starts.
+    console.warn("[history-auto-add] BEFORE stopMediaIndex");
     await stopMediaIndex();
+    console.warn("[history-auto-add] AFTER stopMediaIndex");
 
     if (mode === "all") {
+      console.warn("[history-auto-add] BEFORE clear deleted keys");
       setDeletedHistoryMatchKeys(new Set());
       await AsyncStorage.setItem(
         DELETED_HISTORY_MATCHES_KEY,
         "[]",
       ).catch(() => {});
+      console.warn("[history-auto-add] AFTER clear deleted keys");
     }
 
     const suppressedKeys =
@@ -4899,9 +4986,13 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
         ? new Set<string>()
         : new Set(deletedHistoryMatchKeys);
 
+    console.warn("[history-auto-add] BEFORE setPhotoAction auto");
     setPhotoAction("auto");
+    console.warn("[history-auto-add] AFTER setPhotoAction auto");
     try {
+      console.warn("[history-auto-add] BEFORE photo permission");
       const permission = await MediaLibrary.requestPermissionsAsync();
+      console.warn("[history-auto-add] AFTER photo permission", permission);
       if (!permission.granted) {
         Alert.alert(
           "Photos permission needed",
@@ -4919,10 +5010,16 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
       //
       // Invisible indexing remains stopped while Auto Add is active so it
       // cannot compete with the user's foreground action.
-      const clubName = ticketCollectionClubName ?? favouriteClub.name;
+      // Auto Add follows the user's favourite club.
+      const clubName = favouriteClub.name;
+      console.warn("[history-auto-add] BEFORE bundled fixtures", { clubName });
       const fixtures = getAllBundledClubFixtures(clubName).filter(
         (fixture) => Boolean(fixture.date),
       );
+      console.warn("[history-auto-add] AFTER bundled fixtures", {
+        clubName,
+        fixtureCount: fixtures.length,
+      });
       const fixturesByDate = new Map<string, FixtureRow[]>();
       for (const fixture of fixtures) {
         const date = fixture.date!;
@@ -4963,13 +5060,32 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
         string,
         MediaLibrary.AssetInfo
       >();
-      const albums = await MediaLibrary.getAlbumsAsync({
-        includeSmartAlbums: true,
+      // Find the first photo/video once. Auto Add never needs to query dates
+      // before the user's own media library begins.
+      console.warn("[history-auto-add] BEFORE oldest media lookup");
+      const oldestMediaPage = await MediaLibrary.getAssetsAsync({
+        mediaType: [
+          MediaLibrary.MediaType.photo,
+          MediaLibrary.MediaType.video,
+        ],
+        first: 1,
+        sortBy: [[MediaLibrary.SortBy.creationTime, true]],
       });
-      const albumIds: Array<string | undefined> = [
-        undefined,
-        ...albums.map((album) => album.id),
-      ];
+      const oldestMedia = oldestMediaPage.assets[0];
+      const scanCreatedAfter = oldestMedia
+        ? Math.max(0, oldestMedia.creationTime - 1)
+        : 0;
+      const scanCreatedBefore = Date.now() + 1;
+
+      console.warn("[history-auto-add] AFTER oldest media lookup", {
+        oldestMediaDate: oldestMedia
+          ? new Date(oldestMedia.creationTime).toISOString()
+          : null,
+      });
+
+      // A whole-library query already includes media from albums. Keep one
+      // Photos lane and constrain it to the useful date range.
+      const albumIds: Array<string | undefined> = [undefined];
       const inspectedAssetIds = new Set<string>();
       const scanStatsBySeason = new Map<
         string,
@@ -4998,8 +5114,52 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
         }>
       >();
 
-      for (const albumId of albumIds) {
+      // Foreground Auto Add is fixture-date driven.
+      //
+      // Never walk continuously through the user's whole Photos library.
+      // Query only days on which the favourite club has a known fixture,
+      // beginning no earlier than the user's first photo/video.
+      const oldestMediaTime = oldestMedia?.creationTime ?? 0;
+      const nowTime = Date.now();
+
+      const fixtureDatesToScan = [...fixturesByDate.keys()]
+        .filter((date) => {
+          const startOfDay = new Date(`${date}T00:00:00`);
+          const endOfDay = new Date(`${date}T23:59:59.999`);
+
+          return (
+            !Number.isNaN(startOfDay.getTime()) &&
+            endOfDay.getTime() >= oldestMediaTime &&
+            startOfDay.getTime() <= nowTime
+          );
+        })
+        .sort();
+
+      console.warn("[history-auto-add] BEFORE fixture-date scan", {
+        fixtureDateCount: fixtureDatesToScan.length,
+        oldestMediaDate: oldestMedia
+          ? new Date(oldestMedia.creationTime).toISOString()
+          : null,
+      });
+
+      // Exact fixture date + plausible match-time media can still be useful
+      // when old Photos GPS is inaccurate. Never auto-accept these: collect
+      // them for one explicit confirmation per fixture after the fast scan.
+      const fallbackMediaByFixture = new Map<
+        string,
+        {
+          fixture: FixtureRow;
+          ground: NonNullable<ReturnType<typeof findGroundForClub>>;
+          assets: MediaLibrary.Asset[];
+        }
+      >();
+
+      for (const fixtureDate of fixtureDatesToScan) {
+        const dayStart = new Date(`${fixtureDate}T00:00:00`);
+        const dayEnd = new Date(`${fixtureDate}T23:59:59.999`);
+
         let after: string | undefined;
+
         do {
           const page = await MediaLibrary.getAssetsAsync({
             mediaType: [
@@ -5008,166 +5168,254 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
             ],
             first: 250,
             after,
-            sortBy: [MediaLibrary.SortBy.creationTime],
-            ...(albumId ? { album: albumId } : {}),
+            createdAfter: Math.max(0, dayStart.getTime() - 1),
+            createdBefore: dayEnd.getTime() + 1,
+            sortBy: [[MediaLibrary.SortBy.creationTime, true]],
           });
+
+          if (fixtureDate === "2015-03-21") {
+            console.warn("[history-auto-add] BLACKPOOL DATE PAGE", {
+              fixtureCount: (fixturesByDate.get(fixtureDate) ?? []).length,
+              assetCount: page.assets.length,
+              assets: page.assets.map((asset) => ({
+                id: asset.id,
+                creationTime: new Date(asset.creationTime).toISOString(),
+              })),
+            });
+          }
+
           const possible = page.assets.filter((asset) => {
             if (inspectedAssetIds.has(asset.id)) return false;
             inspectedAssetIds.add(asset.id);
-            const taken = new Date(asset.creationTime);
-            const date = `${taken.getFullYear()}-${String(taken.getMonth() + 1).padStart(2, "0")}-${String(taken.getDate()).padStart(2, "0")}`;
 
-            // Exact dated fixtures remain the fastest path. Also inspect media
-            // from seasons already represented in confirmed History so GPS can
-            // repair a missing/incomplete fixture cache. Pre-2000 retains its
-            // explicit-confirmation fallback and is never silently accepted.
-            return (
-              fixturesByDate.has(date) ||
-              dateFallsInConfirmedHistorySeason(taken) ||
-              taken.getFullYear() < 2000
-            );
-          });
-          for (const asset of possible) {
             const taken = new Date(asset.creationTime);
-            const date = `${taken.getFullYear()}-${String(taken.getMonth() + 1).padStart(2, "0")}-${String(taken.getDate()).padStart(2, "0")}`;
-            assetsByDate.set(date, [...(assetsByDate.get(date) ?? []), asset]);
-            const seasons = new Set(
-              (fixturesByDate.get(date) ?? []).map((fixture) =>
-                canonicalSeason(fixture.date),
-              ),
-            );
-            for (const season of seasons)
-              if (season) incrementSeasonStat(season, "dateAssets");
+            const date = `${taken.getFullYear()}-${String(
+              taken.getMonth() + 1,
+            ).padStart(2, "0")}-${String(taken.getDate()).padStart(2, "0")}`;
+
+            return date === fixtureDate;
+          });
+
+          for (const asset of possible) {
+            assetsByDate.set(fixtureDate, [
+              ...(assetsByDate.get(fixtureDate) ?? []),
+              asset,
+            ]);
           }
+
+          const fixtureSeasons = new Set(
+            (fixturesByDate.get(fixtureDate) ?? []).map((fixture) =>
+              canonicalSeason(fixture.date),
+            ),
+          );
+
+          for (const season of fixtureSeasons) {
+            if (season) {
+              for (let count = 0; count < possible.length; count += 1) {
+                incrementSeasonStat(season, "dateAssets");
+              }
+            }
+          }
+
           for (let offset = 0; offset < possible.length; offset += 20) {
             const inspected = await Promise.all(
               possible.slice(offset, offset + 20).map(async (asset) => ({
                 asset,
-                // Auto Add is an explicit repair pass. Do not trust an older
-                // cached no-location result: re-read lightweight Photos
-                // metadata without downloading the iCloud original.
                 info: await refreshMatchAssetInfo(asset),
               })),
             );
+
             for (const { asset, info } of inspected) {
               if (!info?.location) continue;
+
               refreshedAssetInfoById.set(asset.id, info);
-              const taken = new Date(asset.creationTime);
-              const date = `${taken.getFullYear()}-${String(taken.getMonth() + 1).padStart(2, "0")}-${String(taken.getDate()).padStart(2, "0")}`;
 
-              if (
-                taken.getFullYear() < 2000 &&
-                !(fixturesByDate.get(date) ?? []).length
-              ) {
-                historicalGpsEvidenceByDate.set(date, [
-                  ...(historicalGpsEvidenceByDate.get(date) ?? []),
-                  {
-                    asset,
-                    latitude: info.location.latitude,
-                    longitude: info.location.longitude,
-                  },
-                ]);
-
-                // Explicit review only. Never auto-create attendance here.
-                continue;
-              }
-
-              // V4.0.86 — demand-resolve a missing historical fixture only
-              // for this GPS-backed photo date. Do not broaden foreground
-              // History or scan historical seasons generally.
-              //
-              // This fixes post-2000 photos whose exact date is absent from
-              // the normal bundled club fixture map. The season store is
-              // queried once on demand and the resolved rows are then added
-              // to this Auto Add run's date cache.
-              let dateFixtures = fixturesByDate.get(date) ?? [];
-
-              if (!dateFixtures.length && taken.getFullYear() >= 2000) {
-                const season = canonicalSeason(date);
-                const seasonStart = Number(season.match(/^(\d{4})/)?.[1]);
-
-                if (season && Number.isFinite(seasonStart)) {
-                  try {
-                    const apiSeason = `${seasonStart}-${seasonStart + 1}`;
-                    const historicalRows =
-                      seasonStart < 2007
-                        ? await getHistoricalSeasonFixtures(apiSeason)
-                        : getBundledCompetitionNamesForSeason(apiSeason).flatMap(
-                            (competition) =>
-                              getBundledCompetitionFixtures(
-                                competition,
-                                apiSeason,
-                              ),
-                          );
-
-                    dateFixtures = historicalRows.filter(
-                      (fixture) =>
-                        fixture.date === date &&
-                        (
-                          clubNamesMatch(fixture.homeName, clubName) ||
-                          clubNamesMatch(fixture.awayName, clubName)
-                        ),
-                    );
-
-                    if (dateFixtures.length) {
-                      fixturesByDate.set(date, dateFixtures);
-                    }
-                  } catch {
-                    // Missing historical data is unknown, never guessed.
-                    dateFixtures = [];
-                  }
-                }
-              }
+              const dateFixtures = fixturesByDate.get(fixtureDate) ?? [];
 
               const seasons = new Set(
                 dateFixtures.map((fixture) =>
                   canonicalSeason(fixture.date),
                 ),
               );
-              for (const season of seasons)
+
+              for (const season of seasons) {
                 if (season) incrementSeasonStat(season, "gpsAssets");
+              }
 
               const candidates = dateFixtures
                 .map((fixture) => {
                   const ground =
                     (fixture.venue
                       ? footballGroundForName(fixture.venue)
-                      : undefined) ?? findGroundForClub(fixture.homeName);
-                  return ground
+                      : undefined) ??
+                    findGroundForClub(fixture.homeName, fixture.date);
+
+                  const miles = ground
+                    ? distanceMiles(
+                        info.location!.latitude,
+                        info.location!.longitude,
+                        ground.latitude,
+                        ground.longitude,
+                      )
+                    : null;
+
+                  return ground && miles != null
                     ? {
                         fixture,
                         ground,
-                        miles: distanceMiles(
-                          info.location!.latitude,
-                          info.location!.longitude,
-                          ground.latitude,
-                          ground.longitude,
-                        ),
+                        miles,
                       }
                     : null;
                 })
                 .filter(
-                  (candidate): candidate is NonNullable<typeof candidate> =>
-                    // Keep manual Auto Add consistent with the automatic
-                    // matcher: allow normal phone-GPS drift around grounds,
-                    // approaches and stadium parking.
+                  (
+                    candidate,
+                  ): candidate is NonNullable<typeof candidate> =>
                     Boolean(candidate && candidate.miles <= 1),
                 )
                 .sort((a, b) => a.miles - b.miles);
-              if (!candidates.length) continue;
-              const fixture = candidates[0].fixture;
-              incrementSeasonStat(
-                canonicalSeason(fixture.date),
-                "stadiumMatches",
+
+              if (candidates.length) {
+                const fixture = candidates[0].fixture;
+
+                incrementSeasonStat(
+                  canonicalSeason(fixture.date),
+                  "stadiumMatches",
+                );
+
+                mediaByFixture.set(fixture.id, [
+                  ...(mediaByFixture.get(fixture.id) ?? []),
+                  asset,
+                ]);
+
+                continue;
+              }
+
+              // GPS outside the trusted 1-mile radius is never silently
+              // accepted. On an exact fixture date, allow a conservative
+              // confirmation fallback when the photo was taken during a
+              // plausible football match window and is still reasonably
+              // close to the ground.
+              const taken = new Date(asset.creationTime);
+              const minutes =
+                taken.getHours() * 60 + taken.getMinutes();
+
+              const fallbackCandidates = dateFixtures
+                .map((fixture) => {
+                  const ground =
+                    (fixture.venue
+                      ? footballGroundForName(fixture.venue)
+                      : undefined) ??
+                    findGroundForClub(fixture.homeName, fixture.date);
+
+                  if (!ground) return null;
+
+                  const miles = distanceMiles(
+                    info.location!.latitude,
+                    info.location!.longitude,
+                    ground.latitude,
+                    ground.longitude,
+                  );
+
+                  let matchTimePlausible = false;
+
+                  if (fixture.kickoff) {
+                    const kickoffMatch = String(fixture.kickoff).match(
+                      /(?:T|^)(\d{2}):(\d{2})/,
+                    );
+
+                    if (kickoffMatch) {
+                      const kickoffMinutes =
+                        Number(kickoffMatch[1]) * 60 +
+                        Number(kickoffMatch[2]);
+
+                      matchTimePlausible =
+                        minutes >= kickoffMinutes - 90 &&
+                        minutes <= kickoffMinutes + 180;
+                    }
+                  }
+
+                  // If there is no reliable kickoff time, do not guess.
+                  // Exact-GPS matches can still be added by the normal <=1 mile
+                  // path, but uncertain-distance media must have a kickoff.
+                  if (!fixture.kickoff) {
+                    matchTimePlausible = false;
+                  }
+
+                  const isHomeFixture = clubNamesMatch(
+                    fixture.homeName,
+                    clubName,
+                  );
+
+                  // Home matches must stay within the normal stadium radius.
+                  // Never offer a home fixture fallback beyond 1 mile.
+                  if (isHomeFixture) return null;
+
+                  return matchTimePlausible &&
+                    miles > 1 &&
+                    miles <= 2
+                    ? { fixture, ground, miles }
+                    : null;
+                })
+                .filter(
+                  (
+                    candidate,
+                  ): candidate is NonNullable<typeof candidate> =>
+                    Boolean(candidate),
+                )
+                .sort((a, b) => a.miles - b.miles);
+
+              if (!fallbackCandidates.length) continue;
+
+              const fallback = fallbackCandidates[0];
+              const current = fallbackMediaByFixture.get(
+                fallback.fixture.id,
               );
-              mediaByFixture.set(fixture.id, [
-                ...(mediaByFixture.get(fixture.id) ?? []),
-                asset,
-              ]);
+
+              fallbackMediaByFixture.set(fallback.fixture.id, {
+                fixture: fallback.fixture,
+                ground: fallback.ground,
+                assets: [
+                  ...(current?.assets ?? []),
+                  asset,
+                ],
+              });
             }
           }
+
           after = page.hasNextPage ? page.endCursor : undefined;
         } while (after);
+      }
+
+      console.warn("[history-auto-add] AFTER fixture-date scan", {
+        fixtureDateCount: fixtureDatesToScan.length,
+        matchedFixtureCount: mediaByFixture.size,
+      });
+
+      const reviewedFallbackFixtureIds = new Set<string>();
+      const reviewedFallbackAcceptedAssetIds = new Set<string>();
+
+      for (const { fixture, assets } of fallbackMediaByFixture.values()) {
+        reviewedFallbackFixtureIds.add(fixture.id);
+
+        const acceptedAssets =
+          await reviewAutoAddFixtureMedia(fixture, assets);
+
+        if (!acceptedAssets?.length) continue;
+
+        const byId = new Map(
+          (mediaByFixture.get(fixture.id) ?? []).map((asset) => [
+            asset.id,
+            asset,
+          ]),
+        );
+
+        for (const asset of acceptedAssets) {
+          reviewedFallbackAcceptedAssetIds.add(asset.id);
+          byId.set(asset.id, asset);
+        }
+
+        mediaByFixture.set(fixture.id, [...byId.values()]);
       }
 
       // Once a fixture has a trusted stadium-GPS anchor, include the rest of
@@ -5175,11 +5423,15 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
       // stadium burst. This is what makes shared/iCloud albums useful rather
       // than saving only the single anchor photo.
       for (const [fixtureId] of mediaByFixture) {
+        // A reviewed fallback fixture is authoritative. Do not put media back
+        // that the user deliberately removed from its preview.
+        if (reviewedFallbackFixtureIds.has(fixtureId)) continue;
+
         const fixture = fixtures.find((row) => row.id === fixtureId);
         if (!fixture?.date) continue;
         const ground =
           (fixture.venue ? footballGroundForName(fixture.venue) : undefined) ??
-          findGroundForClub(fixture.homeName);
+          findGroundForClub(fixture.homeName, fixture.date);
         if (!ground) continue;
         const expanded = await matchGeotaggedMatchdayMedia(
           assetsByDate.get(fixture.date) ?? [],
@@ -5295,7 +5547,9 @@ Accept only if these photos are from this match. Choose Another Match for anothe
         const isHome = clubNamesMatch(fixture.homeName, clubName);
         const opponent = isHome ? fixture.awayName : fixture.homeName;
         const ground =
-          fixture.venue || findGroundForClub(fixture.homeName)?.stadium || null;
+          fixture.venue ||
+          findGroundForClub(fixture.homeName, fixture.date)?.stadium ||
+          null;
         const clubScore = isHome ? fixture.homeScore : fixture.awayScore;
         const opponentScore = isHome ? fixture.awayScore : fixture.homeScore;
         const record: AttendanceRecord = {
@@ -5331,7 +5585,11 @@ Accept only if these photos are from this match. Choose Another Match for anothe
         const references: MatchMediaReference[] = assets.map((asset) => {
           const info = refreshedAssetInfoById.get(asset.id);
           return {
-            source: "automatic",
+            // An uncertain-distance asset explicitly accepted in the review
+            // screen is a user decision, not an automatic GPS match.
+            source: reviewedFallbackAcceptedAssetIds.has(asset.id)
+              ? "manual"
+              : "automatic",
             assetId: asset.id,
             type:
               asset.mediaType === MediaLibrary.MediaType.video
@@ -5403,7 +5661,7 @@ Accept only if these photos are from this match. Choose Another Match for anothe
               (fixture.venue
                 ? footballGroundForName(fixture.venue)
                 : undefined) ??
-              findGroundForClub(homeClub);
+              findGroundForClub(homeClub, evidenceDate);
 
             if (!ground) return null;
 
@@ -6513,11 +6771,15 @@ const handleTileDrop = (id: string, tx: number, ty: number) => {
   const loadFixtures = useCallback(async (opts?: { force?: boolean }) => {
     const requestId = ++fixtureLoadRequestRef.current;
     if (opts?.force) {
+      console.log("[tfd-refresh] forced refresh started");
       await refreshHostedTfd().then((result) => {
+        console.log("[tfd-refresh] forced refresh result", result);
         const generatedAt = Date.parse(result.generatedAt);
         setFixturesUpdatedAt(Number.isFinite(generatedAt) ? generatedAt : null);
         if (result.changed) setTfdDataRevision((revision) => revision + 1);
-      }).catch(() => {});
+      }).catch((error) => {
+        console.error("[tfd-refresh] forced refresh failed", error);
+      });
     }
     const ownerKey = `${normaliseFixtureText(favouriteClub.name)}|${favouriteClub.league}|${CURRENT_SEASON}`;
     // Cache-first: hydrate from the bundled provider snapshot so the screen
@@ -9330,6 +9592,197 @@ Choose one team. Its colours automatically control the Club Colours frame style.
   }
 
   if (activeTab === "history") {
+
+    if (autoAddMediaReview) {
+      const fixture = autoAddMediaReview.fixture;
+      const selectedCount = autoAddMediaReview.selectedAssetIds.size;
+
+      return (
+        <SafeAreaView style={{ flex: 1, backgroundColor: "#ffffff" }}>
+          <ScrollView
+            contentContainerStyle={{
+              padding: 16,
+              paddingBottom: 40,
+            }}
+          >
+            <Text
+              style={{
+                fontSize: 24,
+                fontWeight: "700",
+                marginBottom: 6,
+              }}
+            >
+              Review Match Photos
+            </Text>
+
+            <Text
+              style={{
+                fontSize: 18,
+                fontWeight: "600",
+                marginBottom: 4,
+              }}
+            >
+              {fixture.homeName} v {fixture.awayName}
+            </Text>
+
+            <Text
+              style={{
+                fontSize: 15,
+                color: "#666666",
+                marginBottom: 16,
+              }}
+            >
+              {fixture.date}
+            </Text>
+
+            <Text
+              style={{
+                fontSize: 15,
+                marginBottom: 16,
+              }}
+            >
+              These photos/videos were taken on this fixture date but their
+              saved GPS is outside the normal stadium range. Tap any item to
+              remove it before adding.
+            </Text>
+
+            <View
+              style={{
+                flexDirection: "row",
+                flexWrap: "wrap",
+                gap: 8,
+              }}
+            >
+              {autoAddMediaReview.assets.map((asset) => {
+                const selected =
+                  autoAddMediaReview.selectedAssetIds.has(asset.id);
+
+                return (
+                  <Pressable
+                    key={asset.id}
+                    onPress={() => toggleAutoAddReviewAsset(asset.id)}
+                    style={{
+                      width: "31%",
+                      aspectRatio: 1,
+                      borderRadius: 10,
+                      overflow: "hidden",
+                      borderWidth: selected ? 3 : 1,
+                      borderColor: selected
+                        ? favouriteClub.primary
+                        : "#cccccc",
+                      opacity: selected ? 1 : 0.4,
+                      alignItems: "center",
+                      justifyContent: "center",
+                      backgroundColor: "#eeeeee",
+                    }}
+                  >
+                    {asset.mediaType === MediaLibrary.MediaType.video ? (
+                      <>
+                        <Ionicons
+                          name="videocam"
+                          size={30}
+                          color="#333333"
+                        />
+                        <Text
+                          style={{
+                            fontSize: 11,
+                            marginTop: 4,
+                          }}
+                        >
+                          Video
+                        </Text>
+                      </>
+                    ) : (
+                      <Image
+                        source={{ uri: asset.uri }}
+                        style={{
+                          width: "100%",
+                          height: "100%",
+                        }}
+                        resizeMode="cover"
+                      />
+                    )}
+
+                    {selected ? (
+                      <View
+                        style={{
+                          position: "absolute",
+                          top: 5,
+                          right: 5,
+                          backgroundColor: "#ffffff",
+                          borderRadius: 12,
+                        }}
+                      >
+                        <Ionicons
+                          name="checkmark-circle"
+                          size={24}
+                          color={favouriteClub.primary}
+                        />
+                      </View>
+                    ) : null}
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <Text
+              style={{
+                marginTop: 16,
+                marginBottom: 12,
+                fontWeight: "600",
+              }}
+            >
+              {selectedCount} of {autoAddMediaReview.assets.length} selected
+            </Text>
+
+            <Pressable
+              onPress={() => finishAutoAddMediaReview(true)}
+              disabled={selectedCount === 0}
+              style={{
+                paddingVertical: 14,
+                borderRadius: 12,
+                alignItems: "center",
+                marginBottom: 10,
+                backgroundColor:
+                  selectedCount > 0
+                    ? favouriteClub.primary
+                    : "#cccccc",
+              }}
+            >
+              <Text
+                style={{
+                  fontSize: 17,
+                  fontWeight: "700",
+                  color: "#ffffff",
+                }}
+              >
+                Add Selected
+              </Text>
+            </Pressable>
+
+            <Pressable
+              onPress={() => finishAutoAddMediaReview(false)}
+              style={{
+                paddingVertical: 14,
+                borderRadius: 12,
+                alignItems: "center",
+                borderWidth: 1,
+                borderColor: "#cccccc",
+              }}
+            >
+              <Text
+                style={{
+                  fontSize: 17,
+                  fontWeight: "600",
+                }}
+              >
+                Skip Fixture
+              </Text>
+            </Pressable>
+          </ScrollView>
+        </SafeAreaView>
+      );
+    }
 
     // HISTORY CORRECTION FOUNDATION — derivation logic is unchanged in
     // V3.9.4. This release only redesigns how the archive is presented.
