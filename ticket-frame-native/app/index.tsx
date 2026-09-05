@@ -10195,6 +10195,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
             onScrollBeginDrag={Keyboard.dismiss}
             keyboardShouldPersistTaps="handled"
           >
+            {backToHomeButton(12)}
             {content}
             {bottomNav()}
           </ScrollView>
@@ -14173,6 +14174,10 @@ const manualCompetitionFixtures = draftMatch.competition
           }}
           onModeChange={setFixtureMode}
         />
+
+        <View style={{ paddingHorizontal: 16 }}>
+          {backToHomeButton(10)}
+        </View>
 
         {fixturesError && !(fixtureMode === "table" ? hasTable : hasFixtures) ? (
           <FixturesError
