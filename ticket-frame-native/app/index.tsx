@@ -3731,22 +3731,30 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
       // experience. Any prior stored signal (saved frame OR ground visits)
       // marks a legacy user, who never sees it. A corrupt payload is treated
       // as fresh rather than crashing startup.
-      return Promise.all([
-        (async () => {
-          startupTiming("SAVED_FRAME_KEY read started");
-          const value = await AsyncStorage.getItem(SAVED_FRAME_KEY);
-          startupTiming(
-            `SAVED_FRAME_KEY await finished chars=${value?.length ?? 0}`,
-          );
-          return value;
-        })(),
-        AsyncStorage.getItem(GROUND_VISITS_KEY).then((value) => {
+      const savedFramePromise = (async () => {
+        startupTiming("SAVED_FRAME_KEY read started");
+        const value = await AsyncStorage.getItem(SAVED_FRAME_KEY);
+        startupTiming(
+          `SAVED_FRAME_KEY await finished chars=${value?.length ?? 0}`,
+        );
+        return value;
+      })();
+
+      const groundVisitsPromise = AsyncStorage.getItem(GROUND_VISITS_KEY).then(
+        (value) => {
           startupTiming(
             `GROUND_VISITS_KEY read finished chars=${value?.length ?? 0}`,
           );
           return value;
-        }),
-      ]);
+        },
+      );
+
+      // Do not make first paint wait for the slow saved-frame AsyncStorage read.
+      setShowOnboarding(false);
+      startupTiming("early storageReady set true");
+      setStorageReady(true);
+
+      return Promise.all([savedFramePromise, groundVisitsPromise]);
     })()
       .then(([saved, groundRaw]) => {
         startupTiming("storage bootstrap promise resolved");
@@ -3829,9 +3837,8 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
             // Keep onboarding available for manual replay without blocking startup.
             void AsyncStorage.setItem(ONBOARDING_KEY, "true").catch(() => {});
             setShowOnboarding(false);
-            startupTiming("before storageReady set true");
+            startupTiming("startup restore finished");
             setStorageReady(true);
-            startupTiming("after storageReady set true");
           });
       });
   }, []);
