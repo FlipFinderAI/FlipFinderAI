@@ -3669,21 +3669,33 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
   }
 
 
+  const startupTimingStartedAtRef = useRef(Date.now());
+  const startupTiming = (label: string) => {
+    console.log(
+      `[startup-timing] +${Date.now() - startupTimingStartedAtRef.current}ms ${label}`,
+    );
+  };
+
   const legacyUserDataRef = useRef(false);
   const savedClubValidRef = useRef(false);
   useEffect(() => {
+    startupTiming("storage bootstrap started");
     void (async () => {
       // V3.8 — storage versioning runs BEFORE any user data is loaded.
       // Stamps the schema version on first launch, runs pending migrations
       // with backup + verification, and fails safely without ever throwing
       // or blocking the normal load path.
       await ensureStorageSchema();
+      startupTiming("storage schema ready");
 
       // One-time user-requested cleanup for this release. Remove every saved
       // ticket-like record, including records that are not currently visible
       // in Home filters, while retaining the favourite club and app settings.
       const resetDone = await AsyncStorage.getItem(TICKET_RESET_KEY);
+      startupTiming(`ticket reset flag=${resetDone ?? "(missing)"}`);
+      setTimeout(() => startupTiming("JS event loop timer fired"), 0);
       if (resetDone !== "true") {
+        startupTiming("ticket reset branch entered");
         const savedRaw = await AsyncStorage.getItem(SAVED_FRAME_KEY);
         if (savedRaw) {
           try {
@@ -3720,37 +3732,57 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
       // marks a legacy user, who never sees it. A corrupt payload is treated
       // as fresh rather than crashing startup.
       return Promise.all([
-        AsyncStorage.getItem(SAVED_FRAME_KEY),
-        AsyncStorage.getItem(GROUND_VISITS_KEY),
+        (async () => {
+          startupTiming("SAVED_FRAME_KEY read started");
+          const value = await AsyncStorage.getItem(SAVED_FRAME_KEY);
+          startupTiming(
+            `SAVED_FRAME_KEY await finished chars=${value?.length ?? 0}`,
+          );
+          return value;
+        })(),
+        AsyncStorage.getItem(GROUND_VISITS_KEY).then((value) => {
+          startupTiming(
+            `GROUND_VISITS_KEY read finished chars=${value?.length ?? 0}`,
+          );
+          return value;
+        }),
       ]);
     })()
       .then(([saved, groundRaw]) => {
+        startupTiming("storage bootstrap promise resolved");
+        startupTiming("saved frame + ground visits loaded");
         if (groundRaw) legacyUserDataRef.current = true;
         if (!saved) return;
         try {
+          startupTiming("saved frame JSON parse started");
           const value = JSON.parse(saved) as {
             tickets?: SeasonTicket[];
             frameStyle?: string;
             favouriteClub?: ClubOption;
             activeSeason?: string;
           };
+          startupTiming(
+            `saved frame JSON parse finished tickets=${value.tickets?.length ?? 0}`,
+          );
           if (
             (Array.isArray(value.tickets) && value.tickets.length > 0) ||
             value.favouriteClub?.name
           )
             legacyUserDataRef.current = true;
-          if (Array.isArray(value.tickets))
-            setTickets(
-              value.tickets.map((ticket) => ({
-                ...ticket,
-                uri: currentTicketUri(ticket.uri),
-                matchDate: ticket.matchDate || null,
-                displayStyle:
-                  ticket.displayStyle === "old-school"
-                    ? undefined
-                    : ticket.displayStyle,
-              })),
-            );
+          if (Array.isArray(value.tickets)) {
+            startupTiming("ticket restore mapping started");
+            const restoredTickets = value.tickets.map((ticket) => ({
+              ...ticket,
+              uri: currentTicketUri(ticket.uri),
+              matchDate: ticket.matchDate || null,
+              displayStyle:
+                ticket.displayStyle === "old-school"
+                  ? undefined
+                  : ticket.displayStyle,
+            }));
+            startupTiming("ticket restore mapping finished");
+            setTickets(restoredTickets);
+          }
           if (value.frameStyle && stylesList.includes(value.frameStyle))
             setFrameStyle(value.frameStyle);
           const storedClub = value.favouriteClub;
@@ -3797,7 +3829,9 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
             // Keep onboarding available for manual replay without blocking startup.
             void AsyncStorage.setItem(ONBOARDING_KEY, "true").catch(() => {});
             setShowOnboarding(false);
+            startupTiming("before storageReady set true");
             setStorageReady(true);
+            startupTiming("after storageReady set true");
           });
       });
   }, []);
@@ -6898,9 +6932,17 @@ const handleTileDrop = (id: string, tx: number, ty: number) => {
   useEffect(() => {
     let cancelled = false;
     const apply = async (remote: boolean) => {
+      startupTiming(
+        remote ? "TFD remote refresh started" : "TFD cached hydration started",
+      );
       const changed = remote
         ? (await refreshHostedTfd().catch(() => ({ changed: false }))).changed
         : await hydrateCachedTfd();
+      startupTiming(
+        remote
+          ? `TFD remote refresh finished changed=${changed}`
+          : `TFD cached hydration finished changed=${changed}`,
+      );
       if (cancelled || !changed) return;
       const generatedAt = Date.parse(getMatchDatabaseGeneratedAt());
       setFixturesUpdatedAt(Number.isFinite(generatedAt) ? generatedAt : null);
