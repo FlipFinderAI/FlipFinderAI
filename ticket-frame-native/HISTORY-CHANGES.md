@@ -1126,3 +1126,5 @@ Phone verification: PASS.
 - 2026-09-06: Verified Auto Add ground/date matching fixes on device. Corrected current/historical stadium coordinates, added historical tenancy periods, and confirmed date-aware resolver across Arsenal, Brighton, Coventry, Rotherham, Wimbledon and AFC Wimbledon.
 
 - 2026-09-06: Added and verified Back to Home navigation on Fixtures and Football History.
+
+- 2026-09-06: Fixed Scottish Championship/League One/League Two fixture loading caused by provider club-name mismatches.

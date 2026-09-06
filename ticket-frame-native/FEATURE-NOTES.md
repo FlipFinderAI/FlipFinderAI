@@ -1014,3 +1014,5 @@ Verification:
 - Verified date-aware historical/current ground matching and corrected UK ground coordinates used by Auto Add. Added temporary/historical tenancies for Wimbledon/AFC Wimbledon, Brighton and Coventry. Reviewed/manual Auto Add photos now persist correctly beyond the automatic 1-mile filter.
 
 - Added Back to Home buttons to Fixtures and Football History using the existing Home reset/navigation flow.
+
+- Added Scottish provider club aliases so lower-league fixtures resolve correctly across Fixtures, History and Auto Add.

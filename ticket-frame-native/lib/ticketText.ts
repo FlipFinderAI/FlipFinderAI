@@ -25,6 +25,15 @@ const CLUB_NAME_ALIASES: Record<string, string> = {
   "west bromwich albion": "west brom",
   "brighton and hove albion": "brighton",
   "queens park rangers": "qpr",
+
+  // Scottish provider aliases.
+  "ayr united": "ayr",
+  "ayr utd": "ayr",
+  "dunfermline athletic": "dunfermline",
+  "greenock morton": "morton",
+  "inverness caledonian thistle": "inverness ct",
+  "partick thistle": "partick",
+  "the spartans": "spartans",
 };
 
 /**
