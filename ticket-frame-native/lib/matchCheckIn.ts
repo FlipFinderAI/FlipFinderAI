@@ -23,7 +23,7 @@ export type MatchCheckInFixture = {
 
 export async function isMatchCheckInEnabled(): Promise<boolean> {
   const stored = await AsyncStorage.getItem(MATCH_CHECKIN_ENABLED_KEY);
-  return stored !== "false";
+  return stored === "true";
 }
 
 export async function setMatchCheckInEnabled(enabled: boolean): Promise<void> {

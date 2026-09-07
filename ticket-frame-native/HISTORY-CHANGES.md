@@ -1145,3 +1145,10 @@ Phone verification: PASS.
 - TypeScript: PASS.
 - Focused ESLint: PASS.
 - On-device verification: PASS.
+
+## V4.0.95
+- Changed Next Match Check-in from implicit opt-out to explicit opt-in.
+- Fresh installs now start with Match Check-in disabled.
+- Stored "true" remains authoritative for users who deliberately enabled the feature.
+- TypeScript: PASS.
+- No new ESLint issue introduced.

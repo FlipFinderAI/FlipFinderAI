@@ -1036,3 +1036,11 @@ Verification:
 - TypeScript verification: PASS.
 - Focused ESLint verification: PASS.
 - On-device non-ticket rejection test: PASS.
+
+## V4.0.95 — Match Check-in explicit opt-in
+- Match Check-in now defaults OFF on a fresh installation.
+- A missing stored Match Check-in preference is treated as disabled rather than enabled.
+- Background stadium geofencing remains available only after the user deliberately enables Match Check-in and grants the required location permissions.
+- Existing users who previously enabled Match Check-in retain their stored enabled preference.
+- TypeScript verification: PASS.
+- The full app/index.tsx ESLint scan continues to report pre-existing unrelated lint findings; no new lint issue was introduced by this change.

@@ -1394,7 +1394,7 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
   // separate clubNextMatch fetch was a broken duplicate and is gone.
   const [gpsAccuracy, setGpsAccuracy] =
     useState<number | null>(null);
-  const [matchCheckInEnabled, setMatchCheckInEnabledState] = useState(true);
+  const [matchCheckInEnabled, setMatchCheckInEnabledState] = useState(false);
   const [pendingMatchCheckIn, setPendingMatchCheckIn] =
     useState<MatchCheckInFixture | null>(null);
   const [favouriteClub, setFavouriteClub] =
