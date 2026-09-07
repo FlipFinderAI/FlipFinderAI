@@ -1,3 +1,10 @@
+## V4.0.96 — Football Ticket Frame Store Name
+
+- Changed the app display name from Ticket Frame to Football Ticket Frame.
+- Updated app.json name.
+- Updated iOS CFBundleDisplayName.
+- No code paths, bundle identifiers, permissions or user data migrations changed.
+
 
 ## V4.0.80d
 Prepared the working app for an iPhone-only App Store release. Aligned the app

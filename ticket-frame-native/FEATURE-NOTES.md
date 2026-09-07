@@ -1,3 +1,11 @@
+## V4.0.96 — Football Ticket Frame Store Name
+
+- Updated customer-facing app name from "Ticket Frame" to "Football Ticket Frame".
+- Updated Expo app name and iOS display name.
+- Kept bundle identifier, Siri intents, internal code references and stored data keys unchanged.
+- Improved App Store discoverability by adding the core search keyword "Football".
+- No functional behaviour, permissions or data handling changed.
+
 
 ## V4.0.80d — iPhone App Store readiness
 Completed the first three release-readiness actions without changing app
