@@ -38,7 +38,12 @@ export function hydrateCachedTfd() {
 
 export async function refreshHostedTfd() {
   const response = await fetch(`${snapshotUrl()}?checked=${Date.now()}`, {
-    headers: { accept: "application/json" },
+    headers: {
+      accept: "application/json",
+      "cache-control": "no-cache, no-store, must-revalidate",
+      pragma: "no-cache",
+    },
+    cache: "no-store",
   });
   if (!response.ok) throw new Error(`TFD feed unavailable (${response.status})`);
   const raw = await response.text();
