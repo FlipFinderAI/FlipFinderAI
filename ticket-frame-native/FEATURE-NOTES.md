@@ -1,3 +1,11 @@
+
+## V4.0.99 — Football Ticket Frame Xcode product rename
+
+- Updated Xcode PRODUCT_NAME from TicketFrame to FootballTicketFrame.
+- Updated shared scheme build product references.
+- Confirmed physical iPhone build succeeds with Football Ticket Frame display name.
+- No bundle identifier, app data, permissions or user storage changed.
+
 ## V4.0.98 — Football Ticket Frame privacy branding
 
 - Updated user-facing iOS permission descriptions from Ticket Frame to Football Ticket Frame.
