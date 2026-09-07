@@ -10263,7 +10263,6 @@ Choose one team. Its colours automatically control the Club Colours frame style.
             onScrollBeginDrag={Keyboard.dismiss}
             keyboardShouldPersistTaps="handled"
           >
-            {backToHomeButton(12)}
             {content}
             {bottomNav()}
           </ScrollView>
