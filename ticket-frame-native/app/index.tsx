@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState, useCallback, useMemo, Fragment } from "react";
 import {
   Alert,
+  ActivityIndicator,
   AppState,
   Dimensions,
   Image,
@@ -380,6 +381,8 @@ export default function HomeScreen() {
   const [ticketStyleMenuOpen, setTicketStyleMenuOpen] = useState(false);
   const [, setExportWidth] = useState(1100);
   const [storageReady, setStorageReady] = useState(false);
+  const [historyContentReady, setHistoryContentReady] = useState(true);
+  const historyOpenFrameRef = useRef<number | null>(null);
   // V3.7 first-launch experience: null = still resolving from storage.
   const [showOnboarding, setShowOnboarding] = useState<boolean | null>(null);
   const [celebrationTicket, setCelebrationTicket] =
@@ -8576,11 +8579,28 @@ useEffect(() => {
       openMainHome();
       return;
     }
+    if (tab === activeTab) return;
     setShowSeasonManager(false);
     setSeasonPickerOpen(false);
     setFinished(false);
     setHomeFrameFocused(false);
     resetSeasonFrameZoom();
+    if (historyOpenFrameRef.current !== null) {
+      cancelAnimationFrame(historyOpenFrameRef.current);
+      historyOpenFrameRef.current = null;
+    }
+    if (tab === "history") {
+      // Paint the selected navigation state before building the large History
+      // tree. This gives the tap an immediate visual response on big archives.
+      setHistoryContentReady(false);
+      setActiveTab(tab);
+      historyOpenFrameRef.current = requestAnimationFrame(() => {
+        historyOpenFrameRef.current = null;
+        setHistoryContentReady(true);
+      });
+      return;
+    }
+    setHistoryContentReady(true);
     setActiveTab(tab);
   };
 
@@ -9658,6 +9678,24 @@ Choose one team. Its colours automatically control the Club Colours frame style.
   }
 
   if (activeTab === "history") {
+
+    if (!historyContentReady) {
+      return (
+        <SafeAreaView style={[s.safe, { backgroundColor: "#f5f1e8" }]}>
+          <View style={[s.page, { flex: 1, justifyContent: "space-between" }]}>
+            <View>
+              <Text style={[s.kicker, { marginBottom: 6 }]}>📖 FOOTBALL HISTORY</Text>
+              <ActivityIndicator
+                color={favouriteClub.primary}
+                style={{ marginTop: 28 }}
+                accessibilityLabel="Opening Football History"
+              />
+            </View>
+            {bottomNav()}
+          </View>
+        </SafeAreaView>
+      );
+    }
 
     if (autoAddMediaReview) {
       const fixture = autoAddMediaReview.fixture;
