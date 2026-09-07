@@ -1,3 +1,9 @@
+## V4.0.100 — Sync internal app version
+
+- Updated the internal app version reporting from V3.11.5 to V4.0.99 to match the verified release checkpoint line.
+- Kept the internal product name as Ticket Frame.
+- No user data, storage, bundle identifiers or app behaviour changed.
+
 ## V4.0.99 — Football Ticket Frame Xcode product rename
 
 - Updated Xcode PRODUCT_NAME from TicketFrame to FootballTicketFrame.
