@@ -14,7 +14,7 @@
       "buildNumber": "7",
       "infoPlist": {
         "LSSupportsOpeningDocumentsInPlace": true,
-        "NSPhotoLibraryAddUsageDescription": "Ticket Frame saves only the ticket frames and match-memory photos you explicitly choose to export.",
+        "NSPhotoLibraryAddUsageDescription": "Football Ticket Frame saves only the ticket frames and match-memory photos you explicitly choose to export.",
         "LSApplicationQueriesSchemes": [
           "waze",
           "comgooglemaps"
@@ -43,7 +43,7 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Ticket Frame needs access to ticket screenshots you choose and match-day photos you privately save in Match Memories.",
+          "photosPermission": "Football Ticket Frame needs access to ticket screenshots you choose and match-day photos you privately save in Match Memories.",
           "cameraPermission": false,
           "microphonePermission": false
         }
@@ -52,15 +52,15 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "Ticket Frame uses your location for live nearby Apple Maps results, stadium attendance and private photo-location grouping.",
-          "locationAlwaysAndWhenInUsePermission": "Ticket Frame uses low-power stadium geofences around favourite-team match times so it can ask whether you attended."
+          "locationWhenInUsePermission": "Football Ticket Frame uses your location for live nearby Apple Maps results, stadium attendance and private photo-location grouping.",
+          "locationAlwaysAndWhenInUsePermission": "Football Ticket Frame uses low-power stadium geofences around favourite-team match times so it can ask whether you attended."
         }
       ],
       [
         "expo-media-library",
         {
-          "photosPermission": "Ticket Frame reads the date and location of authorised match-day photos to group them privately and suggest nearby places with Apple Maps.",
-          "savePhotosPermission": "Ticket Frame can save photos you choose for match memories."
+          "photosPermission": "Football Ticket Frame reads the date and location of authorised match-day photos to group them privately and suggest nearby places with Apple Maps.",
+          "savePhotosPermission": "Football Ticket Frame can save photos you choose for match memories."
         }
       ],
       "expo-notifications",

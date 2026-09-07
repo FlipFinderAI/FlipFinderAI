@@ -1,3 +1,9 @@
+## V4.0.98 — Football Ticket Frame privacy branding
+
+- Updated user-facing iOS permission descriptions from Ticket Frame to Football Ticket Frame.
+- Updated Photos, location and stadium geofence permission wording.
+- No bundle identifiers, app schemes, Siri identifiers or data migrations changed.
+
 ## V4.0.96 — Football Ticket Frame Store Name
 
 - Updated customer-facing app name from "Ticket Frame" to "Football Ticket Frame".
