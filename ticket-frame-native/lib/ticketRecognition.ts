@@ -449,17 +449,20 @@ async function bestFixtureForSides(
   let accepted: CachedFixture | null = null;
   let declineReason: string | null = null;
   const winner = scored[0];
-  if (!winner || winner.score < 22) {
+  const acceptanceThreshold = hasTeamClue ? 30 : 25;
+  const tied = winner
+    ? scored.filter((candidate) => candidate.score === winner.score)
+    : [];
+  if (!winner || winner.score < acceptanceThreshold) {
     declineReason = winner ? "no candidate reached the acceptance threshold" : null;
+  } else if (tied.length > 1) {
+    declineReason = `${tied.length} fixtures tie without enough evidence to separate them`;
+  } else if (hasTeamClue && ocrDate && winner.fixture.date !== ocrDate) {
+    declineReason = "team and printed date point to different fixtures";
   } else if (!hasTeamClue) {
     // Kickoff/competition agreement already separates candidates in the score;
     // an unchanged tie means the ticket carries nothing that decides it.
-    const tied = scored.filter((c) => c.score === winner.score);
-    if (tied.length === 1) {
-      accepted = winner.fixture;
-    } else {
-      declineReason = `${tied.length} fixtures on ${ocrDate ?? "this date"} tie without evidence to separate them`;
-    }
+    accepted = winner.fixture;
   } else {
     accepted = winner.fixture;
   }
@@ -634,14 +637,17 @@ export async function recogniseFromText(
 
   // From here on only normalised identities are used for lookups and display;
   // raw OCR text survives solely as a last-resort fallback.
-  const homeIdentity = homeOfficial ?? homeRaw;
-  const awayIdentity = awayOfficial ?? awayRaw;
+  const homeIdentity = homeOfficial;
+  const awayIdentity = awayOfficial;
   const identityIsClub = (identity: string | null) =>
     !!identity &&
     (identity === clubName || teamNameAffinity(identity, clubName) >= 11);
   const homeIsClub = identityIsClub(homeIdentity);
   const awayIsClub = identityIsClub(awayIdentity);
-  const candidateOpponents = [homeIdentity, awayIdentity].filter(
+  // Only provider-resolved identities may drive fixture selection. Raw OCR
+  // fragments remain available for the review UI, but a plausible-looking
+  // fragment must never become a database lookup key.
+  const candidateOpponents = [homeOfficial, awayOfficial].filter(
     (value): value is string => !!value && !identityIsClub(value),
   );
   const clubIsHome: boolean | null = homeIsClub
