@@ -653,11 +653,30 @@ export async function recogniseFromText(
   );
   const homeOfficial = resolveOfficialSide(homeRaw, officialNames);
   const awayOfficial = resolveOfficialSide(awayRaw, officialNames);
-  if (homeRaw || awayRaw)
+
+  // Stronger OCR fallback: tickets frequently print one club clearly while
+  // splitting, distorting or omitting the normal "Home v Away" layout.
+  // Scan plausible text lines against this season's OFFICIAL fixture names.
+  // Only unambiguous provider-resolved identities survive; raw OCR fragments
+  // still never become fixture lookup keys.
+  const lineOfficialClues = Array.from(
+    new Set(
+      ocrText
+        .split(/\r?\n/)
+        .map((line) => cleanSide(line))
+        .filter((line) => isTeamish(line))
+        .map((line) => resolveOfficialSide(line, officialNames))
+        .filter((value): value is string => !!value),
+    ),
+  );
+
+  if (homeRaw || awayRaw || lineOfficialClues.length)
     console.log(
       `[ticket-recognition-normalise]\n"${homeRaw ?? "-"}" → ${
         homeOfficial ?? "(unresolved)"
-      }\n"${awayRaw ?? "-"}" → ${awayOfficial ?? "(unresolved)"}`,
+      }\n"${awayRaw ?? "-"}" → ${
+        awayOfficial ?? "(unresolved)"
+      }\nline clues: ${lineOfficialClues.join(", ") || "(none)"}`,
     );
 
   // From here on only normalised identities are used for lookups and display;
@@ -672,8 +691,12 @@ export async function recogniseFromText(
   // Only provider-resolved identities may drive fixture selection. Raw OCR
   // fragments remain available for the review UI, but a plausible-looking
   // fragment must never become a database lookup key.
-  const candidateOpponents = [homeOfficial, awayOfficial].filter(
-    (value): value is string => !!value && !identityIsClub(value),
+  const candidateOpponents = Array.from(
+    new Set(
+      [homeOfficial, awayOfficial, ...lineOfficialClues].filter(
+        (value): value is string => !!value && !identityIsClub(value),
+      ),
+    ),
   );
   const clubIsHome: boolean | null = homeIsClub
     ? true
