@@ -182,6 +182,7 @@ import { openNativeCropper } from "@/lib/ticketCropper";
 import { ensureStorageSchema } from "@/lib/storageMigrations";
 import {
   addManualAttendance,
+  upsertAttendanceForTicket,
   attendanceSuppressionKey,
   canonicalSeason,
   findMatchingAttendance,
@@ -2954,6 +2955,31 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
       : null;
   }
 
+  async function attachConfirmedTicketMediaToHistory(
+    record: AttendanceRecord,
+  ) {
+    if (!photoMemoriesEnabled || !record.matchDate || !record.ground) return;
+
+    const ground = footballGroundForName(record.ground);
+    if (!ground) return;
+
+    try {
+      await stopMediaIndex();
+      const permission = await MediaLibrary.requestPermissionsAsync();
+      if (!permission.granted) return;
+
+      const assets = await matchPhotoAssets(record.matchDate);
+      const references = await matchGeotaggedMatchdayMedia(assets, ground);
+      if (!references.length) return;
+
+      // History owns the media relationship. Persist against its stable
+      // attendance id, using the confirmed fixture date/stadium as evidence.
+      await persistMediaReferencesRef.current(record.id, references);
+    } catch (error) {
+      console.warn("Could not attach confirmed ticket media to History", error);
+    }
+  }
+
   function handleConfirmMatch(item: {
     ticket: SeasonTicket;
     recognition: RecognizedTicket;
@@ -2977,6 +3003,48 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
       ground: confirmedGround,
       confirmedMatch: true,
     });
+
+    const preferredClub =
+      ticketCollectionClubName || item.ticket.clubName || favouriteClub.name;
+    const preferredIsHome = Boolean(
+      item.recognition.homeTeam &&
+        clubNamesMatch(item.recognition.homeTeam, preferredClub),
+    );
+    const preferredIsAway = Boolean(
+      item.recognition.awayTeam &&
+        clubNamesMatch(item.recognition.awayTeam, preferredClub),
+    );
+    const club = preferredIsAway
+      ? item.recognition.awayTeam!
+      : item.recognition.homeTeam || preferredClub;
+    const opponent = preferredIsAway
+      ? item.recognition.homeTeam || ""
+      : item.recognition.awayTeam || "";
+    const attendance = upsertAttendanceForTicket(attendanceHistory, {
+      club,
+      opponent,
+      matchDate: item.recognition.date ?? null,
+      season:
+        item.ticket.seasonKey ||
+        canonicalSeason(item.recognition.date) ||
+        seasonFrame.season,
+      competition: item.recognition.competition ?? null,
+      ground: confirmedGround ?? null,
+      homeAway: preferredIsAway ? "away" : "home",
+      ticketId: item.ticket.id,
+    });
+    const historyRecord =
+      attendance.records.find((record) => record.ticketId === item.ticket.id) ??
+      findMatchingAttendance(attendance.records, {
+        club,
+        opponent,
+        matchDate: item.recognition.date ?? null,
+        competition: item.recognition.competition ?? null,
+        ground: confirmedGround ?? null,
+      });
+    setAttendanceHistory(attendance.records);
+    if (historyRecord) void attachConfirmedTicketMediaToHistory(historyRecord);
+
     markTicketCompleted(item.ticket.id);
     dequeueConfirm(item.ticket.id, "saved");
   }
