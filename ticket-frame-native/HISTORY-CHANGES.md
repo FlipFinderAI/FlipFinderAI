@@ -1135,3 +1135,13 @@ Phone verification: PASS.
 - Preserved all existing OCR/TFD fixture-recognition and compact fixture-picker changes.
 - TypeScript verification: PASS.
 - Focused MatchConfirmationOverlay ESLint verification: PASS.
+
+## V4.0.94
+- Prevented arbitrary images from being manually converted into Match Tickets.
+- Added OCR-derived ticket evidence separate from match confidence.
+- Added a dedicated non-ticket rejection screen with CLEAR IMAGE.
+- CLEAR IMAGE uses the normal ticket deletion cleanup and removes the item from the confirmation queue.
+- Preserved genuine low-confidence ticket manual matching and existing Season Ticket / Car Park Pass flows.
+- TypeScript: PASS.
+- Focused ESLint: PASS.
+- On-device verification: PASS.

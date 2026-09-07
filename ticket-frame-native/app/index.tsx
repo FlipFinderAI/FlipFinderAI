@@ -6564,6 +6564,7 @@ Accept only if these photos are from this match. Choose Another Match for anothe
           text: "Delete",
           style: "destructive",
           onPress: () => {
+            dequeueConfirm(ticket.id, "skipped");
             setTickets((current) =>
               current.filter(
                 (item) =>
@@ -16848,6 +16849,7 @@ const manualCompetitionFixtures = draftMatch.competition
             onConfirm={() => handleConfirmMatch(pending)}
             onPickFixture={(fixture) => handlePickFixture(pending, fixture)}
             onSkip={() => dequeueConfirm(pending.ticket.id, "skipped")}
+            onClearImage={() => deleteTicket(pending.ticket)}
             onRequestAlternatives={(seasonKey) =>
               void loadAlternatives(pending, seasonKey)
             }

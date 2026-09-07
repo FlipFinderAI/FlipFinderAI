@@ -1024,3 +1024,15 @@ Verification:
 - No raw OCR evidence field was added because raw team evidence remains internal to recognition confidence/fixture validation and is not required by the review UI.
 - TypeScript verification passed with an 8 GB Node heap.
 - MatchConfirmationOverlay ESLint verification passed.
+
+## V4.0.94 — Reject non-ticket images
+- Added a separate ticket-image evidence check so arbitrary photos cannot be converted into football tickets through manual fixture selection.
+- Clearly non-ticket images now stop at a dedicated “THIS DOESN’T APPEAR TO BE A TICKET” screen.
+- Added CLEAR IMAGE using the existing ticket deletion and cleanup path.
+- Non-ticket images cannot reach Type of Item, Possible Matches, manual match entry, or the Full Season Frame.
+- Ticket-image evidence is deliberately separate from fixture-recognition confidence.
+- Genuine tickets with weak match recognition can still use the existing manual fixture-selection fallback when credible ticket evidence is present.
+- Season Ticket and Car Park Pass recognition remain supported.
+- TypeScript verification: PASS.
+- Focused ESLint verification: PASS.
+- On-device non-ticket rejection test: PASS.

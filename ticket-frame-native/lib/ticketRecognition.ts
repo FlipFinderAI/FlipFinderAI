@@ -22,6 +22,8 @@ export type RecognizedTicket = {
   seatDetails: TicketSeatDetails | null;
   confidence: number;
   fixtureBacked: boolean;
+  /** Whether the OCR scan itself contains credible evidence that the image is a ticket/pass. */
+  ticketEvidence?: boolean;
   ticketType?: string | null;
   seasonKey?: string | null;
   /** Exact fixture explicitly selected by the user. Manual selection is authoritative. */
@@ -617,6 +619,7 @@ export async function recogniseFromText(
       seatDetails: parseSeatDetails(ocrText),
       confidence: 100,
       fixtureBacked: false,
+      ticketEvidence: true,
       ticketType: "Car Park Pass",
       seasonKey: detectedDate ? null : season || null,
     };
@@ -641,6 +644,7 @@ export async function recogniseFromText(
       seatDetails: parseSeatDetails(ocrText),
       confidence: 100,
       fixtureBacked: false,
+      ticketEvidence: true,
       ticketType: "Season Ticket",
       seasonKey,
     };
@@ -710,6 +714,34 @@ export async function recogniseFromText(
   let competition = competitionFromTicketText(ocrText);
   const roundClue = roundFromTicketText(ocrText);
   const seatDetails = parseSeatDetails(ocrText);
+
+  // Ticket-image evidence is deliberately separate from match confidence.
+  // Manual fixture selection may identify WHICH match a ticket belongs to,
+  // but must never turn an arbitrary photo into a ticket.
+  const explicitTicketText =
+    /\b(?:match\s+ticket|e[-\s]?ticket|mobile\s+ticket|digital\s+ticket|admission|admit|entry|turnstile|ticket\s+type)\b/i.test(
+      ocrText,
+    );
+  const seatingEvidence = Boolean(
+    seatDetails?.stand ||
+      seatDetails?.block ||
+      seatDetails?.row ||
+      seatDetails?.seat ||
+      /\b(?:stand|tier|block|row|seat|gate|turnstile)\b/i.test(ocrText),
+  );
+  const teamPairEvidence = Boolean(homeRaw && awayRaw);
+  const footballDetailCount = [
+    Boolean(date),
+    Boolean(kickoff),
+    Boolean(competition),
+    Boolean(roundClue),
+    Boolean(homeRaw || awayRaw),
+  ].filter(Boolean).length;
+  const ticketEvidence =
+    explicitTicketText ||
+    seatingEvidence ||
+    teamPairEvidence ||
+    footballDetailCount >= 2;
 
   // Season evidence printed on the ticket itself (e.g. "2026/27"). Priority:
   // user-selected season first; this is only a fallback when none was passed.
@@ -994,6 +1026,7 @@ export async function recogniseFromText(
     seatDetails,
     confidence,
     fixtureBacked,
+    ticketEvidence,
     seasonKey: matchedFixture?.season || ocrSeason || dateSeason || searchSeason || null,
     fixtureId: matchedFixture?.fixtureId,
     fixtureHomeScore: matchedFixture?.homeScore ?? null,

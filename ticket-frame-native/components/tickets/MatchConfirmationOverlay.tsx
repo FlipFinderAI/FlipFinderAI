@@ -385,6 +385,7 @@ export default function MatchConfirmationOverlay({
   onConfirm,
   onPickFixture,
   onSkip,
+  onClearImage,
   onRequestAlternatives,
   onSaveEdits,
   onSaveSeasonProfile,
@@ -401,6 +402,7 @@ export default function MatchConfirmationOverlay({
   onConfirm: () => void;
   onPickFixture: (fixture: CachedFixture) => string | null;
   onSkip: () => void;
+  onClearImage: () => void;
   onRequestAlternatives: (seasonKey?: string) => void;
   onSaveEdits: (draft: ItemEditDraft) => string | null;
   onSaveSeasonProfile: (fields: SeasonProfileFields) => void;
@@ -421,12 +423,15 @@ export default function MatchConfirmationOverlay({
       recognition.fixtureBacked &&
       recognition.confidence >= 95,
   );
-  const [step, setStep] = useState<"type" | ItemType | "edit">(() =>
-    isConfidentCarParkText(recognition)
-      ? "carpark"
-      : guessItemType(recognition) === "match" && hasCompleteRecognisedMatch
-        ? "match"
-        : "type",
+  const rejectedAsNonTicket = recognition.ticketEvidence === false;
+  const [step, setStep] = useState<"invalid" | "type" | ItemType | "edit">(() =>
+    rejectedAsNonTicket
+      ? "invalid"
+      : isConfidentCarParkText(recognition)
+        ? "carpark"
+        : guessItemType(recognition) === "match" && hasCompleteRecognisedMatch
+          ? "match"
+          : "type",
   );
   const [itemType, setItemType] = useState<ItemType>(() =>
     guessItemType(recognition),
@@ -692,11 +697,43 @@ export default function MatchConfirmationOverlay({
         <Pressable
           accessibilityLabel="Close item confirmation"
           hitSlop={8}
-          onPress={() => (step === "type" ? onSkip() : setStep("type"))}
+          onPress={() =>
+            step === "invalid"
+              ? onClearImage()
+              : step === "type"
+                ? onSkip()
+                : setStep("type")
+          }
           style={matchConfirmStyles.closeButton}
         >
           <Ionicons name="close" size={20} color="#8b8578" />
         </Pressable>
+
+        {/* ---------- INVALID / NOT A TICKET ---------- */}
+
+        {step === "invalid" ? (
+          <>
+            <Text style={matchConfirmStyles.title}>
+              THIS DOESN&apos;T APPEAR TO BE A TICKET
+            </Text>
+            <Text style={matchConfirmStyles.helpNote}>
+              Clear this image and try another ticket.
+            </Text>
+            <Pressable
+              onPress={onClearImage}
+              style={[
+                matchConfirmStyles.confirmButton,
+                matchConfirmStyles.fullWidthButton,
+                { backgroundColor: accent, borderColor: accent },
+              ]}
+            >
+              <Ionicons name="trash-outline" size={16} color={ink} />
+              <Text style={[matchConfirmStyles.confirmText, { color: ink }]}>
+                CLEAR IMAGE
+              </Text>
+            </Pressable>
+          </>
+        ) : null}
 
         {/* ---------- STEP 1: TYPE OF ITEM ---------- */}
 
