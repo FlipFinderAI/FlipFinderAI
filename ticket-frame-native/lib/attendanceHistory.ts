@@ -160,6 +160,9 @@ type UpsertInput = {
   competition: string | null;
   ground: string | null;
   homeAway: "home" | "away";
+  fixtureId?: string;
+  homeScore?: number | null;
+  awayScore?: number | null;
 };
 
 function mergeIntoExisting(
@@ -194,7 +197,22 @@ export function upsertAttendanceForTicket(
       linked: true,
       records: records.map((record) =>
         record.id === existing.id
-          ? mergeIntoExisting(record, input, { ticketId: input.ticketId })
+          ? {
+              ...mergeIntoExisting(record, input, {
+                ticketId: input.ticketId,
+                fixtureId: input.fixtureId,
+                homeScore: input.homeScore,
+                awayScore: input.awayScore,
+                season: input.season,
+                matchDate: input.matchDate,
+                homeAway: input.homeAway,
+                club: input.club,
+                opponent: input.opponent,
+                confirmed: true,
+              }),
+              competition: input.competition ?? record.competition,
+              ground: input.ground ?? record.ground,
+            }
           : record,
       ),
     };
@@ -209,9 +227,10 @@ export function upsertAttendanceForTicket(
     ground: input.ground,
     homeAway: input.homeAway,
     result: null,
-    homeScore: null,
-    awayScore: null,
+    homeScore: input.homeScore ?? null,
+    awayScore: input.awayScore ?? null,
     ticketId: input.ticketId,
+    fixtureId: input.fixtureId,
     source: "ticket",
     confirmed: true,
     createdAt: Date.now(),

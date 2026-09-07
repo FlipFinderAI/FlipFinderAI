@@ -81,6 +81,23 @@ export function matchFromTicketText(text: string) {
 }
 
 export function dateFromTicketText(text: string, season: string) {
+  const dottedFullDate = text.match(
+    new RegExp(String.raw`\b(\d{1,2})[.](\d{1,2})[.](\d{4})\b`),
+  );
+  if (dottedFullDate) {
+    const day = Number(dottedFullDate[1]);
+    const month = Number(dottedFullDate[2]);
+    const year = Number(dottedFullDate[3]);
+    const candidate = new Date(year, month - 1, day);
+    if (
+      candidate.getFullYear() === year &&
+      candidate.getMonth() === month - 1 &&
+      candidate.getDate() === day
+    ) {
+      return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    }
+  }
+
   const months = [
     "jan",
     "feb",
@@ -153,6 +170,13 @@ export function dateFromTicketText(text: string, season: string) {
 }
 
 export function kickoffFromTicketText(text: string) {
+  const colonClock = text.match(
+    new RegExp(String.raw`\b([01]?\d|2[0-3]):([0-5]\d)\b`),
+  );
+  if (colonClock) {
+    return `${String(Number(colonClock[1])).padStart(2, "0")}:${colonClock[2]}`;
+  }
+
   const near = text.match(
     /(?:kick[\s-]?off|k\s*o)\D{0,24}?(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)?/i,
   );

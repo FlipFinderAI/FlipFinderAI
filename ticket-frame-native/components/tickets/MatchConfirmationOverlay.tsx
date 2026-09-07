@@ -954,16 +954,20 @@ export default function MatchConfirmationOverlay({
                     ground: fixture.venue ?? editDraft.ground,
                     ticketType: "Match Ticket",
                   };
-                  const error = onSaveEdits(completedDraft);
-                  if (error) {
-                    setEditError(error);
+                  const editError = onSaveEdits(completedDraft);
+                  if (editError) {
+                    setEditError(editError);
                     return;
                   }
+
+                  const fixtureError = onPickFixture(fixture);
+                  if (fixtureError) {
+                    setEditError(fixtureError);
+                    return;
+                  }
+
                   setEditError(null);
-                  // Manual fixture selection converges on the same final
-                  // confirmation used by successful automatic recognition.
                   setEditPhase("details");
-                  setStep("match");
                 }}
                 style={[matchConfirmStyles.confirmButton, { backgroundColor: accent }]}
               >

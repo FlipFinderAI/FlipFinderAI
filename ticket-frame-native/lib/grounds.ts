@@ -34,7 +34,7 @@ export const FOOTBALL_GROUNDS: FootballGround[] = [
   { id: "molineux", stadium: "Molineux", club: "Wolverhampton Wanderers", league: "Championship", address: "Waterloo Road, Wolverhampton WV1 4QR", latitude: 52.590217, longitude: -2.130405 },
 
   // Championship
-  { id: "st-andrews", stadium: "St Andrew's @ Knighthead Park", club: "Birmingham City", league: "Championship", address: "Cattell Road, Birmingham B9 4RL", latitude: 52.4758, longitude: -1.8681 },
+  { id: "st-andrews", stadium: "St Andrews", club: "Birmingham City", league: "Championship", address: "Cattell Road, Birmingham B9 4RL", latitude: 52.4758, longitude: -1.8681 },
   { id: "ewood-park", stadium: "Ewood Park", club: "Blackburn Rovers", league: "Championship", address: "Nuttall Street, Blackburn BB2 4JF", latitude: 53.7282, longitude: -2.4851 },
   { id: "ashton-gate", stadium: "Ashton Gate", club: "Bristol City", league: "Championship", address: "Ashton Road, Bristol BS3 2EJ", latitude: 51.44, longitude: -2.6201 },
   { id: "the-valley", stadium: "The Valley", club: "Charlton Athletic", league: "Championship", address: "Floyd Road, London SE7 8BL", latitude: 51.4866, longitude: 0.0374 },

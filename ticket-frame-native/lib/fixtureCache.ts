@@ -302,6 +302,7 @@ export async function fetchAndCacheFixtures(
   const fixtures = rows.filter((row) => row.date).map((row) => {
     const home = clubNamesMatch(row.homeName, club);
     return {
+      fixtureId: row.id,
       opponent: home ? row.awayName : row.homeName,
       homeAway: home ? "home" as const : "away" as const,
       date: row.date ?? "",

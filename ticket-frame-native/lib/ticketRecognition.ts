@@ -23,6 +23,10 @@ export type RecognizedTicket = {
   fixtureBacked: boolean;
   ticketType?: string | null;
   seasonKey?: string | null;
+  /** Exact fixture explicitly selected by the user. Manual selection is authoritative. */
+  fixtureId?: string;
+  fixtureHomeScore?: number | null;
+  fixtureAwayScore?: number | null;
 };
 
 const MONTH_NAMES = [
@@ -556,10 +560,31 @@ export async function recogniseFromText(
   let awayRaw = sides?.away ?? null;
   // A season printed on the ticket is stronger evidence than the Home
   // screen's selected season, especially when several tickets are imported.
-  const ocrSeasonMatch = ocrText.match(/\b(20\d{2})\s*\/\s*(\d{2,4})\b/);
-  const ocrSeason = ocrSeasonMatch
-    ? `${ocrSeasonMatch[1]}/${ocrSeasonMatch[2].slice(-2)}`
-    : null;
+  const ocrSeasonMatch = ocrText.match(
+    /\b((?:20)?\d{2})\s*\/\s*(\d{2,4})\b/,
+  );
+  const ocrSeason = (() => {
+    if (!ocrSeasonMatch) return null;
+
+    const rawStart = ocrSeasonMatch[1];
+    const rawEnd = ocrSeasonMatch[2];
+    const startYear =
+      rawStart.length === 2 ? 2000 + Number(rawStart) : Number(rawStart);
+    const endYear =
+      rawEnd.length === 2 ? 2000 + Number(rawEnd) : Number(rawEnd);
+
+    if (
+      !Number.isInteger(startYear) ||
+      !Number.isInteger(endYear) ||
+      startYear < 2000 ||
+      startYear > 2098 ||
+      endYear !== startYear + 1
+    ) {
+      return null;
+    }
+
+    return `${startYear}/${String(endYear).slice(-2)}`;
+  })();
   const searchSeason = ocrSeason || season || "";
   const date = dateFromTicketText(ocrText, searchSeason);
   let kickoff = kickoffFromTicketText(ocrText);
@@ -716,7 +741,8 @@ export async function recogniseFromText(
     // the confirmed fixture (e.g. a missing year) adopts the provider value.
     if (matchedFixture.date && matchedFixture.date !== resolvedDate)
       resolvedDate = matchedFixture.date;
-    if (!kickoff && matchedFixture.kickoff) kickoff = matchedFixture.kickoff;
+    // A matched fixture is authoritative for kickoff. OCR is only a clue.
+    if (matchedFixture.kickoff) kickoff = matchedFixture.kickoff;
   }
 
   // Final identities, best source first:
@@ -744,7 +770,7 @@ export async function recogniseFromText(
 
   const seasonMatches =
     !!matchedFixture &&
-    (!matchedFixture.season || matchedFixture.season === season);
+    (!matchedFixture.season || matchedFixture.season === searchSeason);
   const ocrEvidenceSides = [ocrHomeEvidence, ocrAwayEvidence].filter(
     (value): value is string => !!value,
   );
@@ -830,5 +856,9 @@ export async function recogniseFromText(
     seatDetails,
     confidence,
     fixtureBacked,
+    seasonKey: searchSeason || null,
+    fixtureId: matchedFixture?.fixtureId,
+    fixtureHomeScore: matchedFixture?.homeScore ?? null,
+    fixtureAwayScore: matchedFixture?.awayScore ?? null,
   };
 }

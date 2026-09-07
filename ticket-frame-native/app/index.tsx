@@ -2777,7 +2777,7 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
           recognition.kickoff ?? "-"
         }\ncompetition: ${recognition.competition ?? "-"}\nground: ${
           recognition.ground ?? "-"
-        }\nseason: ${ticket.seasonKey || seasonFrame.season}\nconfidence: ${recognition.confidence}%`,
+        }\nseason: ${recognition.seasonKey || ticket.seasonKey || seasonFrame.season}\nconfidence: ${recognition.confidence}%`,
       );
       // OCR is only a proposal. Do not write teams/dates into the collection
       // until the user confirms a TFD-backed fixture or saves explicit edits.
@@ -3023,18 +3023,31 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
     const opponent = preferredIsAway
       ? item.recognition.homeTeam || ""
       : item.recognition.awayTeam || "";
+    console.warn("[manual-history] CONFIRM", {
+      ticketId: item.ticket.id,
+      fixtureId: item.recognition.fixtureId ?? null,
+      home: item.recognition.homeTeam,
+      away: item.recognition.awayTeam,
+      date: item.recognition.date,
+      existingHistory: attendanceHistory.length,
+    });
+
     const attendance = upsertAttendanceForTicket(attendanceHistory, {
       club,
       opponent,
       matchDate: item.recognition.date ?? null,
       season:
-        item.ticket.seasonKey ||
         canonicalSeason(item.recognition.date) ||
+        item.recognition.seasonKey ||
+        item.ticket.seasonKey ||
         seasonFrame.season,
       competition: item.recognition.competition ?? null,
       ground: confirmedGround ?? null,
       homeAway: preferredIsAway ? "away" : "home",
       ticketId: item.ticket.id,
+      fixtureId: item.recognition.fixtureId,
+      homeScore: item.recognition.fixtureHomeScore ?? null,
+      awayScore: item.recognition.fixtureAwayScore ?? null,
     });
     const historyRecord =
       attendance.records.find((record) => record.ticketId === item.ticket.id) ??
@@ -3045,6 +3058,31 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
         competition: item.recognition.competition ?? null,
         ground: confirmedGround ?? null,
       });
+    console.warn("[manual-history] UPSERT", {
+      before: attendanceHistory.length,
+      after: attendance.records.length,
+      linked: attendance.linked,
+      historyRecordId: historyRecord?.id ?? null,
+      confirmed: historyRecord?.confirmed ?? null,
+      fixtureId: historyRecord?.fixtureId ?? null,
+    });
+
+    if (historyRecord) {
+      const suppressionKey = attendanceSuppressionKey(historyRecord);
+      if (suppressionKey) {
+        setDeletedHistoryMatchKeys((current) => {
+          if (!current.has(suppressionKey)) return current;
+          const next = new Set(current);
+          next.delete(suppressionKey);
+          console.warn("[manual-history] CLEARED SUPPRESSION", {
+            suppressionKey,
+            historyRecordId: historyRecord.id,
+          });
+          return next;
+        });
+      }
+    }
+
     setAttendanceHistory(attendance.records);
     if (historyRecord) void attachConfirmedTicketMediaToHistory(historyRecord);
 
@@ -3372,13 +3410,17 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
   }
 
   function handlePickFixture(
-    item: { ticket: SeasonTicket },
+    item: {
+      ticket: SeasonTicket;
+      recognition: RecognizedTicket;
+    },
     fixture: CachedFixture,
   ): string | null {
     const home =
       fixture.homeAway === "home" ? favouriteClub.name : fixture.opponent;
     const away =
       fixture.homeAway === "home" ? fixture.opponent : favouriteClub.name;
+
     const duplicate = duplicateMatchMessage(
       item.ticket.id,
       home,
@@ -3386,37 +3428,30 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
       fixture.date,
     );
     if (duplicate) return duplicate;
+
     const ground =
       groundForHomeTeam(home, fixture.date || null) || fixture.venue || null;
-    applyRecognisedMatch(item.ticket.id, {
+
+    const confirmedRecognition: RecognizedTicket = {
+      ...item.recognition,
       homeTeam: home,
       awayTeam: away,
       date: fixture.date || null,
       kickoff: fixture.kickoff || null,
       competition: fixture.competition || null,
-      // The home club's stadium is the canonical geo anchor for match photos.
       ground,
-      confirmedMatch: false,
+      ticketType: "Match Ticket",
+      fixtureBacked: true,
+      fixtureId: fixture.fixtureId,
+      fixtureHomeScore: fixture.homeScore ?? null,
+      fixtureAwayScore: fixture.awayScore ?? null,
+    };
+
+    handleConfirmMatch({
+      ticket: item.ticket,
+      recognition: confirmedRecognition,
     });
-    setConfirmQueue((current) =>
-      current.map((entry, index) =>
-        index === 0 && entry.ticket.id === item.ticket.id
-          ? {
-              ...entry,
-              recognition: {
-                ...entry.recognition,
-                homeTeam: home,
-                awayTeam: away,
-                date: fixture.date || null,
-                kickoff: fixture.kickoff || null,
-                competition: fixture.competition || null,
-                ground,
-                ticketType: "Match Ticket",
-              },
-            }
-          : entry,
-      ),
-    );
+
     return null;
   }
 
@@ -4656,7 +4691,6 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
       (profile) => profile.discoveredFromMedia,
     );
     const hasTicketOwnedHistory = attendanceHistory.some((record) => {
-      if (record.source === "ticket") return true;
       if (record.source !== "season-ticket") return false;
       return !inferredProfiles.some(
         (profile) =>
@@ -4672,13 +4706,12 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
         setAttendanceHistory((current) =>
           current.filter(
             (record) =>
-              record.source !== "ticket" &&
-              (record.source !== "season-ticket" ||
+              record.source !== "season-ticket" ||
                 inferredProfiles.some(
                   (profile) =>
                     clubNamesMatch(profile.club, record.club) &&
                     profile.seasonKey === record.season,
-                )),
+                ),
           ),
         );
     }, 0);
@@ -9894,11 +9927,8 @@ Choose one team. Its colours automatically control the Club Colours frame style.
       tickets,
       resolvedHistoryClubName,
     );
-    const manualRecords = attendanceHistory.filter(
-      (record) => record.source !== "ticket",
-    );
     const mergedHistory = mergeHistoryRecords(
-      manualRecords,
+      attendanceHistory,
       derivedFromTickets,
     ).filter((record) => {
       const key = attendanceSuppressionKey(record);
@@ -10052,8 +10082,13 @@ Choose one team. Its colours automatically control the Club Colours frame style.
     // fallback remain unchanged, so this improves speed without changing
     // which fixture is considered correct.
     const historyFixturesByDate = new Map<string, CachedFixture[]>();
+    const historyFixturesById = new Map<string, CachedFixture>();
 
     for (const fixture of historyFixtures) {
+      if (fixture.fixtureId) {
+        historyFixturesById.set(fixture.fixtureId, fixture);
+      }
+
       const dateKey = fixture.date;
       if (!dateKey) continue;
 
@@ -10068,6 +10103,11 @@ Choose one team. Its colours automatically control the Club Colours frame style.
     const cachedFixtureForRecord = (
       record: AttendanceRecord,
     ): CachedFixture | undefined => {
+      if (record.fixtureId) {
+        const exactFixture = historyFixturesById.get(record.fixtureId);
+        if (exactFixture) return exactFixture;
+      }
+
       if (!record.matchDate) return undefined;
 
       const candidates =
@@ -13832,9 +13872,72 @@ const manualCompetitionFixtures = draftMatch.competition
               </Pressable>
               <Pressable
                 onPress={() => {
-                  setSelectedHistoryDeleteIds(new Set());
-                  setHistorySelectionMode(true);
-                  setHistoryView("matches");
+                  Alert.alert(
+                    "Delete History",
+                    "Choose what you want to remove.",
+                    [
+                      {
+                        text: "Cancel",
+                        style: "cancel",
+                      },
+                      {
+                        text: "Delete Matches",
+                        onPress: () => {
+                          setSelectedHistoryDeleteIds(new Set());
+                          setHistorySelectionMode(true);
+                          setHistoryView("matches");
+                        },
+                      },
+                      {
+                        text: "Delete All History",
+                        style: "destructive",
+                        onPress: () => {
+                          Alert.alert(
+                            "Delete all Football History?",
+                            "This removes every match from Football History. Photos and videos in your iPhone Photos library, season tickets and the fixture database will not be deleted. Add New will keep these matches deleted.",
+                            [
+                              {
+                                text: "Cancel",
+                                style: "cancel",
+                              },
+                              {
+                                text: "Delete All",
+                                style: "destructive",
+                                onPress: () => {
+                                  const allHistoryIds = new Set(
+                                    mergedHistory.map((record) => record.id),
+                                  );
+
+                                  const allSuppressionKeys = mergedHistory
+                                    .map(attendanceSuppressionKey)
+                                    .filter(Boolean);
+
+                                  setDeletedHistoryMatchKeys((current) => {
+                                    const next = new Set(current);
+                                    for (const key of allSuppressionKeys) {
+                                      next.add(key);
+                                    }
+                                    return next;
+                                  });
+
+                                  setAttendanceHistory((current) =>
+                                    current.filter(
+                                      (record) => !allHistoryIds.has(record.id),
+                                    ),
+                                  );
+
+                                  setSelectedHistoryDeleteIds(new Set());
+                                  setHistorySelectionMode(false);
+                                  setSelectedHistoryRecordId(null);
+                                  setHistoryView("matches");
+                                },
+                              },
+                            ],
+                          );
+                        },
+                      },
+                    ],
+                  );
                 }}
                 style={({ pressed }) => [
                   s.hxActionButton,
@@ -13848,7 +13951,7 @@ const manualCompetitionFixtures = draftMatch.competition
                     opacity: pressed ? 0.65 : 1,
                   },
                 ]}
-                accessibilityLabel="Edit or delete matches from History"
+                accessibilityLabel="Delete matches or all Football History"
               >
                 <Ionicons name="trash-outline" size={16} color="#a03030" />
                 <Text style={[s.hxActionButtonText, { color: "#a03030", fontSize: 10 }]}> 
