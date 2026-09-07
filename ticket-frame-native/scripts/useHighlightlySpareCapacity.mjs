@@ -70,6 +70,19 @@ const leagueDefinitions = [
   // Premier League history never outranks lower-league or Scottish history.
   ["Premier League", 33973],
 ];
+const priorityLeagueNames = new Set([
+  "League One",
+  "League Two",
+  "Scottish Premiership",
+  "Scottish Championship",
+  "Scottish League One",
+  "Scottish League Two",
+]);
+const priorityLeagueTasks = [2025, 2024, 2023].flatMap((start) =>
+  leagueDefinitions
+    .filter(([competition]) => priorityLeagueNames.has(competition))
+    .map(([competition, leagueId]) => [competition, leagueId, start]),
+);
 
 const seasonLabel = (start) => `${start}-${start + 1}`;
 const normalStatus = (value) => String(value ?? "SCHEDULED")
@@ -179,7 +192,25 @@ if (refreshFaRounds) {
   delete output.backfillState["cup:39079:2025"];
 }
 
+for (const [competition, leagueId, start] of primaryCupTasks) {
+  if (mayContinue()) {
+    await backfillList(competition, leagueId, start, "cup");
+  }
+}
+
+// Recent lower-league coverage is the most useful fixture-date authority for
+// ticket OCR and matchday photos. Fill it before the broad historical cup
+// queue can consume the daily allowance, especially around early-September
+// fixture dates shared by league and cup schedules.
+for (const [competition, leagueId, start] of priorityLeagueTasks) {
+  if (mayContinue()) {
+    await backfillList(competition, leagueId, start, "league");
+  }
+}
+
+const primaryCupKeys = new Set(primaryCupTasks.map(taskKey));
 for (const [competition, leagueId, start] of cupTasks) {
+  if (primaryCupKeys.has(taskKey([competition, leagueId, start]))) continue;
   if (mayContinue()) {
     await backfillList(competition, leagueId, start, "cup");
   }
