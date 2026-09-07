@@ -13525,6 +13525,31 @@ const manualCompetitionFixtures = draftMatch.competition
                   setSeasonSeatDraft(null);
                   setHomeFixturesProfileId(profile.id);
                 };
+                const deleteSeasonTicketProfile = (
+                  profile: SeasonTicketProfile,
+                ) => {
+                  Alert.alert(
+                    "Delete season ticket?",
+                    `${profile.club} ${profile.seasonKey} will be removed from Season Ticket Attendance. Your saved ticket image and confirmed match history will stay.`,
+                    [
+                      { text: "Cancel", style: "cancel" },
+                      {
+                        text: "Delete",
+                        style: "destructive",
+                        onPress: () => {
+                          setSeasonTicketProfiles((current) =>
+                            current.filter((item) => item.id !== profile.id),
+                          );
+                          if (homeFixturesProfileId === profile.id) {
+                            setHomeFixturesProfileId(null);
+                            setProfileFixtures(null);
+                            setSeasonSeatDraft(null);
+                          }
+                        },
+                      },
+                    ],
+                  );
+                };
 
                 return (
                   <View style={{ marginBottom: 20 }}>
@@ -13567,9 +13592,14 @@ const manualCompetitionFixtures = draftMatch.competition
                                     key={profile.id}
                                     accessibilityRole="button"
                                     accessibilityLabel={`Open ${displayClub} ${profile.seasonKey} season ticket`}
+                                    accessibilityHint="Press and hold to delete this season ticket"
                                     onPress={() =>
                                       openSeasonTicketProfile(profile)
                                     }
+                                    onLongPress={() =>
+                                      deleteSeasonTicketProfile(profile)
+                                    }
+                                    delayLongPress={450}
                                     style={({ pressed }) => ({
                                       width: carouselCardWidth,
                                       minHeight: 104,
@@ -13640,8 +13670,14 @@ const manualCompetitionFixtures = draftMatch.competition
                       </>
                     ) : (
                       sortedSeasonTicketProfiles.map((profile) => (
-                        <View
+                        <Pressable
                           key={profile.id}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Open ${profile.club} ${profile.seasonKey} season ticket`}
+                          accessibilityHint="Press and hold to delete this season ticket"
+                          onPress={() => openSeasonTicketProfile(profile)}
+                          onLongPress={() => deleteSeasonTicketProfile(profile)}
+                          delayLongPress={450}
                           style={[
                             s.collectionCard,
                             {
@@ -13665,14 +13701,11 @@ const manualCompetitionFixtures = draftMatch.competition
                               Home fixtures only. Confirm attendance here.
                             </Text>
                           </View>
-                          <Pressable
+                          <View
                             style={[
                               s.resetButton,
                               { backgroundColor: favouriteClub.primary },
                             ]}
-                            onPress={() =>
-                              openSeasonTicketProfile(profile)
-                            }
                           >
                             <Text
                               style={[
@@ -13686,8 +13719,8 @@ const manualCompetitionFixtures = draftMatch.competition
                             >
                               OPEN
                             </Text>
-                          </Pressable>
-                        </View>
+                          </View>
+                        </Pressable>
                       ))
                     )}
                   </View>
