@@ -3790,12 +3790,12 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
       return Promise.all([
         AsyncStorage.getItem(SAVED_FRAME_KEY),
         AsyncStorage.getItem(GROUND_VISITS_KEY),
+        AsyncStorage.getItem(TICKET_STYLE_KEY),
       ]);
     })()
-      .then(([saved, groundRaw]) => {
+      .then(([saved, groundRaw, storedTicketStyle]) => {
         if (groundRaw) legacyUserDataRef.current = true;
-        if (!saved) return;
-        try {
+        if (saved) try {
           const value = JSON.parse(saved) as {
             tickets?: SeasonTicket[];
             frameStyle?: string;
@@ -3846,27 +3846,25 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
         } catch {
           console.warn("[startup] saved frame unreadable — treated as fresh");
         }
+        if (
+          storedTicketStyle === "old-school" ||
+          storedTicketStyle === "e-ticket" ||
+          storedTicketStyle === "match-ticket"
+        )
+          setTicketStyle("e-ticket");
+        console.log(
+          "[HOME-TICKET-IMAGE] stored global ticket style:",
+          storedTicketStyle ?? "(none)",
+          "→ resolved: e-ticket",
+        );
       })
       .catch(() => {})
       .finally(() => {
-        void AsyncStorage.getItem(TICKET_STYLE_KEY)
-          .then((raw) => {
-            if (raw === "old-school" || raw === "e-ticket" || raw === "match-ticket")
-              setTicketStyle("e-ticket");
-            console.log(
-              "[HOME-TICKET-IMAGE] stored global ticket style:",
-              raw ?? "(none)",
-              "→ resolved: e-ticket",
-            );
-          })
-          .catch(() => {})
-          .finally(() => {
-            // Existing/recovered installations open directly into Ticket Frame.
-            // Keep onboarding available for manual replay without blocking startup.
-            void AsyncStorage.setItem(ONBOARDING_KEY, "true").catch(() => {});
-            setShowOnboarding(false);
-            setStorageReady(true);
-          });
+        // Existing/recovered installations open directly into Ticket Frame.
+        // Keep onboarding available for manual replay without blocking startup.
+        void AsyncStorage.setItem(ONBOARDING_KEY, "true").catch(() => {});
+        setShowOnboarding(false);
+        setStorageReady(true);
       });
   }, []);
   useEffect(() => {
