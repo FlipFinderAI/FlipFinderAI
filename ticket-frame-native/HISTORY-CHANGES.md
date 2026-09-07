@@ -1128,3 +1128,10 @@ Phone verification: PASS.
 - 2026-09-06: Added and verified Back to Home navigation on Fixtures and Football History.
 
 - 2026-09-06: Fixed Scottish Championship/League One/League Two fixture loading caused by provider club-name mismatches.
+
+## V4.0.93
+- Tightened automatic Match confirmation so complete recognition alone is no longer sufficient.
+- Direct Match confirmation now additionally requires `fixtureBacked` and recognition confidence of at least 95%.
+- Preserved all existing OCR/TFD fixture-recognition and compact fixture-picker changes.
+- TypeScript verification: PASS.
+- Focused MatchConfirmationOverlay ESLint verification: PASS.

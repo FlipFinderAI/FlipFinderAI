@@ -2997,10 +2997,11 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
       Alert.alert("Duplicate match ticket", duplicate);
       return;
     }
-    const confirmedGround = item.recognition.homeTeam
-      ? groundForHomeTeam(item.recognition.homeTeam, item.recognition.date) ||
-        item.recognition.ground
-      : item.recognition.ground;
+    const confirmedGround =
+      item.recognition.ground ||
+      (item.recognition.homeTeam
+        ? groundForHomeTeam(item.recognition.homeTeam, item.recognition.date)
+        : null);
     applyRecognisedMatch(item.ticket.id, {
       ...item.recognition,
       ground: confirmedGround,
@@ -3429,8 +3430,10 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
     );
     if (duplicate) return duplicate;
 
+    // The exact fixture venue is authoritative. Only fall back to the
+    // listed home club's ground when the fixture itself has no venue.
     const ground =
-      groundForHomeTeam(home, fixture.date || null) || fixture.venue || null;
+      fixture.venue || groundForHomeTeam(home, fixture.date || null) || null;
 
     const confirmedRecognition: RecognizedTicket = {
       ...item.recognition,
@@ -6722,34 +6725,31 @@ const ticketCollectionClub = ticketClubOption();
 const seasonTickets = sortedTickets.filter(
   (ticket) => ticket.seasonKey === seasonFrame.season,
 );
+const frameEligibleTickets = tickets.filter((ticket) => {
+  const seasonKey = ticket.seasonKey?.trim() ?? "";
+  const modernSeason =
+    /^\d{4}\/\d{2}$/.test(seasonKey) &&
+    seasonKey.localeCompare("2023/24") >= 0;
+  const footballTicket =
+    ticket.ticketType === "Season Ticket" ||
+    ticket.confirmedMatch === true;
+
+  return modernSeason && footballTicket;
+});
+
 const homeSeasonOptions = Array.from(
-  new Set([
-    ...tickets
-      .filter(
-        (ticket) =>
-          (ticket.ticketType === "Season Ticket" ||
-            !isNonMatchTicketType(ticket.ticketType)) &&
-          /^\d{4}\/\d{2}$/.test(ticket.seasonKey?.trim() ?? ""),
-      )
-      .map((ticket) => ticket.seasonKey || null)
-      .filter(Boolean),
-    ...seasonTicketProfiles
-      .map((profile) =>
-        /^\d{4}\/\d{2}$/.test(profile.seasonKey.trim())
-          ? profile.seasonKey.trim()
-          : null,
-      )
-      .filter(Boolean),
-  ]),
-).sort((a, b) => b!.localeCompare(a!)) as string[];
-const homeDisplayTickets = [...tickets]
-  .filter((ticket) =>
-    homeTicketSeason === "All Tickets" ||
-    ticket.seasonKey === homeTicketSeason,
+  new Set(frameEligibleTickets.map((ticket) => ticket.seasonKey!.trim())),
+).sort((a, b) => b.localeCompare(a));
+
+const homeDisplayTickets = [...frameEligibleTickets]
+  .filter(
+    (ticket) =>
+      homeTicketSeason === "All Tickets" ||
+      ticket.seasonKey === homeTicketSeason,
   )
   .sort(byCollectionOrder);
 
-const homeWalletTickets = [...homeDisplayTickets].sort((a, b) => {
+const homeWalletTickets = [...tickets].sort((a, b) => {
   const dateDifference = byMatchDateOldestFirst(a, b);
   if (dateDifference !== 0) return dateDifference;
 
@@ -6814,10 +6814,13 @@ const homeWalletOpenGesture = Gesture.Pan()
       });
     }
   });
-const fullFrameTickets = sortedTickets.filter(
-  (ticket) =>
-    fullFrameSeason === "All Tickets" || ticket.seasonKey === fullFrameSeason,
-);
+const fullFrameTickets = [...frameEligibleTickets]
+  .filter(
+    (ticket) =>
+      fullFrameSeason === "All Tickets" ||
+      ticket.seasonKey === fullFrameSeason,
+  )
+  .sort(byCollectionOrder);
 const fullFrameTitle =
   fullFrameSeason === "All Tickets"
     ? `${ticketCollectionClub.name} All Tickets`
@@ -6895,6 +6898,25 @@ const handleTileDrop = (id: string, tx: number, ty: number) => {
           favouriteClub.id,
         );
         if (cachedMine.length) {
+          console.warn("[fixture-debug]", {
+            club: favouriteClub.name,
+            league: favouriteClub.league,
+            season: CURRENT_SEASON,
+            count: cachedMine.length,
+            sep2: cachedMine
+              .filter((row) => row.date === "2026-09-02")
+              .map((row) => `${row.homeName} v ${row.awayName}`),
+            sep5: cachedMine
+              .filter((row) => row.date === "2026-09-05")
+              .map((row) => ({
+                fixture: `${row.homeName} v ${row.awayName}`,
+                homeScore: row.homeScore,
+                awayScore: row.awayScore,
+                status: row.status,
+                played: row.played,
+              })),
+            generatedAt: getMatchDatabaseGeneratedAt(),
+          });
           if (requestId !== fixtureLoadRequestRef.current) return;
           setSeasonFixtures(cachedMine);
           verifiedFixtureClubRef.current = ownerKey;

@@ -8,6 +8,30 @@ import {
 import { CURRENT_SEASON, isFixturePlayed, type FixtureRow, type TableRow } from "@/lib/fixtures";
 import { clubNamesMatch } from "@/lib/ticketText";
 
+function tableClubName(name: string): string {
+  const clean = name
+    .replace(/\s+AFC$/i, "")
+    .replace(/\s+FC$/i, "")
+    .trim();
+
+  const aliases: Record<string, string> = {
+    "Manchester City": "Man City",
+    "Manchester United": "Man Utd",
+    "Sheffield United": "Sheff Utd",
+    "Sheffield Wednesday": "Sheff Wed",
+    "Nottingham Forest": "Nott'm Forest",
+    "Wolverhampton Wanderers": "Wolves",
+    "Brighton & Hove Albion": "Brighton",
+    "Tottenham Hotspur": "Tottenham",
+    "West Ham United": "West Ham",
+    "Newcastle United": "Newcastle",
+    "Leeds United": "Leeds",
+    "Leicester City": "Leicester",
+  };
+
+  return aliases[clean] ?? clean;
+}
+
 export function FixtureListRow({
   item,
   nextMatchId,
@@ -65,7 +89,7 @@ export function FixtureListRow({
             {home ? "H" : "A"}
           </Text>
         </View>
-        <Text numberOfLines={1} style={styles.fixtureTeams}>
+        <Text style={styles.fixtureTeams}>
           <Text style={{ fontWeight: home ? "800" : "400" }}>
             {item.homeName || "?"}
           </Text>
@@ -121,8 +145,13 @@ export function LeagueTableRow({
       ]}
     >
       <Text style={[styles.tableCellPos, cellStyle]}>{index + 1}</Text>
-      <Text numberOfLines={1} style={[styles.tableTeam, cellStyle]}>
-        {item.name}
+      <Text
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.82}
+        style={[styles.tableTeam, cellStyle]}
+      >
+        {tableClubName(item.name)}
       </Text>
       <Text style={[styles.tableCell, cellStyle]}>{item.played}</Text>
       <Text style={[styles.tableCell, cellStyle]}>{item.win}</Text>

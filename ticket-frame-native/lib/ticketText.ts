@@ -171,10 +171,14 @@ export function dateFromTicketText(text: string, season: string) {
 
 export function kickoffFromTicketText(text: string) {
   const colonClock = text.match(
-    new RegExp(String.raw`\b([01]?\d|2[0-3]):([0-5]\d)\b`),
+    /\b([01]?\d|2[0-3]):([0-5]\d)\s*(am|pm)?\b/i,
   );
   if (colonClock) {
-    return `${String(Number(colonClock[1])).padStart(2, "0")}:${colonClock[2]}`;
+    let hours = Number(colonClock[1]);
+    const meridiem = colonClock[3]?.toLowerCase();
+    if (meridiem === "pm" && hours < 12) hours += 12;
+    if (meridiem === "am" && hours === 12) hours = 0;
+    return `${String(hours).padStart(2, "0")}:${colonClock[2]}`;
   }
 
   const near = text.match(
@@ -208,6 +212,20 @@ export function competitionFromTicketText(text: string) {
     if (!line || line.length > 60) continue;
     if (COMPETITION_LINE.test(line)) return line;
   }
+  return null;
+}
+
+export function roundFromTicketText(text: string) {
+  const normalised = normaliseFixtureText(text);
+
+  const stage = normalised.match(
+    /\b(semi final|semi finals|semifinal|semifinals|quarter final|quarter finals|quarterfinal|quarterfinals|final)\b/,
+  );
+  if (stage) return stage[1];
+
+  const round = normalised.match(/\b(?:round|r)\s*(\d{1,2})\b/);
+  if (round) return `round ${round[1]}`;
+
   return null;
 }
 

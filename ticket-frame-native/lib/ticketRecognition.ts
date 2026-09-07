@@ -6,6 +6,7 @@ import {
   matchFromTicketText,
   normaliseFixtureText,
   parseSeatDetails,
+  roundFromTicketText,
   type TicketSeatDetails,
 } from "./ticketText";
 import { fetchAndCacheFixtures, type CachedFixture } from "./fixtureCache";
@@ -358,7 +359,14 @@ function resolveOfficialSide(
 // Universal engine: no clubs, dates or competitions are ever hard-coded here.
 // The fixture database is the authority; OCR lines are only evidence used to
 // rank candidates.
-type FixtureCandidate = { fixture: CachedFixture; score: number };
+type FixtureCandidate = {
+  fixture: CachedFixture;
+  score: number;
+  dateExact: boolean;
+  competitionMatches: boolean;
+  roundMatches: boolean;
+  competitionRoundMatch: boolean;
+};
 
 function describeFixture(fixture: CachedFixture, clubName: string) {
   const pairing =
@@ -384,6 +392,7 @@ async function bestFixtureForSides(
   ocrDate: string | null,
   ocrKickoff: string | null,
   ocrCompetition: string | null,
+  ocrRound: string | null,
 ): Promise<FixtureSearchOutcome> {
   const hasTeamClue = candidateOpponents.length > 0;
   let searchMethod = "none";
@@ -398,7 +407,7 @@ async function bestFixtureForSides(
   );
 
   // Any single clue is enough to consult the fixture database.
-  if (!hasTeamClue && !ocrDate && !ocrCompetition) {
+  if (!hasTeamClue && !ocrDate && !ocrCompetition && !ocrRound) {
     console.log(
       `[ticket-recognition-fixture-search]\nsearch method: none\ncandidates: 0\nmatches:\n  (no usable OCR clues)`,
     );
@@ -427,21 +436,55 @@ async function bestFixtureForSides(
       }
     }
     const dateExact = !!ocrDate && !!fixture.date && fixture.date === ocrDate;
-    // A candidate needs one solid signal: a real name hit, or the exact date.
-    if (opponentScore <= 0 && !dateExact) continue;
-    let score = opponentScore + (dateExact ? 25 : 0);
+    const roundMatches =
+      !!ocrRound &&
+      !!fixture.round &&
+      (() => {
+        const clue = normaliseFixtureText(ocrRound);
+        const official = normaliseFixtureText(fixture.round);
+        return (
+          clue === official ||
+          clue.includes(official) ||
+          official.includes(clue)
+        );
+      })();
+    const competitionMatches =
+      !!ocrCompetition &&
+      !!fixture.competition &&
+      (() => {
+        const clue = normaliseFixtureText(ocrCompetition);
+        const official = normaliseFixtureText(fixture.competition);
+        return (
+          clue === official ||
+          clue.includes(official) ||
+          official.includes(clue)
+        );
+      })();
+    // A round/stage clue may identify a fixture only when the competition also
+    // agrees. TFD remains authoritative; generic words such as "Final" alone
+    // must never choose a match.
+    const competitionRoundMatch = roundMatches && competitionMatches;
+    if (opponentScore <= 0 && !dateExact && !competitionRoundMatch) continue;
+    let score =
+      opponentScore +
+      (dateExact ? 25 : 0) +
+      (competitionRoundMatch ? 25 : 0);
     if (clubIsHome === true && fixture.homeAway !== "home") score -= 15;
     if (clubIsHome === false && fixture.homeAway !== "away") score -= 15;
     if (ocrCompetition && fixture.competition) {
-      const compA = normaliseFixtureText(ocrCompetition);
-      const compB = normaliseFixtureText(fixture.competition);
-      if (compA === compB || compA.includes(compB) || compB.includes(compA))
-        score += 8;
+      if (competitionMatches) score += 8;
       else score -= 6;
     }
     if (ocrKickoff && fixture.kickoff && ocrKickoff === fixture.kickoff)
       score += 3;
-    scored.push({ fixture, score });
+    scored.push({
+      fixture,
+      score,
+      dateExact,
+      competitionMatches,
+      roundMatches,
+      competitionRoundMatch,
+    });
   }
 
   scored.sort((a, b) => b.score - a.score);
@@ -453,16 +496,39 @@ async function bestFixtureForSides(
   let accepted: CachedFixture | null = null;
   let declineReason: string | null = null;
   const winner = scored[0];
+
+  // Team names and home/away orientation alone can identify an opponent, but
+  // they cannot prove which season an undated ticket belongs to. The selected
+  // UI season is search context, not ticket evidence. Keep the TFD candidates
+  // for manual selection rather than silently assigning the ticket to that
+  // season.
+  const teamsOnly =
+    hasTeamClue &&
+    !ocrDate &&
+    !ocrKickoff &&
+    !ocrCompetition &&
+    !ocrRound;
+
   const acceptanceThreshold = hasTeamClue ? 30 : 25;
   const tied = winner
     ? scored.filter((candidate) => candidate.score === winner.score)
     : [];
-  if (!winner || winner.score < acceptanceThreshold) {
+  if (teamsOnly) {
+    declineReason = "teams alone cannot prove the ticket season";
+  } else if (!winner || winner.score < acceptanceThreshold) {
     declineReason = winner ? "no candidate reached the acceptance threshold" : null;
   } else if (tied.length > 1) {
     declineReason = `${tied.length} fixtures tie without enough evidence to separate them`;
-  } else if (hasTeamClue && ocrDate && winner.fixture.date !== ocrDate) {
-    declineReason = "team and printed date point to different fixtures";
+  } else if (
+    hasTeamClue &&
+    ocrDate &&
+    winner.fixture.date !== ocrDate &&
+    !winner.competitionRoundMatch
+  ) {
+    // A disagreeing OCR date normally blocks automatic selection. Recover
+    // only when the unique TFD winner is independently corroborated by both
+    // competition and round/stage; OCR dates are clues, not authority.
+    declineReason = "team and OCR date point to different fixtures without competition/round confirmation";
   } else if (!hasTeamClue) {
     // Kickoff/competition agreement already separates candidates in the score;
     // an unchanged tie means the ticket carries nothing that decides it.
@@ -531,6 +597,31 @@ export async function recogniseFromText(
   season: string,
   opts?: FixtureMatchOptions,
 ): Promise<RecognizedTicket> {
+  const carParkPassText =
+    /\b(?:car\s*park(?:ing)?(?:\s+(?:pass|permit|ticket))?|parking\s+(?:pass|permit|ticket)|matchday\s+parking|season\s+parking(?:\s+(?:pass|permit))?)\b/i.test(
+      ocrText,
+    );
+
+  if (carParkPassText) {
+    const detectedDate = dateFromTicketText(ocrText, season);
+    console.log(
+      "[ticket-recognition-car-park]\nticketType: Car Park Pass\nmatch recognition skipped",
+    );
+    return {
+      homeTeam: null,
+      awayTeam: null,
+      date: detectedDate,
+      kickoff: null,
+      competition: null,
+      ground: null,
+      seatDetails: parseSeatDetails(ocrText),
+      confidence: 100,
+      fixtureBacked: false,
+      ticketType: "Car Park Pass",
+      seasonKey: detectedDate ? null : season || null,
+    };
+  }
+
   // Season passes are not matches — detect and stop before any recognition.
   if (/season\s+(?:ticket|card|pass)/i.test(ocrText)) {
     const printedSeason = ocrText.match(/\b(20\d{2})\s*\/\s*(\d{2,4})\b/);
@@ -585,8 +676,25 @@ export async function recogniseFromText(
 
     return `${startYear}/${String(endYear).slice(-2)}`;
   })();
-  const searchSeason = ocrSeason || season || "";
-  const date = dateFromTicketText(ocrText, searchSeason);
+  const dateParsingSeason = ocrSeason || season || "";
+  const date = dateFromTicketText(ocrText, dateParsingSeason);
+  const dateSeason = (() => {
+    if (!date) return null;
+    const match = date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return null;
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    if (!Number.isInteger(year) || !Number.isInteger(month)) return null;
+    const startYear = month >= 7 ? year : year - 1;
+    return `${startYear}/${String(startYear + 1).slice(-2)}`;
+  })();
+  // A printed season is authoritative. Without one, OCR dates remain clues:
+  // search both the selected season and the date-implied season when they
+  // differ, then let the combined TFD evidence identify the fixture.
+  const searchSeasons = ocrSeason
+    ? [ocrSeason]
+    : Array.from(new Set([season, dateSeason].filter((value): value is string => !!value)));
+  const searchSeason = searchSeasons[0] || "";
   let kickoff = kickoffFromTicketText(ocrText);
 
   console.log(
@@ -600,6 +708,7 @@ export async function recogniseFromText(
   );
 
   let competition = competitionFromTicketText(ocrText);
+  const roundClue = roundFromTicketText(ocrText);
   const seatDetails = parseSeatDetails(ocrText);
 
   // Season evidence printed on the ticket itself (e.g. "2026/27"). Priority:
@@ -635,9 +744,14 @@ export async function recogniseFromText(
   let seasonFixtures: CachedFixture[] = [];
   if (hasAnyClue) {
     try {
-      seasonFixtures = await fetchAndCacheFixtures(clubName, searchSeason, {
-        league: opts?.league,
-      });
+      const fixtureSets = await Promise.all(
+        searchSeasons.map((candidateSeason) =>
+          fetchAndCacheFixtures(clubName, candidateSeason, {
+            league: opts?.league,
+          }),
+        ),
+      );
+      seasonFixtures = fixtureSets.flat();
     } catch {
       console.log("[ticket-recognition-fixture-search] fixture fetch failed");
     }
@@ -714,13 +828,14 @@ export async function recogniseFromText(
     );
     const search = await bestFixtureForSides(
       clubName,
-      searchSeason,
+      searchSeasons.join(" + "),
       seasonFixtures,
       candidateOpponents,
       clubIsHome,
       resolvedDate,
       kickoff,
       competition,
+      roundClue,
     );
     matchedFixture = search.fixture;
     searchOutcome = search;
@@ -793,7 +908,7 @@ export async function recogniseFromText(
 
   const seasonMatches =
     !!matchedFixture &&
-    (!matchedFixture.season || matchedFixture.season === searchSeason);
+    (!matchedFixture.season || searchSeasons.includes(matchedFixture.season));
   const ocrEvidenceSides = [ocrHomeEvidence, ocrAwayEvidence].filter(
     (value): value is string => !!value,
   );
@@ -879,7 +994,7 @@ export async function recogniseFromText(
     seatDetails,
     confidence,
     fixtureBacked,
-    seasonKey: searchSeason || null,
+    seasonKey: matchedFixture?.season || ocrSeason || dateSeason || searchSeason || null,
     fixtureId: matchedFixture?.fixtureId,
     fixtureHomeScore: matchedFixture?.homeScore ?? null,
     fixtureAwayScore: matchedFixture?.awayScore ?? null,

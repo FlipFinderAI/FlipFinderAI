@@ -98,10 +98,61 @@ export function applyHostedMatchDatabase(value: unknown) {
   for (const [competitionName, hostedSeasons] of Object.entries(
     hosted.competitions,
   )) {
-    mergedCompetitions[competitionName] = {
-      ...(matchDatabase.competitions[competitionName] ?? {}),
-      ...hostedSeasons,
+    const existingSeasons = matchDatabase.competitions[competitionName] ?? {};
+    const mergedSeasons: Record<string, BundledSeason> = {
+      ...existingSeasons,
     };
+
+    for (const [season, hostedBundle] of Object.entries(hostedSeasons)) {
+      const existingBundle = existingSeasons[season];
+      if (!existingBundle) {
+        mergedSeasons[season] = hostedBundle;
+        continue;
+      }
+
+      const fixturesById = new Map(
+        (existingBundle.fixtures ?? []).map((fixture) => [fixture.id, fixture]),
+      );
+
+      for (const hostedFixture of hostedBundle.fixtures ?? []) {
+        const existingFixture = fixturesById.get(hostedFixture.id);
+        if (!existingFixture) {
+          fixturesById.set(hostedFixture.id, hostedFixture);
+          continue;
+        }
+
+        const existingFinal =
+          existingFixture.homeScore != null &&
+          existingFixture.awayScore != null;
+        const hostedFinal =
+          hostedFixture.homeScore != null &&
+          hostedFixture.awayScore != null;
+
+        const mergedFixture = {
+          ...existingFixture,
+          ...hostedFixture,
+        };
+
+        if (existingFinal && !hostedFinal) {
+          mergedFixture.homeScore = existingFixture.homeScore;
+          mergedFixture.awayScore = existingFixture.awayScore;
+          mergedFixture.status = existingFixture.status;
+          mergedFixture.played = existingFixture.played;
+        }
+
+        fixturesById.set(hostedFixture.id, mergedFixture);
+      }
+
+      mergedSeasons[season] = {
+        fixtures: sortFixtures(Array.from(fixturesById.values())),
+        table:
+          hostedBundle.table?.length
+            ? hostedBundle.table
+            : existingBundle.table ?? [],
+      };
+    }
+
+    mergedCompetitions[competitionName] = mergedSeasons;
   }
 
   matchDatabase = {
@@ -433,13 +484,22 @@ export async function fetchLeagueTable(
   const bundle = footballSeason(leagueLabel, season);
   if (!bundle) return { rows: [], season };
 
-  return {
-    rows: reconcileDuplicateTableRows(
-      bundle.table ?? [],
-      bundle.fixtures ?? [],
-    ),
-    season,
-  };
+  const storedRows = reconcileDuplicateTableRows(
+    bundle.table ?? [],
+    bundle.fixtures ?? [],
+  );
+
+  const rows = storedRows
+    .map((stored) => calculatedTeamRow(bundle.fixtures ?? [], stored) ?? stored)
+    .sort(
+      (a, b) =>
+        b.points - a.points ||
+        b.goalDifference - a.goalDifference ||
+        b.goalsFor - a.goalsFor ||
+        a.name.localeCompare(b.name),
+    );
+
+  return { rows, season };
 }
 
 export async function fetchLeagueTableWithFallback(

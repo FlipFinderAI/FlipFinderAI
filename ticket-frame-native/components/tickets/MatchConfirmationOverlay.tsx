@@ -311,6 +311,68 @@ type CarParkFields = {
   linkedDate: string;
 };
 
+
+function compactFixtureDate(value: string) {
+  const match = String(value ?? "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return value;
+  return `${match[3]}/${match[2]}/${match[1].slice(-2)}`;
+}
+
+function compactFixtureTeam(value: string) {
+  const clean = String(value ?? "")
+    .replace(/\s+(AFC|FC)$/i, "")
+    .trim();
+
+  const aliases: Record<string, string> = {
+    "Manchester City": "Man City",
+    "Manchester United": "Man Utd",
+    "Sheffield United": "Sheff Utd",
+    "Sheffield Wednesday": "Sheff Wed",
+    "Nottingham Forest": "Nott'm Forest",
+    "Wolverhampton Wanderers": "Wolves",
+    "Brighton & Hove Albion": "Brighton",
+    "Tottenham Hotspur": "Tottenham",
+    "West Ham United": "West Ham",
+    "Newcastle United": "Newcastle",
+    "Leicester City": "Leicester",
+    "Queens Park Rangers": "QPR",
+    "West Bromwich Albion": "West Brom",
+    "Preston North End": "Preston",
+    "Blackburn Rovers": "Blackburn",
+    "Aston Villa": "Aston Villa",
+  };
+
+  const aliased = aliases[clean];
+  if (aliased) return aliased;
+
+  return clean;
+}
+
+function compactFixtureCompetition(value: string) {
+  const competition = String(value ?? "").trim();
+  const normal = competition.toLowerCase();
+
+  if (normal.includes("premier league")) return "Prem";
+  if (normal.includes("championship") && !normal.includes("scottish")) return "Champ";
+  if (normal.includes("league one") && !normal.includes("scottish")) return "L1";
+  if (normal.includes("league two") && !normal.includes("scottish")) return "L2";
+  if (normal.includes("national league")) return "NL";
+  if (normal.includes("scottish premiership")) return "Scot Prem";
+  if (normal.includes("scottish championship")) return "Scot Champ";
+  if (normal.includes("scottish league one")) return "Scot L1";
+  if (normal.includes("scottish league two")) return "Scot L2";
+  if (normal.includes("fa cup")) return "FA Cup";
+  if (
+    normal.includes("league cup") ||
+    normal.includes("carabao") ||
+    normal.includes("efl cup")
+  ) return "EFL Cup";
+  if (normal.includes("champions league")) return "UCL";
+  if (normal.includes("europa league")) return "UEL";
+
+  return competition.length <= 10 ? competition : competition.slice(0, 10);
+}
+
 export default function MatchConfirmationOverlay({
   ticket,
   recognition,
@@ -355,7 +417,9 @@ export default function MatchConfirmationOverlay({
     recognition.homeTeam &&
       recognition.awayTeam &&
       recognition.date &&
-      recognition.competition,
+      recognition.competition &&
+      recognition.fixtureBacked &&
+      recognition.confidence >= 95,
   );
   const [step, setStep] = useState<"type" | ItemType | "edit">(() =>
     isConfidentCarParkText(recognition)
@@ -523,7 +587,7 @@ export default function MatchConfirmationOverlay({
   const fixtureLabel = (fixture: CachedFixture) => {
     const home = fixture.homeAway === "home" ? clubName : fixture.opponent;
     const away = fixture.homeAway === "home" ? fixture.opponent : clubName;
-    return `${formatTicketDate(fixture.date) ?? fixture.date} · ${home} v ${away}`;
+    return `${compactFixtureDate(fixture.date)}   ${compactFixtureTeam(home)} v ${compactFixtureTeam(away)}   ${compactFixtureCompetition(fixture.competition)}`;
   };
   const editFixtureChoices = alternatives ?? [];
 
@@ -545,7 +609,17 @@ export default function MatchConfirmationOverlay({
     >
       <Picker
         style={{ height: pickerHeight(key) }}
-        itemStyle={{ height: pickerHeight(key), fontSize: expandedPicker === key ? 19 : 16 }}
+        itemStyle={{
+          height: pickerHeight(key),
+          fontSize:
+            key === "edit-match"
+              ? expandedPicker === key
+                ? 15
+                : 13
+              : expandedPicker === key
+                ? 19
+                : 16,
+        }}
         selectedValue={selectedValue}
         onValueChange={(value) => onValueChange(String(value))}
       >
@@ -820,12 +894,14 @@ export default function MatchConfirmationOverlay({
                         setChoosing(false);
                       }}
                     >
-                      <Text style={matchConfirmStyles.fixtureMain} numberOfLines={1}>
-                        {home} v {away}
-                      </Text>
-                      <Text style={matchConfirmStyles.fixtureMeta} numberOfLines={1}>
-                        {formatTicketDate(fixture.date) ?? fixture.date} ·{" "}
-                        {fixture.competition}
+                      <Text
+                        style={matchConfirmStyles.fixtureMain}
+                        numberOfLines={1}
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.78}
+                      >
+                        {compactFixtureDate(fixture.date)}   {compactFixtureTeam(home)} v{" "}
+                        {compactFixtureTeam(away)}   {compactFixtureCompetition(fixture.competition)}
                       </Text>
                     </Pressable>
                   );

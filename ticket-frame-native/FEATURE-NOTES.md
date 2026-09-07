@@ -1016,3 +1016,11 @@ Verification:
 - Added Back to Home buttons to Fixtures and Football History using the existing Home reset/navigation flow.
 
 - Added Scottish provider club aliases so lower-league fixtures resolve correctly across Fixtures, History and Auto Add.
+
+## V4.0.93 — Safer OCR match confirmation
+- Match-ticket scans now bypass Type of Item only when the recognition is complete, TFD/fixture-backed, and at least 95% confidence.
+- Prevents a weak OCR read that was merely completed from fixture data from appearing as a fully confirmed match.
+- Preserves the existing September 7 recognition work: official team resolution, round/competition corroboration, multi-season searching, date-disagreement recovery, team-only safety, car-park detection, and manual fixture selection.
+- No raw OCR evidence field was added because raw team evidence remains internal to recognition confidence/fixture validation and is not required by the review UI.
+- TypeScript verification passed with an 8 GB Node heap.
+- MatchConfirmationOverlay ESLint verification passed.
