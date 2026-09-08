@@ -4754,6 +4754,7 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
       primary: theme?.[0] ?? club.primary,
       secondary: theme?.[1] ?? club.secondary,
     });
+    setActiveTab("club");
     setShowOnboarding(false);
     setResumeOnboardingAtClub(false);
     void AsyncStorage.setItem(ONBOARDING_KEY, "true").catch(() => {});
