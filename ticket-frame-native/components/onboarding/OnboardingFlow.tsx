@@ -79,7 +79,7 @@ export default function OnboardingFlow({
   onLaunchDemo,
   startAtClub = false,
 }: Props) {
-  const [step, setStep] = useState<Step>(startAtClub ? "club" : "hero");
+  const [step, setStep] = useState<Step>("club");
 
   // Club picker
   const [clubSearch, setClubSearch] = useState("");

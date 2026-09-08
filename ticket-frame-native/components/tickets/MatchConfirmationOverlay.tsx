@@ -47,7 +47,9 @@ const matchConfirmStyles = StyleSheet.create({
     justifyContent: "flex-end",
     paddingHorizontal: 12,
     paddingTop: 12,
-    paddingBottom: 8,
+    // Keep the confirmation controls comfortably above the iPhone
+    // bottom edge / home indicator so every action is easy to press.
+    paddingBottom: 72,
   },
   ticketPreview: {
     flex: 1,
@@ -594,7 +596,7 @@ export default function MatchConfirmationOverlay({
   const fixtureLabel = (fixture: CachedFixture) => {
     const home = fixture.homeAway === "home" ? clubName : fixture.opponent;
     const away = fixture.homeAway === "home" ? fixture.opponent : clubName;
-    return `${compactFixtureDate(fixture.date)}   ${compactFixtureTeam(home)} v ${compactFixtureTeam(away)}   ${compactFixtureCompetition(fixture.competition)}`;
+    return `${compactFixtureDate(fixture.date)}   ${compactFixtureTeam(home)} v ${compactFixtureTeam(away)}`;
   };
   const editFixtureChoices = alternatives ?? [];
 
@@ -987,9 +989,13 @@ export default function MatchConfirmationOverlay({
                       "edit-season",
                       editDraft.seasonKey || lastFiveSeasonOptions()[0] || "",
                       (season) => {
+                        // Do not replace the fixture data while the native iOS
+                        // season wheel is actively scrolling. Updating Picker
+                        // rows during a UIPickerView gesture can crash UIKit.
+                        // The Continue button below requests this season's
+                        // fixtures once the user has finished choosing.
                         setEditDraft((current) => ({ ...current, seasonKey: season }));
                         setSelectedEditFixture("");
-                        onRequestAlternatives(season);
                       },
                       lastFiveSeasonOptions().map((season) => ({ label: season, value: season })),
                     )}

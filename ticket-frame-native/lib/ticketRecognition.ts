@@ -365,6 +365,9 @@ type FixtureCandidate = {
   fixture: CachedFixture;
   score: number;
   dateExact: boolean;
+  opponentStrong: boolean;
+  kickoffMatches: boolean;
+  venueMatches: boolean;
   competitionMatches: boolean;
   roundMatches: boolean;
   competitionRoundMatch: boolean;
@@ -395,6 +398,8 @@ async function bestFixtureForSides(
   ocrKickoff: string | null,
   ocrCompetition: string | null,
   ocrRound: string | null,
+  ocrText: string,
+  ocrDateYearAuthoritative: boolean,
 ): Promise<FixtureSearchOutcome> {
   const hasTeamClue = candidateOpponents.length > 0;
   let searchMethod = "none";
@@ -438,6 +443,30 @@ async function bestFixtureForSides(
       }
     }
     const dateExact = !!ocrDate && !!fixture.date && fixture.date === ocrDate;
+    const dateDayMonthMatch =
+      !!ocrDate &&
+      !!fixture.date &&
+      !ocrDateYearAuthoritative &&
+      fixture.date.slice(5) === ocrDate.slice(5);
+    const opponentStrong = opponentScore >= 11;
+    const kickoffMatches =
+      !!ocrKickoff && !!fixture.kickoff && ocrKickoff === fixture.kickoff;
+
+    // Stadium/venue is supporting evidence read directly from the ticket.
+    // It may strengthen or separate otherwise credible TFD candidates, but it
+    // never overrides a conflicting opponent/date combination.
+    const expectedVenue =
+      fixture.venue ||
+      (fixture.homeAway === "home"
+        ? groundForHomeTeam(clubName, fixture.date)
+        : groundForHomeTeam(fixture.opponent, fixture.date));
+    const venueMatches =
+      !!expectedVenue &&
+      normaliseFixtureText(expectedVenue).length >= 5 &&
+      normaliseFixtureText(ocrText).includes(
+        normaliseFixtureText(expectedVenue),
+      );
+
     const roundMatches =
       !!ocrRound &&
       !!fixture.round &&
@@ -466,10 +495,20 @@ async function bestFixtureForSides(
     // agrees. TFD remains authoritative; generic words such as "Final" alone
     // must never choose a match.
     const competitionRoundMatch = roundMatches && competitionMatches;
-    if (opponentScore <= 0 && !dateExact && !competitionRoundMatch) continue;
+    if (
+      opponentScore <= 0 &&
+      !dateExact &&
+      !dateDayMonthMatch &&
+      !competitionRoundMatch
+    )
+      continue;
+    // Known club + opponent + exact date is the primary ticket identity.
+    // Kickoff, venue, competition and home/away are corroboration/tie-breakers.
     let score =
       opponentScore +
-      (dateExact ? 25 : 0) +
+      (dateExact ? 40 : 0) +
+      (dateDayMonthMatch ? 40 : 0) +
+      (opponentStrong && (dateExact || dateDayMonthMatch) ? 40 : 0) +
       (competitionRoundMatch ? 25 : 0);
     if (clubIsHome === true && fixture.homeAway !== "home") score -= 15;
     if (clubIsHome === false && fixture.homeAway !== "away") score -= 15;
@@ -477,12 +516,15 @@ async function bestFixtureForSides(
       if (competitionMatches) score += 8;
       else score -= 6;
     }
-    if (ocrKickoff && fixture.kickoff && ocrKickoff === fixture.kickoff)
-      score += 3;
+    if (kickoffMatches) score += 8;
+    if (venueMatches) score += 10;
     scored.push({
       fixture,
       score,
       dateExact,
+      opponentStrong,
+      kickoffMatches,
+      venueMatches,
       competitionMatches,
       roundMatches,
       competitionRoundMatch,
@@ -524,6 +566,7 @@ async function bestFixtureForSides(
   } else if (
     hasTeamClue &&
     ocrDate &&
+    ocrDateYearAuthoritative &&
     winner.fixture.date !== ocrDate &&
     !winner.competitionRoundMatch
   ) {
@@ -682,6 +725,16 @@ export async function recogniseFromText(
   })();
   const dateParsingSeason = ocrSeason || season || "";
   const date = dateFromTicketText(ocrText, dateParsingSeason);
+
+  // A ticket that prints only day/month (for example "11 May") does NOT prove
+  // a year. dateFromTicketText needs a season to construct an ISO date, but
+  // that constructed year must remain provisional. TFD should determine the
+  // real year from club + opponent + day/month (+ kickoff/venue when present).
+  const ticketPrintsYear =
+    /\b\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}\b/.test(ocrText) ||
+    /\b\d{1,2}(?:st|nd|rd|th)?[ \t]*(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)[ \t]+\d{2,4}\b/i.test(ocrText) ||
+    /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)[ \t]*\d{1,2}(?:st|nd|rd|th)?[ \t]+\d{2,4}\b/i.test(ocrText);
+
   const dateSeason = (() => {
     if (!date) return null;
     const match = date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -695,9 +748,27 @@ export async function recogniseFromText(
   // A printed season is authoritative. Without one, OCR dates remain clues:
   // search both the selected season and the date-implied season when they
   // differ, then let the combined TFD evidence identify the fixture.
+  const selectedSeasonStart = Number(season.split("/")[0]);
+  const nearbySeasons =
+    !ocrSeason &&
+    date &&
+    !ticketPrintsYear &&
+    Number.isInteger(selectedSeasonStart)
+      ? Array.from({ length: 8 }, (_, offset) => {
+          const start = selectedSeasonStart - offset;
+          return `${start}/${String(start + 1).slice(-2)}`;
+        })
+      : [];
+
   const searchSeasons = ocrSeason
     ? [ocrSeason]
-    : Array.from(new Set([season, dateSeason].filter((value): value is string => !!value)));
+    : Array.from(
+        new Set(
+          [season, dateSeason, ...nearbySeasons].filter(
+            (value): value is string => !!value,
+          ),
+        ),
+      );
   const searchSeason = searchSeasons[0] || "";
   let kickoff = kickoffFromTicketText(ocrText);
 
@@ -868,6 +939,8 @@ export async function recogniseFromText(
       kickoff,
       competition,
       roundClue,
+      ocrText,
+      ticketPrintsYear || !!ocrSeason,
     );
     matchedFixture = search.fixture;
     searchOutcome = search;
@@ -929,8 +1002,18 @@ export async function recogniseFromText(
   // moved games) carry an official venue in the fixture data:
   //   1. official fixture provider venue
   //   2. historical stadium database fallback via home team + matchDate
+  // Once TFD has confirmed the fixture, use its authoritative home-team
+  // identity for stadium lookup. Raw OCR abbreviations such as "CPFC" must
+  // never prevent a known fixture from resolving its home ground.
+  const fixtureHomeForGround = matchedFixture
+    ? matchedFixture.homeAway === "home"
+      ? clubName
+      : matchedFixture.opponent
+    : homeFinal;
+
   const ground =
-    matchedFixture?.venue || groundForHomeTeam(homeFinal ?? null, resolvedDate);
+    matchedFixture?.venue ||
+    groundForHomeTeam(fixtureHomeForGround ?? null, resolvedDate);
 
   // Confidence answers: "how certain are we this is the correct match?" —
   // fixture confirmation dominates; raw OCR volume is irrelevant.

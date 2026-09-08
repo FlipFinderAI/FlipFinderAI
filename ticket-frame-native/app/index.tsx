@@ -3788,41 +3788,6 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
       // or blocking the normal load path.
       await ensureStorageSchema();
 
-      // One-time user-requested cleanup for this release. Remove every saved
-      // ticket-like record, including records that are not currently visible
-      // in Home filters, while retaining the favourite club and app settings.
-      const resetDone = await AsyncStorage.getItem(TICKET_RESET_KEY);
-      if (resetDone !== "true") {
-        const savedRaw = await AsyncStorage.getItem(SAVED_FRAME_KEY);
-        if (savedRaw) {
-          try {
-            const savedValue = JSON.parse(savedRaw) as {
-              tickets?: SeasonTicket[];
-              [key: string]: unknown;
-            };
-            for (const ticket of savedValue.tickets ?? []) {
-              const uri = currentTicketUri(ticket.uri);
-              if (uri) {
-                await FileSystem.deleteAsync(uri, { idempotent: true }).catch(
-                  () => {},
-                );
-              }
-            }
-            await AsyncStorage.setItem(
-              SAVED_FRAME_KEY,
-              JSON.stringify({ ...savedValue, tickets: [] }),
-            );
-          } catch {
-            await AsyncStorage.removeItem(SAVED_FRAME_KEY);
-          }
-        }
-        await Promise.all([
-          saveSeasonTicketProfiles([]),
-          saveCarParkPasses([]),
-        ]);
-        await AsyncStorage.setItem(TICKET_RESET_KEY, "true");
-      }
-
       // V3.7.2 — fresh-install fix: resolve the onboarding gate on EVERY
       // startup path. No stored data + no completion flag ⇒ first-launch
       // experience. Any prior stored signal (saved frame OR ground visits)
@@ -4937,27 +4902,85 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
     });
   }
 
-  function importTicket() {
-    Alert.alert(
-      "Add a Ticket",
-      "iOS doesn't let apps read Apple Wallet directly, so:\n\n1. Open the expired ticket in Wallet\n2. Take a screenshot of it\n3. Choose an option below and select the screenshots\n\nEach photo is cropped by you, then recognised — you confirm the match before it's saved.",
-      [
-        {
-          text: "Cancel",
-          style: "cancel",
-        },
-        {
-          text: "Files",
-          onPress: () =>
-            setTimeout(() => void chooseTicket(), 350),
-        },
-        {
-          text: "Add Photo",
-          onPress: () =>
-            setTimeout(() => void choosePhoto(), 350),
-        },
-      ],
+  async function ensureFavouriteClubConfirmed(): Promise<boolean> {
+    const hasValidClub =
+      favouriteClub.id !== PLACEHOLDER_CLUB_ID &&
+      Boolean(
+        favouriteClub.id?.trim() ||
+        (favouriteClub.name?.trim() && favouriteClub.name !== "Your Club"),
+      );
+
+    if (!hasValidClub) {
+      setShowOnboarding(false);
+      setActiveTab("club");
+      return false;
+    }
+
+    const confirmationKey = "ticket-frame:favourite-club-confirmed";
+    const confirmedClubId = await AsyncStorage.getItem(confirmationKey).catch(
+      () => null,
     );
+
+    if (confirmedClubId === favouriteClub.id) return true;
+
+    return new Promise((resolve) => {
+      Alert.alert(
+        "Confirm your favourite team",
+        `Use ${favouriteClub.name} as your favourite team for tickets, Auto Add and match recognition?`,
+        [
+          {
+            text: "Change Team",
+            onPress: () => {
+              setShowOnboarding(false);
+              setActiveTab("club");
+              resolve(false);
+            },
+          },
+          {
+            text: "Not Now",
+            style: "cancel",
+            onPress: () => resolve(false),
+          },
+          {
+            text: "Confirm",
+            onPress: () => {
+              void AsyncStorage.setItem(
+                confirmationKey,
+                favouriteClub.id,
+              ).finally(() => resolve(true));
+            },
+          },
+        ],
+        { cancelable: false },
+      );
+    });
+  }
+
+  function importTicket() {
+    void (async () => {
+      if (!(await ensureFavouriteClubConfirmed())) return;
+
+      Alert.alert(
+        "Add a Ticket",
+        "iOS doesn't let apps read Apple Wallet directly, so:\n\n1. Open the expired ticket in Wallet\n2. Take a screenshot of it\n3. Choose an option below and select the screenshots\n\nEach photo is cropped by you, then recognised — you confirm the match before it's saved.",
+        [
+          {
+            text: "Cancel",
+            style: "cancel",
+          },
+          {
+            text: "Files",
+            onPress: () =>
+              setTimeout(() => void chooseTicket(), 350),
+          },
+          {
+            text: "Add Photo",
+            onPress: () =>
+              setTimeout(() => void choosePhoto(), 350),
+          },
+        ],
+      );
+    })();
   }
 
   function askSeasonTicketQuestion(
@@ -4979,18 +5002,21 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
   }
 
   function runHistoryAutoAdd() {
-    console.warn("[history-auto-add] BUTTON PRESSED", {
-      photoAction,
-      autoDiscoveryCompleted,
-    });
-    if (photoAction === "auto") {
-      console.warn("[history-auto-add] BLOCKED photoAction=auto");
-      return;
-    }
+    void (async () => {
+      console.warn("[history-auto-add] BUTTON PRESSED", {
+        photoAction,
+        autoDiscoveryCompleted,
+      });
+      if (photoAction === "auto") {
+        console.warn("[history-auto-add] BLOCKED photoAction=auto");
+        return;
+      }
 
-    console.warn("[history-auto-add] SHOWING MODE ALERT");
+      if (!(await ensureFavouriteClubConfirmed())) return;
 
-    Alert.alert(
+      console.warn("[history-auto-add] SHOWING MODE ALERT");
+
+      Alert.alert(
       "Auto Add",
       "Add New keeps previously deleted matches hidden. Add All restores deleted matches and also finds new fixtures and qualifying GPS photos/videos.",
       [
@@ -5009,21 +5035,37 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
             void runHistoryAutoAddMode("all");
           },
         },
-      ],
-    );
+        ],
+      );
+    })();
   }
 
-  function reviewAutoAddFixtureMedia(
+  async function reviewAutoAddFixtureMedia(
     fixture: FixtureRow,
     assets: MediaLibrary.Asset[],
   ): Promise<MediaLibrary.Asset[] | null> {
+    const displayAssets = await Promise.all(
+      assets.map(async (asset) => {
+        if (!asset.uri?.startsWith("ph://")) return asset;
+
+        const info = await MediaLibrary.getAssetInfoAsync(asset).catch(() => null);
+        const renderableUri =
+          info?.localUri ??
+          (info?.uri && !info.uri.startsWith("ph://") ? info.uri : null);
+
+        return renderableUri
+          ? { ...asset, uri: renderableUri }
+          : asset;
+      }),
+    );
+
     return new Promise((resolve) => {
       autoAddMediaReviewResolveRef.current = resolve;
 
       setAutoAddMediaReview({
         fixture,
-        assets,
-        selectedAssetIds: new Set(assets.map((asset) => asset.id)),
+        assets: displayAssets,
+        selectedAssetIds: new Set(displayAssets.map((asset) => asset.id)),
       });
     });
   }
@@ -6065,6 +6107,20 @@ Accept only if these photos are from this match. Choose Another Match for anothe
 
 
   async function choosePhoto() {
+    const hasValidMyClub =
+      favouriteClub.id !== PLACEHOLDER_CLUB_ID &&
+      Boolean(
+        favouriteClub.id?.trim() ||
+        (favouriteClub.name?.trim() && favouriteClub.name !== "Your Club"),
+      );
+
+    if (!hasValidMyClub) {
+      setResumeOnboardingAtClub(false);
+      setShowOnboarding(false);
+      setActiveTab("club");
+      return;
+    }
+
     if (photoImportActiveRef.current) {
       Alert.alert(
         "Import already in progress",
@@ -6264,6 +6320,17 @@ Accept only if these photos are from this match. Choose Another Match for anothe
         }
 
         const result = await reviewFinished;
+
+        if (result === "skipped") {
+          setTickets((current) =>
+            current.filter((item) => item.id !== ticket.id),
+          );
+          recognitionImageUrisRef.current.delete(ticket.id);
+          await FileSystem.deleteAsync(savedUri, { idempotent: true }).catch(
+            () => {},
+          );
+        }
+
         // Confirmation updates React state first; wait for the serial saved-
         // frame writer to commit that exact ticket before advancing the bulk
         // crop queue or telling the user it is safely stored.
@@ -9853,6 +9920,12 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                           Video
                         </Text>
                       </>
+                    ) : asset.uri?.startsWith("ph://") ? (
+                      <Ionicons
+                        name="image"
+                        size={30}
+                        color="#333333"
+                      />
                     ) : (
                       <Image
                         source={{ uri: asset.uri }}
