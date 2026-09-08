@@ -585,8 +585,10 @@ export default function MatchConfirmationOverlay({
     ...(seatBits.length ? [{ label: "SEAT", value: seatBits.join(" · ") }] : []),
   ];
 
-  const pickerHeight = (key: string) =>
-    expandedPicker === key ? 210 : 58;
+  // Keep the native iOS picker at a stable height while it is being
+  // touched/scrolled. Resizing UIPickerView during row interaction can
+  // invalidate UIKit's visible-cell update.
+  const pickerHeight = (_key: string) => 210;
   const fixtureKey = (fixture: CachedFixture) =>
     `${fixture.date}|${fixture.homeAway}|${fixture.opponent}`;
   const fixtureLabel = (fixture: CachedFixture) => {
