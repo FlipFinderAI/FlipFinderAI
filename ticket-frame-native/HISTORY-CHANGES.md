@@ -1196,3 +1196,10 @@ Verification:
 - Wired the Auto Add ground resolver into all three GPS matching paths.
 - Removed immediate deletion of the previous permanent ticket image during ticket editing so asynchronous saved-frame persistence cannot leave an existing ticket record pointing to a deleted file.
 - TypeScript: PASS with 6 GB Node heap.
+
+## 2026-09-09 — Saved ticket image diagnostics
+
+- Added `inspectTicketImageUri()` to verify reconstructed permanent ticket image paths.
+- Startup now checks every restored saved ticket image and logs present/missing state plus file size.
+- The diagnostic is read-only and does not change ticket storage, image files, or frame eligibility.
+- TypeScript: PASS with 6 GB Node heap.

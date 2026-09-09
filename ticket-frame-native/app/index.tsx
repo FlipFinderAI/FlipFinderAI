@@ -85,6 +85,7 @@ import {
 } from "@/lib/colorUtils";
 import {
   currentTicketUri,
+  inspectTicketImageUri,
   logTicketImage,
   makeVersionedFingerprint,
   nowMs,
@@ -3813,18 +3814,46 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
             value.favouriteClub?.name
           )
             legacyUserDataRef.current = true;
-          if (Array.isArray(value.tickets))
-            setTickets(
-              value.tickets.map((ticket) => ({
-                ...ticket,
-                uri: currentTicketUri(ticket.uri),
-                matchDate: ticket.matchDate || null,
-                displayStyle:
-                  ticket.displayStyle === "old-school"
-                    ? undefined
-                    : ticket.displayStyle,
-              })),
-            );
+          if (Array.isArray(value.tickets)) {
+            const restoredTickets = value.tickets.map((ticket) => ({
+              ...ticket,
+              uri: currentTicketUri(ticket.uri),
+              matchDate: ticket.matchDate || null,
+              displayStyle:
+                ticket.displayStyle === "old-school"
+                  ? undefined
+                  : ticket.displayStyle,
+            }));
+
+            setTickets(restoredTickets);
+
+            void Promise.all(
+              restoredTickets.map(async (ticket) => {
+                const image = await inspectTicketImageUri(ticket.uri);
+
+                if (!image.exists) {
+                  console.warn("[ticket-image-integrity] missing", {
+                    ticketId: ticket.id,
+                    fingerprint: ticket.fingerprint,
+                    ticketName: ticket.name,
+                    seasonKey: ticket.seasonKey,
+                    uri: image.uri ?? "(none)",
+                  });
+                  return;
+                }
+
+                console.log("[ticket-image-integrity] present", {
+                  ticketId: ticket.id,
+                  fingerprint: ticket.fingerprint,
+                  seasonKey: ticket.seasonKey,
+                  bytes: image.size,
+                  uri: image.uri,
+                });
+              }),
+            ).catch((error) => {
+              console.warn("[ticket-image-integrity] check failed", error);
+            });
+          }
           if (value.frameStyle && stylesList.includes(value.frameStyle))
             setFrameStyle(value.frameStyle);
           const storedClub = value.favouriteClub;

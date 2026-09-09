@@ -1088,3 +1088,11 @@ Verification:
 - Ticket editing no longer deletes the previous permanent ticket image immediately after a crop/edit.
 - This prevents a saved ticket record being left without its image if the app closes before the asynchronous saved-frame update finishes.
 - TypeScript verification: PASS with `NODE_OPTIONS="--max-old-space-size=6144"`.
+
+## 2026-09-09 — Ticket image integrity diagnostics
+
+- Added a non-destructive startup integrity check for saved ticket image files.
+- Each restored ticket now reports whether its reconstructed permanent image file exists, its size in bytes, and the associated ticket ID/fingerprint/season.
+- Missing image files are logged without deleting, modifying, or hiding the saved ticket record.
+- This is intended to diagnose cases where the app reports saved items but the ticket artwork no longer displays.
+- TypeScript verification: PASS with `NODE_OPTIONS="--max-old-space-size=6144"`.

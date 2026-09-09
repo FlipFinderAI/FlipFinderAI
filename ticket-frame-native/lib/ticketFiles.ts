@@ -12,6 +12,26 @@ export function currentTicketUri(savedUri?: string) {
   return `${TICKET_DIRECTORY}${filename}`;
 }
 
+export async function inspectTicketImageUri(savedUri?: string) {
+  const uri = currentTicketUri(savedUri);
+
+  if (!uri) {
+    return {
+      uri: undefined,
+      exists: false,
+      size: 0,
+    };
+  }
+
+  const info = await FileSystem.getInfoAsync(uri);
+
+  return {
+    uri,
+    exists: info.exists,
+    size: info.exists ? info.size ?? 0 : 0,
+  };
+}
+
 export async function logTicketImage(
   label: string,
   uri: string,
