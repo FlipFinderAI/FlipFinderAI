@@ -1188,3 +1188,11 @@ Verification:
 - hosted TFD feed returned HTTP 200;
 - League Two 2026/27 returned 261 fixtures;
 - 21 Accrington Stanley fixtures were successfully matched.
+
+## 2026-09-09 — Auto Add Wembley handling and ticket image fail-safe
+
+- Restricted Favourite Club Auto Add GPS discovery to known fixtures from 2007/08 through the present season.
+- Added neutral-venue resolution for FA Cup semi-finals and finals at Wembley Stadium.
+- Wired the Auto Add ground resolver into all three GPS matching paths.
+- Removed immediate deletion of the previous permanent ticket image during ticket editing so asynchronous saved-frame persistence cannot leave an existing ticket record pointing to a deleted file.
+- TypeScript: PASS with 6 GB Node heap.

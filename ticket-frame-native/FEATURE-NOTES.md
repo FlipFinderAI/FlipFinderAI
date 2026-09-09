@@ -1080,3 +1080,11 @@ Verification:
 - Verified live hosted TFD feed returns HTTP 200.
 - Verified League Two 2026/27 contains 261 fixtures.
 - Verified 21 Accrington Stanley fixtures are found from the hosted League Two feed.
+
+## 2026-09-09 — Auto Add neutral venues and ticket image safety
+
+- Auto Add GPS discovery is limited to Favourite Club fixtures from 2007/08 through the current season and remains fixture-date driven across the Photos library.
+- FA Cup semi-finals and finals resolve to Wembley Stadium for GPS matching instead of falling back to the home club ground when the raw fixture has no venue.
+- Ticket editing no longer deletes the previous permanent ticket image immediately after a crop/edit.
+- This prevents a saved ticket record being left without its image if the app closes before the asynchronous saved-frame update finishes.
+- TypeScript verification: PASS with `NODE_OPTIONS="--max-old-space-size=6144"`.

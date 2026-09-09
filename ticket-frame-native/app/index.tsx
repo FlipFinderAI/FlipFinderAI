@@ -5161,9 +5161,61 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
       // Auto Add follows the user's favourite club.
       const clubName = favouriteClub.name;
       console.warn("[history-auto-add] BEFORE bundled fixtures", { clubName });
-      const fixtures = getAllBundledClubFixtures(clubName).filter(
-        (fixture) => Boolean(fixture.date),
+
+      // Auto Add GPS discovery is intentionally limited to the modern
+      // fixture set: 2007/08 through the present day. It is fixture-driven,
+      // not a whole-Photos-library scan.
+      const currentAutoAddSeasonStart = Number(
+        canonicalSeason(new Date().toISOString().slice(0, 10))
+          .match(/^(\d{4})/)?.[1],
       );
+
+      const fixtures = getAllBundledClubFixtures(clubName).filter((fixture) => {
+        if (!fixture.date) return false;
+
+        const seasonStart = Number(
+          canonicalSeason(fixture.date).match(/^(\d{4})/)?.[1],
+        );
+
+        return (
+          Number.isFinite(seasonStart) &&
+          seasonStart >= 2007 &&
+          (!Number.isFinite(currentAutoAddSeasonStart) ||
+            seasonStart <= currentAutoAddSeasonStart)
+        );
+      });
+
+      console.warn("[history-auto-add] AFTER bundled fixtures", {
+        clubName,
+        fixtureCount: fixtures.length,
+        earliestSeason: fixtures.length
+          ? canonicalSeason(fixtures[0].date)
+          : null,
+      });
+
+      // Resolve the actual playing ground for Auto Add. A neutral FA Cup
+      // semi-final/final must never fall back to the home club's stadium.
+      const autoAddGroundForFixture = (fixture: FixtureRow) => {
+        const competition = normaliseFixtureText(fixture.competition ?? "");
+        const round = normaliseFixtureText(fixture.round ?? "");
+
+        if (
+          competition === "fa cup" &&
+          (
+            round === "semi finals" ||
+            round === "semi final" ||
+            round === "final"
+          )
+        ) {
+          return footballGroundForName("Wembley Stadium");
+        }
+
+        if (fixture.venue) {
+          return footballGroundForName(fixture.venue);
+        }
+
+        return findGroundForClub(fixture.homeName, fixture.date);
+      };
       console.warn("[history-auto-add] AFTER bundled fixtures", {
         clubName,
         fixtureCount: fixtures.length,
@@ -5392,11 +5444,7 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
 
               const candidates = dateFixtures
                 .map((fixture) => {
-                  const ground =
-                    (fixture.venue
-                      ? footballGroundForName(fixture.venue)
-                      : undefined) ??
-                    findGroundForClub(fixture.homeName, fixture.date);
+                  const ground = autoAddGroundForFixture(fixture);
 
                   const miles = ground
                     ? distanceMiles(
@@ -5450,11 +5498,7 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
 
               const fallbackCandidates = dateFixtures
                 .map((fixture) => {
-                  const ground =
-                    (fixture.venue
-                      ? footballGroundForName(fixture.venue)
-                      : undefined) ??
-                    findGroundForClub(fixture.homeName, fixture.date);
+                  const ground = autoAddGroundForFixture(fixture);
 
                   if (!ground) return null;
 
@@ -5577,9 +5621,7 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
 
         const fixture = fixtures.find((row) => row.id === fixtureId);
         if (!fixture?.date) continue;
-        const ground =
-          (fixture.venue ? footballGroundForName(fixture.venue) : undefined) ??
-          findGroundForClub(fixture.homeName, fixture.date);
+        const ground = autoAddGroundForFixture(fixture);
         if (!ground) continue;
         const expanded = await matchGeotaggedMatchdayMedia(
           assetsByDate.get(fixture.date) ?? [],
@@ -6614,9 +6656,10 @@ Accept only if these photos are from this match. Choose Another Match for anothe
       ),
     );
 
-    void FileSystem.deleteAsync(liveUri, { idempotent: true }).catch(
-      () => {},
-    );
+    // Keep the previous permanent ticket image as a fail-safe.
+    // React state is persisted to saved-frame asynchronously, so deleting
+    // the old file here could leave a surviving ticket record with no image
+    // if the app is interrupted before the updated URI is committed.
   }
 
   function deleteTicket(ticket: SeasonTicket) {
