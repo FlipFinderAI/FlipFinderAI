@@ -1072,3 +1072,11 @@ Verification:
 - Existing users who previously enabled Match Check-in retain their stored enabled preference.
 - TypeScript verification: PASS.
 - The full app/index.tsx ESLint scan continues to report pre-existing unrelated lint findings; no new lint issue was introduced by this change.
+
+## 2026-09-09 — Accrington Stanley hosted fixture matching
+
+- Added provider-safe alias mapping from `Accrington ST` to `Accrington Stanley`.
+- Verified `clubNamesMatch("Accrington ST", "Accrington Stanley")` returns true.
+- Verified live hosted TFD feed returns HTTP 200.
+- Verified League Two 2026/27 contains 261 fixtures.
+- Verified 21 Accrington Stanley fixtures are found from the hosted League Two feed.

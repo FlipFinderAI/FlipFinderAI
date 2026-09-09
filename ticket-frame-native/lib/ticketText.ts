@@ -13,6 +13,7 @@ export function normaliseFixtureText(value: unknown) {
 }
 
 const CLUB_NAME_ALIASES: Record<string, string> = {
+  "accrington st": "accrington stanley",
   "milton keynes dons": "mk dons",
   "leeds united": "leeds",
   "derby county": "derby",

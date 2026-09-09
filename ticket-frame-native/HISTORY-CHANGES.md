@@ -1178,3 +1178,13 @@ Phone verification: PASS.
 - Stored "true" remains authoritative for users who deliberately enabled the feature.
 - TypeScript: PASS.
 - No new ESLint issue introduced.
+
+## 2026-09-09 — Accrington Stanley League Two fixture visibility
+
+Fixed Accrington Stanley fixture discovery where the hosted provider supplies the shortened club name `Accrington ST`.
+
+Verification:
+- canonical names both resolve to `accrington stanley`;
+- hosted TFD feed returned HTTP 200;
+- League Two 2026/27 returned 261 fixtures;
+- 21 Accrington Stanley fixtures were successfully matched.
