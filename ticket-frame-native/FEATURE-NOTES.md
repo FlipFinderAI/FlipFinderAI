@@ -1098,3 +1098,6 @@ Verification:
 - TypeScript verification: PASS with `NODE_OPTIONS="--max-old-space-size=6144"`.
 
 - Fixed ticket-backed History records saved before kick-off so final fixture scores are reconciled into the existing History record once TFD supplies the result.
+
+- Made History and photo-index ground resolution fixture-date-aware so older matches use the stadium in use on the match date rather than the club current ground.
+- Existing History records are repaired from matched fixture/date data, including neutral FA Cup Wembley fixtures.

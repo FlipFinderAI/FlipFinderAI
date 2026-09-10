@@ -7304,8 +7304,21 @@ const handleTileDrop = (id: string, tx: number, ty: number) => {
             round === "semi finals" ||
             round === "final");
 
+        const fixtureHomeClub =
+          record.homeAway === "away" ? record.opponent : record.club;
+        const resolvedFixtureGround =
+          fixture?.venue
+            ? footballGroundForName(fixture.venue)
+            : neutralFaCup
+              ? footballGroundForName("Wembley Stadium")
+              : fixtureHomeClub
+                ? findGroundForClub(
+                    fixtureHomeClub,
+                    fixture?.date ?? record.matchDate,
+                  )
+                : undefined;
         const nextGround =
-          neutralFaCup && fixture?.venue ? fixture.venue : record.ground;
+          resolvedFixtureGround?.stadium ?? fixture?.venue ?? record.ground;
         const nextHomeScore =
           fixture?.homeScore != null ? fixture.homeScore : record.homeScore;
         const nextAwayScore =
@@ -7365,7 +7378,7 @@ const handleTileDrop = (id: string, tx: number, ty: number) => {
       const homeClub = record.homeAway === "away" ? record.opponent : record.club;
       const ground =
         (record.ground ? footballGroundForName(record.ground) : undefined) ??
-        findGroundForClub(homeClub);
+        findGroundForClub(homeClub, record.matchDate);
       if (ground) candidates.set(record.id, {
         descriptor: { recordId: record.id, matchDate: record.matchDate, ground },
         stadiumName: ground.stadium,
@@ -7379,7 +7392,7 @@ const handleTileDrop = (id: string, tx: number, ty: number) => {
       const opponent = isHome ? fixture.awayName : fixture.homeName;
       const ground =
         (fixture.venue ? footballGroundForName(fixture.venue) : undefined) ??
-        findGroundForClub(fixture.homeName);
+        findGroundForClub(fixture.homeName, fixture.date);
       if (!ground) continue;
       const proposed: AttendanceRecord = {
         id: `att-photo-${fixture.id}`,
