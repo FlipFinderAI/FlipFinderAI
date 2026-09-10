@@ -22,6 +22,11 @@ export default function FixturesContent({
   renderFixtureRow,
   renderTableRow,
   footer,
+  onScrollBegin,
+  onScrollEndDrag,
+  onMomentumBegin,
+  onMomentumEnd,
+  onScrollActivity,
 }: {
   mode: FixtureMode;
   loading: boolean;
@@ -33,6 +38,11 @@ export default function FixturesContent({
   renderFixtureRow: ListRenderItem<FixtureRow>;
   renderTableRow: ListRenderItem<TableRow>;
   footer: ReactElement | null;
+  onScrollBegin?: () => void;
+  onScrollEndDrag?: () => void;
+  onMomentumBegin?: () => void;
+  onMomentumEnd?: () => void;
+  onScrollActivity?: () => void;
 }) {
   const hasFixtures = fixtures.length > 0;
   const hasTable = tableRows.length > 0;
@@ -60,6 +70,12 @@ export default function FixturesContent({
         }
         renderItem={renderFixtureRow}
         ListFooterComponent={footer}
+        onScrollBeginDrag={onScrollBegin}
+        onScrollEndDrag={onScrollEndDrag}
+        onMomentumScrollBegin={onMomentumBegin}
+        onMomentumScrollEnd={onMomentumEnd}
+        onScroll={onScrollActivity}
+        scrollEventThrottle={16}
       />
     );
   }
@@ -82,6 +98,12 @@ export default function FixturesContent({
         }
         renderItem={renderTableRow}
         ListFooterComponent={footer}
+        onScrollBeginDrag={onScrollBegin}
+        onScrollEndDrag={onScrollEndDrag}
+        onMomentumScrollBegin={onMomentumBegin}
+        onMomentumScrollEnd={onMomentumEnd}
+        onScroll={onScrollActivity}
+        scrollEventThrottle={16}
       />
     );
   }

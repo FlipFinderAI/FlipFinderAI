@@ -103,10 +103,10 @@ export function BackToHomeButton({
 
 const styles = StyleSheet.create({
   nav: {
-    marginTop: 26,
-    paddingTop: 14,
-    borderTopWidth: 1,
-    borderTopColor: "#d8d1c2",
+    marginTop: 0,
+    paddingTop: 6,
+    paddingBottom: 4,
+    paddingHorizontal: 0,
     flexDirection: "row",
     gap: 7,
   },

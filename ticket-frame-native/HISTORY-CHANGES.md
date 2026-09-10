@@ -1227,3 +1227,9 @@ Verification:
 - Forwarded Wallet tickets now use structured pass metadata with the existing recognition/TFD confirmation pipeline.
 - Added foreground/startup processing for pending Wallet shares.
 - Preserved existing OCR recognition and ambiguity safeguards.
+
+## 2026-09-10
+- Verified main-tab swipe navigation and fixed bottom navigation behaviour on device.
+- Final swipe completion distance: 60px.
+- Final vertical gesture lock: 56px / 3.0 normally; 68px / 3.5 for Stadiums and Fixtures.
+- One-time swipe hint persisted with AsyncStorage key ticket-frame-main-swipe-hint-seen.v2.

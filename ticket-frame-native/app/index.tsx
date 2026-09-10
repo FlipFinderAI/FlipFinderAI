@@ -67,7 +67,6 @@ import MatchConfirmationOverlay from "@/components/tickets/MatchConfirmationOver
 import OldSchoolCard from "@/components/tickets/OldSchoolCard";
 import OldSchoolCaptureHost from "@/components/tickets/OldSchoolCaptureHost";
 import {
-  BackToHomeButton,
   BottomNavigation,
   type MainTab,
 } from "@/components/navigation/MainNavigation";
@@ -407,6 +406,7 @@ export default function HomeScreen() {
     useState(false);
   const [resumeOnboardingAtClub, setResumeOnboardingAtClub] = useState(false);
   const [activeTab, setActiveTab] = useState<MainTab>("frames");
+  const [showMainSwipeHint, setShowMainSwipeHint] = useState(false);
   const [fixtureMode, setFixtureMode] = useState<FixtureMode>("fixtures");
   const [seasonFixtures, setSeasonFixtures] = useState<FixtureRow[]>([]);
   const [leagueTableRows, setLeagueTableRows] = useState<TableRow[]>([]);
@@ -4784,6 +4784,7 @@ confidence: ${recognition.confidence}%`,
       !matchMediaReferencesReady ||
       !seasonTicketProfilesReady
     ) return;
+
     const groups = new Map<string, AttendanceRecord[]>();
     for (const record of attendanceHistory) {
       if (
@@ -9029,34 +9030,307 @@ useEffect(() => {
       historyOpenFrameRef.current = null;
     }
     if (tab === "history") {
-      // Paint the selected navigation state before building the large History
-      // tree. This gives the tap an immediate visual response on big archives.
-      setHistoryContentReady(false);
+      setHistoryContentReady(true);
       setActiveTab(tab);
-      historyOpenFrameRef.current = requestAnimationFrame(() => {
-        historyOpenFrameRef.current = null;
-        setHistoryContentReady(true);
-      });
       return;
     }
     setHistoryContentReady(true);
     setActiveTab(tab);
   };
 
+  useEffect(() => {
+    void AsyncStorage.getItem("ticket-frame-main-swipe-hint-seen.v2")
+      .then((seen) => {
+        if (seen !== "true") {
+          setShowMainSwipeHint(true);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const dismissMainSwipeHint = () => {
+    if (!showMainSwipeHint) return;
+    setShowMainSwipeHint(false);
+    void AsyncStorage.setItem(
+      "ticket-frame-main-swipe-hint-seen.v2",
+      "true",
+    ).catch(() => {});
+  };
+
+  const MAIN_TAB_SWIPE_ORDER: MainTab[] = [
+    "frames",
+    "history",
+    "club",
+    "grounds",
+    "fixtures",
+  ];
+
+  const mainTabSwipeStartRef = useRef<{
+    x: number;
+    y: number;
+    time: number;
+  } | null>(null);
+
+  const mainTabGestureDirectionRef = useRef<
+    "horizontal" | "vertical" | null
+  >(null);
+
+  const [mainNavHidden, setMainNavHidden] = useState(false);
+  const mainNavHiddenRef = useRef(false);
+  const mainNavReturnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mainNavVisibility = useSharedValue(1);
+
+  const mainNavAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: mainNavVisibility.value,
+    transform: [
+      {
+        translateY: (1 - mainNavVisibility.value) * 18,
+      },
+    ],
+  }));
+
+  const finishHidingMainNavigation = () => {
+    mainNavHiddenRef.current = true;
+    setMainNavHidden(true);
+  };
+
+  const hideMainNavigation = () => {
+    if (mainNavReturnTimerRef.current) {
+      clearTimeout(mainNavReturnTimerRef.current);
+      mainNavReturnTimerRef.current = null;
+    }
+
+    if (!mainNavHiddenRef.current) {
+      mainNavHiddenRef.current = true;
+      setMainNavHidden(true);
+    }
+
+    mainNavVisibility.value = withTiming(0, { duration: 180 });
+  };
+
+  const showMainNavigation = () => {
+    if (mainNavReturnTimerRef.current) {
+      clearTimeout(mainNavReturnTimerRef.current);
+      mainNavReturnTimerRef.current = null;
+    }
+
+    mainNavHiddenRef.current = false;
+    setMainNavHidden(false);
+
+    mainNavVisibility.value = withTiming(1, { duration: 210 });
+  };
+
+  const scheduleMainNavigationReturn = () => {
+    if (mainNavReturnTimerRef.current) {
+      clearTimeout(mainNavReturnTimerRef.current);
+    }
+
+    mainNavReturnTimerRef.current = setTimeout(() => {
+      mainNavReturnTimerRef.current = null;
+      showMainNavigation();
+    }, 20);
+  };
+
+  const noteMainTabScrollActivity = () => {
+    if (mainTabGestureDirectionRef.current === "horizontal") {
+      return;
+    }
+
+    hideMainNavigation();
+    scheduleMainNavigationReturn();
+  };
+
+  const completeMainTabSwipe = (event: any) => {
+    const start = mainTabSwipeStartRef.current;
+    mainTabSwipeStartRef.current = null;
+    if (!start) return;
+
+    const touch = event.nativeEvent;
+    const dx = touch.pageX - start.x;
+    const dy = touch.pageY - start.y;
+    const elapsed = Date.now() - start.time;
+
+    const swipeDistance = 60;
+
+    const horizontal =
+      mainTabGestureDirectionRef.current === "horizontal" &&
+      Math.abs(dx) >= swipeDistance &&
+      Math.abs(dx) > Math.abs(dy) * 1.45 &&
+      elapsed <= 1400;
+
+    if (!horizontal) {
+      scheduleMainNavigationReturn();
+      return;
+    }
+
+    const currentIndex = MAIN_TAB_SWIPE_ORDER.indexOf(activeTab);
+    if (currentIndex < 0) return;
+
+    const nextIndex = dx < 0 ? currentIndex + 1 : currentIndex - 1;
+    const nextTab = MAIN_TAB_SWIPE_ORDER[nextIndex];
+
+    if (nextTab) {
+      dismissMainSwipeHint();
+      openMainTab(nextTab);
+    }
+  };
+
+  const mainTabSwipeProps = {
+    onTouchStart: (event: any) => {
+      const touch = event.nativeEvent;
+
+      mainTabGestureDirectionRef.current = null;
+      mainTabSwipeStartRef.current = {
+        x: touch.pageX,
+        y: touch.pageY,
+        time: Date.now(),
+      };
+    },
+
+    onMoveShouldSetResponderCapture: (event: any) => {
+      const start = mainTabSwipeStartRef.current;
+      if (!start) return false;
+
+      const touch = event.nativeEvent;
+      const dx = touch.pageX - start.x;
+      const dy = touch.pageY - start.y;
+      const absX = Math.abs(dx);
+      const absY = Math.abs(dy);
+
+      if (mainTabGestureDirectionRef.current === "horizontal") {
+        return true;
+      }
+
+      if (mainTabGestureDirectionRef.current === "vertical") {
+        return false;
+      }
+
+      const firmHorizontalLock =
+        activeTab === "grounds" || activeTab === "fixtures";
+
+      const horizontalStart = firmHorizontalLock ? 2 : 3;
+      const horizontalDominance = firmHorizontalLock ? 0.6 : 0.8;
+      const verticalStart = firmHorizontalLock ? 68 : 56;
+      const verticalDominance = firmHorizontalLock ? 3.5 : 3.0;
+
+      if (
+        absX >= horizontalStart &&
+        absX > absY * horizontalDominance
+      ) {
+        mainTabGestureDirectionRef.current = "horizontal";
+        return true;
+      }
+
+      if (
+        absY >= verticalStart &&
+        absY > absX * verticalDominance
+      ) {
+        mainTabGestureDirectionRef.current = "vertical";
+      }
+
+      return false;
+    },
+
+    onResponderMove: () => {
+      // Once horizontal navigation owns the gesture, keep it captured.
+      // This prevents vertical drift and stops child Pressables firing.
+    },
+
+    onResponderTerminationRequest: () => false,
+
+    onResponderRelease: (event: any) => {
+      completeMainTabSwipe(event);
+    },
+
+    onResponderTerminate: () => {
+      mainTabSwipeStartRef.current = null;
+      mainTabGestureDirectionRef.current = null;
+    },
+
+    onTouchMove: () => {
+      // Do not classify or hide navigation from raw touch movement.
+      // Horizontal ownership is decided by responder capture.
+      // Genuine vertical scrolling hides navigation via ScrollView callbacks.
+    },
+
+    onTouchEnd: (event: any) => {
+      const start = mainTabSwipeStartRef.current;
+      if (!start) return;
+
+      const touch = event.nativeEvent;
+      const dx = touch.pageX - start.x;
+      const dy = touch.pageY - start.y;
+
+      // A horizontal gesture captured by the responder is completed by
+      // onResponderRelease. Only finish ordinary touches here.
+      if (Math.abs(dx) <= Math.abs(dy) * 1.15) {
+        mainTabSwipeStartRef.current = null;
+        scheduleMainNavigationReturn();
+      }
+    },
+
+    onTouchCancel: () => {
+      mainTabSwipeStartRef.current = null;
+      scheduleMainNavigationReturn();
+    },
+  };
+
   const bottomNav = () => (
-    <BottomNavigation
-      activeTab={activeTab}
-      primaryColour={favouriteClub.primary}
-      secondaryColour={favouriteClub.secondary}
-      onOpenTab={openMainTab}
-    />
-  );
-  const backToHomeButton = (marginBottom = 18) => (
-    <BackToHomeButton
-      primaryColour={favouriteClub.primary}
-      onPress={openMainHome}
-      marginBottom={marginBottom}
-    />
+    <>
+      {showMainSwipeHint ? (
+        <View
+          pointerEvents="none"
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            bottom: 8,
+            zIndex: 60,
+            alignItems: "center",
+          }}
+        >
+          <View
+            style={{
+              backgroundColor: "rgba(245,241,232,0.94)",
+              paddingHorizontal: 12,
+              paddingVertical: 5,
+              borderRadius: 12,
+            }}
+          >
+            <Text
+              style={{
+                fontSize: 13,
+                fontWeight: "600",
+                color: "#333333",
+              }}
+            >
+              ‹ Swipe between pages ›
+            </Text>
+          </View>
+        </View>
+      ) : null}
+      <Reanimated.View
+      pointerEvents={mainNavHidden ? "none" : "auto"}
+      style={[
+        {
+          position: "absolute",
+          left: 0,
+          right: 0,
+          bottom: 30,
+          zIndex: 50,
+          backgroundColor: "#f5f1e8",
+        },
+        mainNavAnimatedStyle,
+      ]}
+    >
+      <BottomNavigation
+        activeTab={activeTab}
+        primaryColour={favouriteClub.primary}
+        secondaryColour={favouriteClub.secondary}
+        onOpenTab={openMainTab}
+      />
+      </Reanimated.View>
+    </>
   );
 
   // V3.9 — manual "Add Match To History". Suggestions come from the fixture
@@ -9544,10 +9818,17 @@ useEffect(() => {
 
   if (activeTab === "club")
     return (
-      <SafeAreaView style={s.safe}>
+      <SafeAreaView style={[s.safe, { backgroundColor: "#f5f1e8" }]} {...mainTabSwipeProps}>
         <ScrollView
+          directionalLockEnabled
       contentContainerStyle={s.page}
-      onScrollBeginDrag={Keyboard.dismiss}
+      onScrollBeginDrag={() => {
+        Keyboard.dismiss();
+        hideMainNavigation();
+      }}
+      onMomentumScrollBegin={hideMainNavigation}
+      onScrollEndDrag={scheduleMainNavigationReturn}
+      onMomentumScrollEnd={showMainNavigation}
       keyboardShouldPersistTaps="handled"
     >
           <Text style={s.kicker}>MY CLUB</Text>
@@ -9590,7 +9871,6 @@ Choose one team. Its colours automatically control the Club Colours frame style.
     </Pressable>
   )}
 </View>
-          {backToHomeButton(20)}
           {(() => {
             const query = clubSearch.trim().toLowerCase();
             const selectClub = (club: ClubOption) => {
@@ -9663,8 +9943,8 @@ Choose one team. Its colours automatically control the Club Colours frame style.
               </View>
             ));
           })()}
-          {bottomNav()}
         </ScrollView>
+        {bottomNav()}
       </SafeAreaView>
     );
 
@@ -9711,10 +9991,10 @@ Choose one team. Its colours automatically control the Club Colours frame style.
     const isSeasonAttended = (fixture: { opponent: string; date: string }) =>
       isSeasonFixtureAttended(attendanceHistory, fixture);
     return (
-      <SafeAreaView style={[s.safe, { backgroundColor: "#f5f1e8" }]}>
+      <SafeAreaView style={[s.safe, { backgroundColor: "#f5f1e8" }]} {...mainTabSwipeProps}>
         <ScrollView
           style={{ backgroundColor: "#f5f1e8" }}
-          contentContainerStyle={[s.page, { paddingBottom: 120 }]}
+          contentContainerStyle={[s.page, { paddingBottom: 82 }]}
           keyboardShouldPersistTaps="handled"
         >
           <Pressable
@@ -9823,7 +10103,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                     alignItems: "stretch",
                     borderColor: favouriteClub.primary,
                     backgroundColor: "#fffdf8",
-                    marginBottom: 14,
+                    marginBottom: 36,
                   },
                 ]}
               >
@@ -10110,8 +10390,8 @@ Choose one team. Its colours automatically control the Club Colours frame style.
             );
           })}
 
-          {bottomNav()}
         </ScrollView>
+        {bottomNav()}
       </SafeAreaView>
     );
   }
@@ -10120,7 +10400,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
 
     if (!historyContentReady) {
       return (
-        <SafeAreaView style={[s.safe, { backgroundColor: "#f5f1e8" }]}>
+        <SafeAreaView style={[s.safe, { backgroundColor: "#f5f1e8" }]} {...mainTabSwipeProps}>
           <View style={[s.page, { flex: 1, justifyContent: "space-between" }]}>
             <View>
               <Text style={[s.kicker, { marginBottom: 6 }]}>📖 FOOTBALL HISTORY</Text>
@@ -10735,6 +11015,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
       <>
         <SafeAreaView style={[s.safe, { backgroundColor: "#f5f1e8" }]}>
           <ScrollView
+            directionalLockEnabled
             ref={historyScrollRef}
             style={{ backgroundColor: "#f5f1e8" }}
             contentContainerStyle={[s.page, { paddingBottom: 120 }]}
@@ -10748,7 +11029,13 @@ Choose one team. Its colours automatically control the Club Colours frame style.
               }
             }}
             scrollEventThrottle={16}
-            onScrollBeginDrag={Keyboard.dismiss}
+            onScrollBeginDrag={() => {
+        Keyboard.dismiss();
+        hideMainNavigation();
+      }}
+      onMomentumScrollBegin={hideMainNavigation}
+      onScrollEndDrag={scheduleMainNavigationReturn}
+      onMomentumScrollEnd={showMainNavigation}
             keyboardShouldPersistTaps="handled"
           >
             {content}
@@ -13949,9 +14236,13 @@ const manualCompetitionFixtures = draftMatch.competition
     // ---------- HISTORY HOME ----------
 
     return (
-      <SafeAreaView style={[s.safe, { backgroundColor: "#f5f1e8" }]}>
+      <SafeAreaView
+        style={[s.safe, { backgroundColor: "#f5f1e8" }]}
+        {...mainTabSwipeProps}
+      >
         <ScrollView
           ref={historyScrollRef}
+          directionalLockEnabled
           style={{ backgroundColor: "#f5f1e8" }}
           contentContainerStyle={[s.page, { paddingBottom: 120 }]}
           onScroll={(event) => {
@@ -13959,9 +14250,16 @@ const manualCompetitionFixtures = draftMatch.competition
               historyScrollOffsetRef.current =
                 event.nativeEvent.contentOffset.y;
             }
+            noteMainTabScrollActivity();
           }}
           scrollEventThrottle={16}
-          onScrollBeginDrag={Keyboard.dismiss}
+          onScrollBeginDrag={() => {
+            Keyboard.dismiss();
+            hideMainNavigation();
+          }}
+          onMomentumScrollBegin={hideMainNavigation}
+          onScrollEndDrag={scheduleMainNavigationReturn}
+          onMomentumScrollEnd={showMainNavigation}
           keyboardShouldPersistTaps="handled"
         >
           <Text style={[s.kicker, { marginBottom: 6 }]}>📖 FOOTBALL HISTORY</Text>
@@ -14477,8 +14775,8 @@ const manualCompetitionFixtures = draftMatch.competition
             </View>
           )}
 
-          {bottomNav()}
         </ScrollView>
+        {bottomNav()}
       </SafeAreaView>
     );
   }
@@ -14675,10 +14973,17 @@ const manualCompetitionFixtures = draftMatch.competition
     };
 
     return (
-      <SafeAreaView style={s.safe}>
+      <SafeAreaView style={[s.safe, { backgroundColor: "#f5f1e8" }]} {...mainTabSwipeProps}>
         <ScrollView
+          directionalLockEnabled
       contentContainerStyle={s.page}
-      onScrollBeginDrag={Keyboard.dismiss}
+      onScrollBeginDrag={() => {
+        Keyboard.dismiss();
+        hideMainNavigation();
+      }}
+      onMomentumScrollBegin={hideMainNavigation}
+      onScrollEndDrag={scheduleMainNavigationReturn}
+      onMomentumScrollEnd={showMainNavigation}
       keyboardShouldPersistTaps="handled"
     >
           <Text style={s.kicker}>🏟 GROUND TRACKER</Text>
@@ -14737,7 +15042,6 @@ const manualCompetitionFixtures = draftMatch.competition
               </Pressable>
             )}
           </View>
-          {backToHomeButton(20)}
 
           <Text style={[s.leagueTitle, { marginBottom: 8 }]}>MY LEAGUE</Text>
           {myLeagueGrounds.length ? (
@@ -14759,8 +15063,8 @@ const manualCompetitionFixtures = draftMatch.competition
             </Text>
           )}
 
-          {bottomNav()}
         </ScrollView>
+        {bottomNav()}
       </SafeAreaView>
     );
   }
@@ -14804,7 +15108,7 @@ const manualCompetitionFixtures = draftMatch.competition
     );
 
     return (
-      <SafeAreaView style={s.safe}>
+      <SafeAreaView style={[s.safe, { backgroundColor: "#f5f1e8" }]} {...mainTabSwipeProps}>
         <FixturesHeader
           clubName={favouriteClub.name}
           league={favouriteClub.league}
@@ -14827,8 +15131,7 @@ const manualCompetitionFixtures = draftMatch.competition
         />
 
         <View style={{ paddingHorizontal: 16 }}>
-          {backToHomeButton(10)}
-        </View>
+          </View>
 
         {fixturesError && !(fixtureMode === "table" ? hasTable : hasFixtures) ? (
           <FixturesError
@@ -14848,8 +15151,15 @@ const manualCompetitionFixtures = draftMatch.competition
           nextMatchCard={renderNextMatchCard(nextMatch)}
           renderFixtureRow={renderFixtureRow}
           renderTableRow={renderTableRow}
-          footer={bottomNav()}
+          footer={null}
+          onScrollBegin={hideMainNavigation}
+          onScrollEndDrag={scheduleMainNavigationReturn}
+          onMomentumBegin={hideMainNavigation}
+          onMomentumEnd={showMainNavigation}
+          onScrollActivity={noteMainTabScrollActivity}
         />
+
+        {bottomNav()}
       </SafeAreaView>
     );
   }
@@ -15589,8 +15899,15 @@ const manualCompetitionFixtures = draftMatch.competition
     return (
       <SafeAreaView style={s.safe}>
         <ScrollView
+          directionalLockEnabled
       contentContainerStyle={s.page}
-      onScrollBeginDrag={Keyboard.dismiss}
+      onScrollBeginDrag={() => {
+        Keyboard.dismiss();
+        hideMainNavigation();
+      }}
+      onMomentumScrollBegin={hideMainNavigation}
+      onScrollEndDrag={scheduleMainNavigationReturn}
+      onMomentumScrollEnd={showMainNavigation}
       keyboardShouldPersistTaps="handled"
     >
           <Text style={s.kicker}>SEASON MANAGER</Text>
@@ -16468,12 +16785,19 @@ const manualCompetitionFixtures = draftMatch.competition
       </>
     );
   return (
-    <SafeAreaView style={s.safe}>
+    <SafeAreaView style={[s.safe, { backgroundColor: "#f5f1e8" }]} {...mainTabSwipeProps}>
       {oldSchoolHost}
       <ScrollView
+        directionalLockEnabled
       ref={homeScrollRef}
       contentContainerStyle={s.page}
-      onScrollBeginDrag={Keyboard.dismiss}
+      onScrollBeginDrag={() => {
+        Keyboard.dismiss();
+        hideMainNavigation();
+      }}
+      onMomentumScrollBegin={hideMainNavigation}
+      onScrollEndDrag={scheduleMainNavigationReturn}
+      onMomentumScrollEnd={showMainNavigation}
       keyboardShouldPersistTaps="handled"
     >
         <View
@@ -17091,6 +17415,7 @@ const manualCompetitionFixtures = draftMatch.competition
                   borderColor: visibleInkOnCream(favouriteClub.primary),
                   opacity: pressed ? 0.62 : 1,
                   transform: [{ scale: pressed ? 0.98 : 1 }],
+                  marginBottom: 14,
                 },
               ]}
               onPress={() => {
@@ -17103,8 +17428,8 @@ const manualCompetitionFixtures = draftMatch.competition
             </Pressable>
           </View>
         )}
-        {bottomNav()}
       </ScrollView>
+      {bottomNav()}
 
       {homeFrameFocused ? (
         <View

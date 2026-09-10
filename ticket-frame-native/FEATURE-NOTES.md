@@ -1126,3 +1126,13 @@ Verification:
 - Barcode payloads are deliberately not exposed to the JavaScript recognition path.
 - Ambiguous Wallet tickets still use the existing confirmation/manual safety path; Wallet metadata does not bypass TFD fixture authority.
 - Existing photo OCR rules remain unchanged.
+
+## 2026-09-10 — Main navigation swipe and fixed bottom controls
+- Added left/right swipe navigation: Home → History → My Club → Stadiums → Fixtures.
+- Added strong vertical/horizontal gesture locking to prevent page drift and accidental presses.
+- Bottom navigation now remains fixed at the bottom, hides smoothly during vertical scrolling, and returns when scrolling stops.
+- Removed Back to Home controls from My Club, Stadiums and Fixtures.
+- Removed dark green safe-area strips while preserving club-colour navigation buttons.
+- Added one-time “Swipe between pages” discovery prompt below the bottom navigation.
+- Adjusted View Full Season Frame spacing.
+- Device tested and TypeScript verified.
