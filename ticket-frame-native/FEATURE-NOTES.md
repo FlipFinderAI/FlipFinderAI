@@ -1101,3 +1101,5 @@ Verification:
 
 - Made History and photo-index ground resolution fixture-date-aware so older matches use the stadium in use on the match date rather than the club current ground.
 - Existing History records are repaired from matched fixture/date data, including neutral FA Cup Wembley fixtures.
+
+- Added canonical stadium aliases for provider venue names used for Brighton, Rotherham and Coventry so History no longer reports those grounds as Club not listed.

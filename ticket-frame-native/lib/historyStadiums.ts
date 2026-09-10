@@ -1,5 +1,5 @@
 import type { AttendanceRecord } from "./attendanceHistory";
-import { FOOTBALL_GROUNDS } from "./grounds";
+import { footballGroundForName } from "./clubGroundMatching";
 import { normaliseFixtureText } from "./ticketText";
 
 export function historyStadiumRows(records: AttendanceRecord[]) {
@@ -27,9 +27,7 @@ export function historyStadiumRows(records: AttendanceRecord[]) {
       const club =
         groundKey === normaliseFixtureText("Wembley Stadium")
           ? "Home of World Cup 1966 Champions"
-          : (FOOTBALL_GROUNDS.find(
-              (ground) => normaliseFixtureText(ground.stadium) === groundKey,
-            )?.club ?? "Club not listed");
+          : (footballGroundForName(entry.name)?.club ?? "Club not listed");
       return { name: entry.name, visits: entry.visits, club };
     })
     .sort((a, b) => b.visits - a.visits || a.name.localeCompare(b.name));

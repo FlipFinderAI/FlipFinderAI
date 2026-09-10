@@ -105,6 +105,9 @@ export function footballGroundForName(name: string) {
     "bramley moore dock stadium": "hill dickinson stadium",
     "st andrews stadium": "st andrews",
     "st andrews knighthead park": "st andrews",
+    "the american express community stadium": "american express stadium",
+    "aesseal new york stadium": "new york stadium",
+    "the coventry building society arena": "coventry building society arena",
   };
   const resolvedWanted = aliases[wanted] ?? wanted;
   return FOOTBALL_GROUNDS.find((item) => {

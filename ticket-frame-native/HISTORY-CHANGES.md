@@ -1207,3 +1207,5 @@ Verification:
 - 2026-09-10: Fixed pre-match saved tickets remaining scoreless in History after the fixture result became available.
 
 - 2026-09-10: Fixed historical stadium resolution for existing and fixture-derived History records; dated matches now use dated grounds instead of present-day grounds.
+
+- 2026-09-10: Canonicalised The American Express Community Stadium, AESSEAL New York Stadium and The Coventry Building Society Arena to their existing ground records.
