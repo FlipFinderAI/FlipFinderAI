@@ -1673,7 +1673,7 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
         setMatchdayExperiences((current) =>
           current.map((item) =>
             ids.has(item.id)
-              ? { ...item, captureEnabled: false, updatedAt: new Date().toISOString() }
+              ? { ...item, captureEnabled: false, captureStoppedAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
               : item,
           ),
         );
@@ -1707,7 +1707,7 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
         setMatchdayExperiences((current) =>
           current.map((item) =>
             item.id === due.id
-              ? { ...item, captureEnabled: false, updatedAt: new Date().toISOString() }
+              ? { ...item, captureEnabled: false, captureStoppedAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
               : item,
           ),
         );
@@ -8612,7 +8612,16 @@ useEffect(() => {
                   {matchdayExperience.supporter === "home" ? "Home fan" : "Away fan"} · {matchdayExperience.groundName}
                 </Text>
                 <Pressable
-                  onPress={() => updateMatchdayExperience((current) => ({ ...current, captureEnabled: !current.captureEnabled, updatedAt: new Date().toISOString() }))}
+                  onPress={() => updateMatchdayExperience((current) => {
+                    const now = new Date().toISOString();
+                    const turningOn = !current.captureEnabled;
+                    return {
+                      ...current,
+                      captureEnabled: turningOn,
+                      captureStoppedAt: turningOn ? undefined : now,
+                      updatedAt: now,
+                    };
+                  })}
                   accessibilityRole="switch"
                   accessibilityState={{ checked: matchdayExperience.captureEnabled }}
                   style={{ alignSelf: "flex-start", borderWidth: 1, borderColor: favouriteClub.primary, borderRadius: 9, paddingHorizontal: 10, paddingVertical: 7 }}

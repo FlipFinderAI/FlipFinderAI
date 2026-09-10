@@ -1144,3 +1144,5 @@ Verification:
 - Edit mode now displays: `ADD A VENUE OR DRAG AND DROP A PHOTO INTO A VENUE`.
 - Photo thumbnails retain their previous display size.
 - Normal photo opening remains outside Edit mode.
+
+- Matchday Experience now records an exact captureStoppedAt timestamp when capture is manually or automatically stopped, preserving precise media windows while remaining backward-compatible with older saved experiences.

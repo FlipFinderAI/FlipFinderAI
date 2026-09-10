@@ -48,6 +48,7 @@ export type MatchdayExperienceRecord = {
   groundName: string;
   supporter: MatchdaySupporterType;
   captureEnabled: boolean;
+  captureStoppedAt?: string;
   collapsed: boolean;
   closePromptAt?: string;
   closePromptCount?: number;

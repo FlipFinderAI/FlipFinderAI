@@ -1240,3 +1240,5 @@ Verification:
 - Added Edit-mode guidance for adding a venue or dragging a photo into a venue.
 - Preserved the original History photo thumbnail sizing.
 - Verified on device and passed `git diff --check` plus TypeScript compile.
+
+- Added MatchdayExperienceRecord.captureStoppedAt and wired automatic expiry, close-now, and manual capture toggle to store the exact stop time for Matchday Experience media-window backfill.
