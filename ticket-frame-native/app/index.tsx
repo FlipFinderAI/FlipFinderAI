@@ -1711,29 +1711,46 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
               : item,
           ),
         );
-      const chooseReminder = () =>
-        Alert.alert("Remind me", "Choose when to ask again. Matchday Experience turns off automatically at the eight-hour limit.", [
-          ...([1, 2, 4, 8] as const).map((hours) => ({
-            text: `${hours} hour${hours === 1 ? "" : "s"}`,
-            onPress: () =>
-              setMatchdayExperiences((current) =>
-                current.map((item) => {
-                  if (item.id !== due.id) return item;
-                  const requested = now + hours * 60 * 60 * 1000;
-                  const limit = item.autoOffAt
-                    ? new Date(item.autoOffAt).getTime()
-                    : requested;
-                  return {
-                    ...item,
-                    closePromptAt: new Date(Math.min(requested, limit)).toISOString(),
-                    closePromptCount: 1,
-                    updatedAt: new Date().toISOString(),
-                  };
-                }),
-              ),
-          })),
-          { text: "Cancel", style: "cancel" },
-        ]);
+      const chooseReminder = () => {
+        const competition = String(due.competition ?? "").toLowerCase();
+        const europeanCompetition =
+          /champions league|european cup|europa league|uefa cup|conference league|cup winners/.test(
+            competition,
+          );
+        const europeanAway =
+          due.supporter === "away" && europeanCompetition;
+        const reminderHours = europeanAway
+          ? [1, 2, 4, 8, 24, 48, 60]
+          : [1, 2, 4, 8];
+
+        Alert.alert(
+          "Remind me",
+          europeanAway
+            ? "Choose when to ask again. Longer options are available for this European away trip."
+            : "Choose when to ask again.",
+          [
+            ...reminderHours.map((hours) => ({
+              text: `${hours} hour${hours === 1 ? "" : "s"}`,
+              onPress: () =>
+                setMatchdayExperiences((current) =>
+                  current.map((item) => {
+                    if (item.id !== due.id) return item;
+                    const requested = now + hours * 60 * 60 * 1000;
+                    const extendedAutoOff = requested + 8 * 60 * 60 * 1000;
+                    return {
+                      ...item,
+                      closePromptAt: new Date(requested).toISOString(),
+                      autoOffAt: new Date(extendedAutoOff).toISOString(),
+                      closePromptCount: 1,
+                      updatedAt: new Date().toISOString(),
+                    };
+                  }),
+                ),
+            })),
+            { text: "Cancel", style: "cancel" },
+          ],
+        );
+      };
       Alert.alert(
         "Close Matchday Experience?",
         `${due.clubName} v ${due.opponentName} has finished. Close Matchday Experience now?`,
@@ -8354,6 +8371,7 @@ useEffect(() => {
                   clubName: favouriteClub.name,
                   opponentName,
                   kickoff: match.kickoff ?? null,
+                  competition: match.competition ?? null,
                   groundId: matchGround.id,
                   groundName: matchGround.stadium,
                   supporter,

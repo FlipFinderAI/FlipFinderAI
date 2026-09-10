@@ -1146,3 +1146,5 @@ Verification:
 - Normal photo opening remains outside Edit mode.
 
 - Matchday Experience now records an exact captureStoppedAt timestamp when capture is manually or automatically stopped, preserving precise media windows while remaining backward-compatible with older saved experiences.
+
+- Matchday Experience reminder extensions now offer 1, 2, 4 or 8 hours for all matches, with 24, 48 and 60 hour options only for European away matches. Extended reminders also move the automatic capture stop beyond the next reminder.

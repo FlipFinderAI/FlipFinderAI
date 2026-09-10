@@ -1242,3 +1242,5 @@ Verification:
 - Verified on device and passed `git diff --check` plus TypeScript compile.
 
 - Added MatchdayExperienceRecord.captureStoppedAt and wired automatic expiry, close-now, and manual capture toggle to store the exact stop time for Matchday Experience media-window backfill.
+
+- Stored Matchday Experience competition and added European-away-only 24/48/60 hour reminder extensions while preserving 1/2/4/8 hour options for all matches and preventing auto-off from firing before the next reminder.

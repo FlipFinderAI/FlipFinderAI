@@ -44,6 +44,7 @@ export type MatchdayExperienceRecord = {
   clubName: string;
   opponentName: string;
   kickoff?: string | null;
+  competition?: string | null;
   groundId: string;
   groundName: string;
   supporter: MatchdaySupporterType;
