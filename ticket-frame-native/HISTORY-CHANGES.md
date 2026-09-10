@@ -1233,3 +1233,10 @@ Verification:
 - Final swipe completion distance: 60px.
 - Final vertical gesture lock: 56px / 3.0 normally; 68px / 3.5 for Stadiums and Fixtures.
 - One-time swipe hint persisted with AsyncStorage key ticket-frame-main-swipe-hint-seen.v2.
+
+## 2026-09-10
+- Added Edit-mode drag-and-drop for History Match Memory photos between venue/location groups.
+- Added real moving photo gesture feedback and persisted venue reassignment.
+- Added Edit-mode guidance for adding a venue or dragging a photo into a venue.
+- Preserved the original History photo thumbnail sizing.
+- Verified on device and passed `git diff --check` plus TypeScript compile.

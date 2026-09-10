@@ -1136,3 +1136,11 @@ Verification:
 - Added one-time “Swipe between pages” discovery prompt below the bottom navigation.
 - Adjusted View Full Season Frame spacing.
 - Device tested and TypeScript verified.
+
+## History Match Memory drag-and-drop editing
+- History Match Memory photos can now be dragged between venue/location folders while Edit mode is active.
+- The dragged photo follows the finger during the gesture and drops into the target venue.
+- Venue assignments persist through the existing Matchday Media assignment storage.
+- Edit mode now displays: `ADD A VENUE OR DRAG AND DROP A PHOTO INTO A VENUE`.
+- Photo thumbnails retain their previous display size.
+- Normal photo opening remains outside Edit mode.

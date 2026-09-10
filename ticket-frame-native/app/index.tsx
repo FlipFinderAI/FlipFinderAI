@@ -360,6 +360,68 @@ function canonicalStoredClub(club: ClubOption | undefined): ClubOption | undefin
 
 
 
+type DraggableHistoryPhotoProps = {
+  mediaKey: string;
+  editMode: boolean;
+  children: React.ReactNode;
+  onDragStart: (mediaKey: string) => void;
+  onDrop: (mediaKey: string, absoluteX: number, absoluteY: number) => void;
+};
+
+function DraggableHistoryPhoto({
+  mediaKey,
+  editMode,
+  children,
+  onDragStart,
+  onDrop,
+}: DraggableHistoryPhotoProps) {
+  const translateX = useSharedValue(0);
+  const translateY = useSharedValue(0);
+  const scale = useSharedValue(1);
+  const dragging = useSharedValue(false);
+
+  const dragGesture = Gesture.Pan()
+    .enabled(editMode)
+    .activateAfterLongPress(200)
+    .minDistance(1)
+    .onBegin(() => {
+      dragging.value = true;
+      scale.value = withSpring(1.08);
+      runOnJS(onDragStart)(mediaKey);
+    })
+    .onUpdate((event) => {
+      translateX.value = event.translationX;
+      translateY.value = event.translationY;
+    })
+    .onEnd((event) => {
+      runOnJS(onDrop)(mediaKey, event.absoluteX, event.absoluteY);
+    })
+    .onFinalize(() => {
+      dragging.value = false;
+      translateX.value = withSpring(0);
+      translateY.value = withSpring(0);
+      scale.value = withSpring(1);
+    });
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: translateX.value },
+      { translateY: translateY.value },
+      { scale: scale.value },
+    ],
+    zIndex: dragging.value ? 1000 : 0,
+    elevation: dragging.value ? 20 : 0,
+  }));
+
+  return (
+    <GestureDetector gesture={dragGesture}>
+      <Reanimated.View style={[{ width: "32.5%" }, animatedStyle]}>
+        {children}
+      </Reanimated.View>
+    </GestureDetector>
+  );
+}
+
 export default function HomeScreen() {
   const [frameStyle, setFrameStyle] = useState(stylesList[0]);
   const [tickets, setTickets] = useState<SeasonTicket[]>([]);
@@ -539,6 +601,17 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
   >({});
   const [mediaEditMode, setMediaEditMode] = useState(false);
   const [selectedMediaKeys, setSelectedMediaKeys] = useState<Set<string>>(new Set());
+  const mediaDropZoneRefs = useRef<Record<string, any>>({});
+  const mediaDropZoneAssignmentsRef = useRef<Record<string, MatchdayMediaAssignment>>({});
+  const mediaDropZonesRef = useRef<
+    Record<string, {
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+      assignment: MatchdayMediaAssignment;
+    }>
+  >({});
   const promptedMediaLocationGroupsRef = useRef<Set<string>>(new Set());
   const resolvedMatchMediaSignatureRef = useRef<Record<string, string>>({});
   const historyPhotoResolutionPromisesRef = useRef<
@@ -12325,6 +12398,56 @@ Choose one team. Its colours automatically control the Club Colours frame style.
           else next.add(key);
           return next;
         });
+      const refreshMediaDropZones = () => {
+        Object.entries(mediaDropZoneRefs.current).forEach(([dropKey, node]) => {
+          const assignment = mediaDropZoneAssignmentsRef.current[dropKey];
+          if (!node || !assignment || typeof node.measureInWindow !== "function") {
+            return;
+          }
+
+          node.measureInWindow(
+            (x: number, y: number, width: number, height: number) => {
+              mediaDropZonesRef.current[dropKey] = {
+                x,
+                y,
+                width,
+                height,
+                assignment,
+              };
+            },
+          );
+        });
+      };
+
+      const beginHistoryPhotoDrag = () => {
+        if (!mediaEditMode) return;
+        refreshMediaDropZones();
+      };
+
+      const dropHistoryPhoto = (
+        mediaKey: string,
+        absoluteX: number,
+        absoluteY: number,
+      ) => {
+        if (!mediaEditMode) return;
+
+        const target = Object.values(mediaDropZonesRef.current).find(
+          (zone) =>
+            absoluteX >= zone.x &&
+            absoluteX <= zone.x + zone.width &&
+            absoluteY >= zone.y &&
+            absoluteY <= zone.y + zone.height,
+        );
+
+        if (!target) return;
+
+        setMatchdayMediaAssignments((current) => ({
+          ...current,
+          [mediaKey]: target.assignment,
+        }));
+        setSelectedMediaKeys(new Set());
+      };
+
       const finishMovingSelectedMedia = () => {
         if (!selectedMediaKeys.size) {
           Alert.alert("Select media", "Tap the photos and videos you want to move first.");
@@ -12446,9 +12569,40 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                 </Pressable>
               </View>
               {mediaEditMode ? (
-                <Pressable onPress={finishMovingSelectedMedia} style={{ paddingVertical: 9, borderRadius: 8, backgroundColor: favouriteClub.primary, marginBottom: 6 }}>
-                  <Text style={{ textAlign: "center", fontWeight: "900", color: readableTextColour(favouriteClub.primary) }}>MOVE {selectedMediaKeys.size} SELECTED</Text>
-                </Pressable>
+                <>
+                  <Text
+                    style={[
+                      s.helpText,
+                      {
+                        textAlign: "center",
+                        marginTop: 3,
+                        marginBottom: 8,
+                        fontWeight: "900",
+                      },
+                    ]}
+                  >
+                    ADD A VENUE OR DRAG AND DROP A PHOTO INTO A VENUE
+                  </Text>
+                  <Pressable
+                    onPress={finishMovingSelectedMedia}
+                    style={{
+                      paddingVertical: 9,
+                      borderRadius: 8,
+                      backgroundColor: favouriteClub.primary,
+                      marginBottom: 6,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        textAlign: "center",
+                        fontWeight: "900",
+                        color: readableTextColour(favouriteClub.primary),
+                      }}
+                    >
+                      MOVE {selectedMediaKeys.size} SELECTED
+                    </Text>
+                  </Pressable>
+                </>
               ) : null}
               {orderedMediaLocationGroups.map((group) => (
                 <View key={`${group.assignment.placeKind}|${group.assignment.placeName}`} style={{ paddingVertical: 9, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: "#ddd6c8", flexDirection: "row", alignItems: "center" }}>
@@ -12488,6 +12642,8 @@ Choose one team. Its colours automatically control the Club Colours frame style.
           ) : null}
           {orderedMediaLocationGroups.map((group, groupIndex) => {
             const groupKeySet = new Set(group.keys);
+            const mediaDropKey = `${group.assignment.placeKind}|${group.assignment.placeName}`;
+            mediaDropZoneAssignmentsRef.current[mediaDropKey] = group.assignment;
 
             const groupSavedPhotos = photos.filter((uri) =>
               groupKeySet.has(`${selectedHistoryRecord.id}|uri:${uri}`),
@@ -12532,6 +12688,15 @@ Choose one team. Its colours automatically control the Club Colours frame style.
             return (
               <View
                 key={`${group.assignment.placeKind}|${group.assignment.placeName}|${groupIndex}`}
+                ref={(node) => {
+                  mediaDropZoneRefs.current[mediaDropKey] = node;
+                }}
+                collapsable={false}
+                onLayout={() => {
+                  if (mediaEditMode) {
+                    requestAnimationFrame(refreshMediaDropZones);
+                  }
+                }}
                 style={{
                   marginTop: groupIndex === 0 ? 4 : 24,
                   paddingTop: groupIndex === 0 ? 0 : 18,
@@ -12654,8 +12819,14 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                       const mediaKey = `${selectedHistoryRecord.id}|uri:${uri}`;
 
                       return (
-                        <Pressable
+                        <DraggableHistoryPhoto
                           key={`${uri}-${index}`}
+                          mediaKey={mediaKey}
+                          editMode={mediaEditMode}
+                          onDragStart={beginHistoryPhotoDrag}
+                          onDrop={dropHistoryPhoto}
+                        >
+                          <Pressable
                           onPress={() =>
                             mediaEditMode
                               ? toggleMediaSelection(mediaKey)
@@ -12696,8 +12867,9 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                               ],
                             )
                           }
+                          delayLongPress={mediaEditMode ? 100000 : 400}
                           style={({ pressed }) => ({
-                            width: "32.5%",
+                            width: "100%",
                             opacity: pressed ? 0.6 : 1,
                             borderWidth: selectedMediaKeys.has(mediaKey) ? 4 : 0,
                             borderColor: favouriteClub.primary,
@@ -12709,6 +12881,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                             style={{ width: "100%", aspectRatio: 1 }}
                           />
                         </Pressable>
+                        </DraggableHistoryPhoto>
                       );
                     })}
 
@@ -12716,8 +12889,14 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                       const mediaKey = `${selectedHistoryRecord.id}|asset:${media.assetId}`;
 
                       return (
-                        <Pressable
+                        <DraggableHistoryPhoto
                           key={media.assetId}
+                          mediaKey={mediaKey}
+                          editMode={mediaEditMode}
+                          onDragStart={beginHistoryPhotoDrag}
+                          onDrop={dropHistoryPhoto}
+                        >
+                          <Pressable
                           onPress={() =>
                             mediaEditMode
                               ? toggleMediaSelection(mediaKey)
@@ -12771,9 +12950,9 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                               ],
                             )
                           }
-                          delayLongPress={400}
+                          delayLongPress={mediaEditMode ? 100000 : 400}
                           style={({ pressed }) => ({
-                            width: "32.5%",
+                            width: "100%",
                             opacity: pressed ? 0.6 : 1,
                             borderWidth: selectedMediaKeys.has(mediaKey) ? 4 : 0,
                             borderColor: favouriteClub.primary,
@@ -12785,6 +12964,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                             style={{ width: "100%", aspectRatio: 1 }}
                           />
                         </Pressable>
+                        </DraggableHistoryPhoto>
                       );
                     })}
                   </View>
