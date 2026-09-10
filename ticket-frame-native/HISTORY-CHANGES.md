@@ -1220,3 +1220,10 @@ Verification:
 - Prevented stadium/seat metadata lines from becoming false team clues.
 - Preserved existing OCR recognition and fixture-selection safety rules.
 - Regression verified on a normal dated ticket and ambiguous no-date FA Cup ticket.
+
+## 2026-09-10 — Apple Wallet forwarded ticket import
+- Added native `WalletPassModule` for reading forwarded `.pkpass` files from the Ticket Frame App Group inbox.
+- Added `fflate` parsing of Wallet `pass.json`.
+- Forwarded Wallet tickets now use structured pass metadata with the existing recognition/TFD confirmation pipeline.
+- Added foreground/startup processing for pending Wallet shares.
+- Preserved existing OCR recognition and ambiguity safeguards.

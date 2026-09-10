@@ -55,3 +55,23 @@ RCT_EXTERN_METHOD(thumbnail:(NSString *)assetId
 }
 
 @end
+
+@interface RCT_EXTERN_MODULE(WalletPassModule, NSObject)
+
+RCT_EXTERN_METHOD(listPendingPasses:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(readPendingPass:(NSString *)fileName
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(removePendingPass:(NSString *)fileName
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
++ (BOOL)requiresMainQueueSetup
+{
+  return NO;
+}
+
+@end

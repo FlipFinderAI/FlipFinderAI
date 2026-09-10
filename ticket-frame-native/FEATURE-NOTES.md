@@ -1117,3 +1117,12 @@ Verification:
 - Club identity matching uses canonical club matching when widening historical fixture candidates.
 - Ambiguous no-date tickets remain unresolved rather than guessing; Manual Add remains the fallback.
 - Verified with a normal dated Everton v Leeds ticket: existing OCR path still resolves and adds correctly.
+
+## Wallet forwarded ticket import
+- Added support for genuine Apple Wallet `.pkpass` tickets forwarded through the existing Football Ticket Frame Share Extension.
+- Shared passes are read from the existing App Group `WalletInbox`.
+- Structured `pass.json` match information is used as recognition evidence before relying on image OCR.
+- Wallet event fields, relevant date/time, organisation and venue/location text feed into the existing ticket recognition and TFD fixture matching rules.
+- Barcode payloads are deliberately not exposed to the JavaScript recognition path.
+- Ambiguous Wallet tickets still use the existing confirmation/manual safety path; Wallet metadata does not bypass TFD fixture authority.
+- Existing photo OCR rules remain unchanged.

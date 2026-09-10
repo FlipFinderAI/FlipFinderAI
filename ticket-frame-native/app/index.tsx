@@ -280,10 +280,18 @@ import {
 } from "@/lib/fixtureCache";
 import {
   recogniseTicketImage,
+  recogniseFromText,
   groundForHomeTeam,
   buildTicketDisplayName,
   type RecognizedTicket,
 } from "@/lib/ticketRecognition";
+import {
+  listPendingWalletPasses,
+  readWalletPassEvidence,
+  removePendingWalletPass,
+  walletPassEvidenceToRecognitionText,
+  type WalletPassEvidence,
+} from "@/lib/walletPass";
 // V3.9.5 — ticket types, edit-details and separate item stores.
 import {
   buildRecognitionPatch,
@@ -2746,6 +2754,72 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
     }
   }
 
+  async function recogniseWalletAndQueue(
+    ticket: SeasonTicket,
+    evidence: WalletPassEvidence,
+  ): Promise<boolean> {
+    const recognitionText = walletPassEvidenceToRecognitionText(evidence);
+
+    console.log(
+      `[wallet-ticket-recognition-start]
+ticket: ${ticket.name || "Wallet ticket"}
+season: ${ticket.seasonKey || activeSeason}
+selected club: ${favouriteClub.name}
+structured fields: ${evidence.fieldText.length}
+relevant date: ${evidence.relevantDate ?? "-"}`,
+    );
+
+    if (!recognitionText.trim()) {
+      Alert.alert(
+        "Wallet ticket needs attention",
+        "This Wallet pass does not contain enough readable match information.",
+      );
+      return false;
+    }
+
+    if (celebrateArmedRef.current && !celebrationCandidateIdRef.current) {
+      celebrationCandidateIdRef.current = ticket.id;
+    }
+
+    try {
+      const recognition = await recogniseFromText(
+        recognitionText,
+        favouriteClub.name,
+        ticket.seasonKey || activeSeason,
+        { league: favouriteClub.league },
+      );
+
+      console.log(
+        `[wallet-ticket-final-match]
+homeTeam: ${recognition.homeTeam ?? "-"}
+awayTeam: ${recognition.awayTeam ?? "-"}
+date: ${recognition.date ?? "-"}
+kickoff: ${recognition.kickoff ?? "-"}
+competition: ${recognition.competition ?? "-"}
+ground: ${recognition.ground ?? "-"}
+season: ${recognition.seasonKey || ticket.seasonKey || activeSeason}
+confidence: ${recognition.confidence}%`,
+      );
+
+      setConfirmQueue((current) =>
+        current.some((entry) => entry.ticket.id === ticket.id)
+          ? current
+          : [...current, { ticket, recognition }],
+      );
+
+      return true;
+    } catch (error) {
+      console.log("[wallet-ticket-recognition] failed", error);
+      Alert.alert(
+        "Wallet ticket needs attention",
+        "Could not recognise this Wallet ticket.",
+      );
+      return false;
+    } finally {
+      recognitionDoneRef.current = true;
+    }
+  }
+
   async function recogniseAndQueue(ticket: SeasonTicket): Promise<boolean> {
     const uri =
       recognitionImageUrisRef.current.get(ticket.id) ??
@@ -3553,6 +3627,143 @@ img { display: block; width: 100%; height: 100%; object-fit: contain }
   const [draftSeason, setDraftSeason] = useState<string | null>(null);
   const seasonFrame = createSeasonFrame(favouriteClub.name, activeSeason);
   const frameCaptureRef = useRef<View>(null);
+
+  const walletInboxProcessingRef = useRef(false);
+  const walletInboxProcessedRef = useRef<Set<string>>(new Set());
+
+  const importPendingWalletPasses = useCallback(async () => {
+    if (
+      walletInboxProcessingRef.current ||
+      !storageReady ||
+      !favouriteClub?.name
+    ) {
+      return;
+    }
+
+    walletInboxProcessingRef.current = true;
+
+    try {
+      const pending = await listPendingWalletPasses();
+
+      for (const pendingPass of pending) {
+        if (walletInboxProcessedRef.current.has(pendingPass.name)) {
+          continue;
+        }
+
+        walletInboxProcessedRef.current.add(pendingPass.name);
+
+        try {
+          const evidence = await readWalletPassEvidence(pendingPass.name);
+          const stableEvidence = JSON.stringify({
+            description: evidence.description,
+            organizationName: evidence.organizationName,
+            relevantDate: evidence.relevantDate,
+            fieldText: evidence.fieldText,
+            locations: evidence.locations,
+          });
+
+          const fingerprint = await Crypto.digestStringAsync(
+            Crypto.CryptoDigestAlgorithm.SHA256,
+            stableEvidence,
+          );
+
+          const alreadyExists = tickets.some(
+            (ticket) => ticket.fingerprint === fingerprint,
+          );
+
+          if (alreadyExists) {
+            await removePendingWalletPass(pendingPass.name);
+            continue;
+          }
+
+          const ticket: SeasonTicket = {
+            id: `wallet-${fingerprint}`,
+            fingerprint,
+            name: evidence.description || "Wallet Ticket",
+            uri: undefined,
+            matchDate: null,
+            kickoffTime: null,
+            competition: null,
+            details: undefined,
+            seasonKey: "",
+            scale: 1,
+            boxScale: 1,
+            offsetX: 0,
+            offsetY: 0,
+          };
+
+          setTickets((current) =>
+            current.some((item) => item.fingerprint === fingerprint)
+              ? current
+              : [...current, ticket].sort(byMatchDateOldestFirst),
+          );
+
+          const reviewFinished = new Promise<"saved" | "skipped">(
+            (resolve) => {
+              ticketReviewResolversRef.current.set(ticket.id, resolve);
+            },
+          );
+
+          const queued = await recogniseWalletAndQueue(ticket, evidence);
+
+          if (!queued) {
+            ticketReviewResolversRef.current.delete(ticket.id);
+            walletInboxProcessedRef.current.delete(pendingPass.name);
+            continue;
+          }
+
+          const result = await reviewFinished;
+
+          if (result === "skipped") {
+            setTickets((current) =>
+              current.filter((item) => item.id !== ticket.id),
+            );
+          }
+
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          await savedFrameWriteChainRef.current.catch(() => {});
+          await removePendingWalletPass(pendingPass.name);
+
+          Alert.alert(
+            result === "saved" ? "Wallet ticket saved" : "Wallet ticket skipped",
+            result === "saved"
+              ? "The forwarded Wallet ticket has been added to Football Ticket Frame."
+              : "The forwarded Wallet ticket was not added.",
+          );
+        } catch (error) {
+          walletInboxProcessedRef.current.delete(pendingPass.name);
+          console.log("[wallet-ticket-import] failed", error);
+        }
+      }
+    } finally {
+      walletInboxProcessingRef.current = false;
+    }
+  }, [
+    activeSeason,
+    favouriteClub?.league,
+    favouriteClub?.name,
+    storageReady,
+    tickets,
+  ]);
+
+  useEffect(() => {
+    if (!storageReady || !favouriteClub?.name) return;
+
+    void importPendingWalletPasses();
+
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") {
+        void importPendingWalletPasses();
+      }
+    });
+
+    return () => subscription.remove();
+  }, [
+    favouriteClub?.name,
+    importPendingWalletPasses,
+    storageReady,
+  ]);
+
   const [exportJob, setExportJob] = useState<SeasonTicket[] | null>(null);
   const exportFrameRef = useRef<View>(null);
   const exportLoadedRef = useRef<Set<string>>(new Set());
