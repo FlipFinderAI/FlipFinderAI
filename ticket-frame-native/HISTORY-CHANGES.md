@@ -1209,3 +1209,7 @@ Verification:
 - 2026-09-10: Fixed historical stadium resolution for existing and fixture-derived History records; dated matches now use dated grounds instead of present-day grounds.
 
 - 2026-09-10: Canonicalised The American Express Community Stadium, AESSEAL New York Stadium and The Coventry Building Society Arena to their existing ground records.
+
+- 2026-09-10: Fixed truncated ticket year OCR causing dates such as "09 SEPTEMBER 20..." to become 2020-09-09. The parser now validates two-digit years against the selected season and derives the correct season year when the fragment is inconsistent. Real-ticket verification passed.
+
+- 2026-09-10: Fixed truncated ticket year OCR causing dates such as "09 SEPTEMBER 20..." to become 2020-09-09. The parser now validates two-digit years against the selected season and derives the correct season year when the fragment is inconsistent. Real-ticket verification passed.

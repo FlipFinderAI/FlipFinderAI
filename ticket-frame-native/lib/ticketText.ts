@@ -139,8 +139,26 @@ export function dateFromTicketText(text: string, season: string) {
     monthIndex: number,
     yearText: string | undefined,
   ): string | null => {
-    let year = yearText ? Number(yearText) : monthIndex >= 6 ? start : start + 1;
-    if (year < 100) year += 2000;
+    let year: number;
+
+    if (yearText?.length === 2) {
+      const shortYear = Number(yearText);
+      const startShort = start % 100;
+      const endShort = (start + 1) % 100;
+
+      // OCR can truncate a four-digit year, e.g. "2026" -> "20...".
+      // Only trust a two-digit year when it agrees with the selected season.
+      // Otherwise derive the year from the season and month.
+      year =
+        shortYear === startShort || shortYear === endShort
+          ? 2000 + shortYear
+          : monthIndex >= 6
+            ? start
+            : start + 1;
+    } else {
+      year = yearText ? Number(yearText) : monthIndex >= 6 ? start : start + 1;
+    }
+
     const date = new Date(year, monthIndex, day);
     if (
       date.getFullYear() !== year ||

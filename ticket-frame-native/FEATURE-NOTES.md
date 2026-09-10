@@ -1103,3 +1103,7 @@ Verification:
 - Existing History records are repaired from matched fixture/date data, including neutral FA Cup Wembley fixtures.
 
 - Added canonical stadium aliases for provider venue names used for Brighton, Rotherham and Coventry so History no longer reports those grounds as Club not listed.
+
+- 2026-09-10: Ticket date recognition now protects against truncated OCR years. Two-digit year fragments that conflict with the selected season are resolved from the season/month instead of creating a false historical year. Verified with the previously failing Chelsea v Leeds ticket.
+
+- 2026-09-10: Ticket date recognition now protects against truncated OCR years. Two-digit year fragments that conflict with the selected season are resolved from the season/month instead of creating a false historical year. Verified with the previously failing Chelsea v Leeds ticket.
