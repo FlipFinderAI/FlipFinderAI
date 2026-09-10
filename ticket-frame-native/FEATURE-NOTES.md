@@ -1107,3 +1107,13 @@ Verification:
 - 2026-09-10: Ticket date recognition now protects against truncated OCR years. Two-digit year fragments that conflict with the selected season are resolved from the season/month instead of creating a false historical year. Verified with the previously failing Chelsea v Leeds ticket.
 
 - 2026-09-10: Ticket date recognition now protects against truncated OCR years. Two-digit year fragments that conflict with the selected season are resolved from the season/month instead of creating a false historical year. Verified with the previously failing Chelsea v Leeds ticket.
+
+## Ticket recognition fallback hardening — 2026-09-10
+- Preserved the existing OCR-first recognition path.
+- No-date ticket recognition now searches bundled fixtures from 2018 onward only.
+- Round evidence now participates in fixture lookup.
+- Numeric round text is normalised generically, including `R4` / `4th Round`, while replay rounds remain distinct.
+- Metadata-labelled lines such as stand/block/row/seat are excluded from fallback team-name clues.
+- Club identity matching uses canonical club matching when widening historical fixture candidates.
+- Ambiguous no-date tickets remain unresolved rather than guessing; Manual Add remains the fallback.
+- Verified with a normal dated Everton v Leeds ticket: existing OCR path still resolves and adds correctly.

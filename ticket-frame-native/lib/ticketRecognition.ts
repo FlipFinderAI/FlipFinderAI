@@ -1,5 +1,6 @@
 import TextRecognition from "@react-native-ml-kit/text-recognition";
 import {
+  clubNamesMatch,
   competitionFromTicketText,
   dateFromTicketText,
   kickoffFromTicketText,
@@ -11,6 +12,7 @@ import {
 } from "./ticketText";
 import { fetchAndCacheFixtures, type CachedFixture } from "./fixtureCache";
 import { FOOTBALL_GROUNDS, type FootballGround } from "./grounds";
+import { getAllBundledClubFixtures } from "./fixtures";
 
 export type RecognizedTicket = {
   homeTeam: string | null;
@@ -373,6 +375,22 @@ type FixtureCandidate = {
   competitionRoundMatch: boolean;
 };
 
+function normaliseRoundClue(value: string | null | undefined) {
+  if (!value) return "";
+  const normalised = normaliseFixtureText(value);
+
+  const numbered = normalised.match(
+    /\b(?:(\d{1,2})(?:st|nd|rd|th)?\s+round|round\s+(\d{1,2})|r\s*(\d{1,2}))\b/,
+  );
+  if (numbered) {
+    const number = numbered[1] || numbered[2] || numbered[3];
+    const replay = /\breplay(?:s)?\b/.test(normalised);
+    return replay ? `round ${number} replay` : `round ${number}`;
+  }
+
+  return normalised;
+}
+
 function describeFixture(fixture: CachedFixture, clubName: string) {
   const pairing =
     fixture.homeAway === "home"
@@ -471,13 +489,9 @@ async function bestFixtureForSides(
       !!ocrRound &&
       !!fixture.round &&
       (() => {
-        const clue = normaliseFixtureText(ocrRound);
-        const official = normaliseFixtureText(fixture.round);
-        return (
-          clue === official ||
-          clue.includes(official) ||
-          official.includes(clue)
-        );
+        const clue = normaliseRoundClue(ocrRound);
+        const official = normaliseRoundClue(fixture.round);
+        return clue === official;
       })();
     const competitionMatches =
       !!ocrCompetition &&
@@ -838,7 +852,8 @@ export async function recogniseFromText(
     kickoff ||
     homeRaw ||
     awayRaw ||
-    competition
+    competition ||
+    roundClue
   );
 
   // Provider fixtures arrive FIRST so every downstream step (fixture search,
@@ -855,6 +870,40 @@ export async function recogniseFromText(
         ),
       );
       seasonFixtures = fixtureSets.flat();
+
+      if (!date && !ocrSeason) {
+        const allClubFixtures = getAllBundledClubFixtures(clubName)
+          .filter((row) => !!row.date && row.date >= "2018-01-01")
+          .map((row) => {
+            const home = clubNamesMatch(row.homeName, clubName);
+            return {
+              fixtureId: row.id,
+              opponent: home ? row.awayName : row.homeName,
+              homeAway: home ? ("home" as const) : ("away" as const),
+              date: row.date ?? "",
+              kickoff: row.kickoff,
+              competition: row.competition ?? "",
+              season: row.season,
+              round: row.round ?? null,
+              venue: row.venue ?? null,
+              homeScore: row.homeScore,
+              awayScore: row.awayScore,
+              attendance: row.attendance ?? null,
+              homeScorers: row.homeScorers ?? [],
+              awayScorers: row.awayScorers ?? [],
+            } satisfies CachedFixture;
+          });
+
+        seasonFixtures = Array.from(
+          new Map(
+            [...seasonFixtures, ...allClubFixtures].map((fixture) => [
+              fixture.fixtureId ??
+                `${fixture.season}|${fixture.date}|${fixture.opponent}|${fixture.competition}`,
+              fixture,
+            ]),
+          ).values(),
+        );
+      }
     } catch {
       console.log("[ticket-recognition-fixture-search] fixture fetch failed");
     }
@@ -876,13 +925,23 @@ export async function recogniseFromText(
   // Scan plausible text lines against this season's OFFICIAL fixture names.
   // Only unambiguous provider-resolved identities survive; raw OCR fragments
   // still never become fixture lookup keys.
+  const metadataLabelLine =
+    /^(?:stand|block|row|seat|entrance|gate|turnstile|client(?:\s+ref(?:erence)?)?|price(?:\s+class)?|area(?:\s+desc(?:ription)?)?|full\s+name)$/i;
+
+  const ocrLines = ocrText.split(/\r?\n/);
+
   const lineOfficialClues = Array.from(
     new Set(
-      ocrText
-        .split(/\r?\n/)
-        .map((line) => cleanSide(line))
-        .filter((line) => isTeamish(line))
-        .map((line) => resolveOfficialSide(line, officialNames))
+      ocrLines
+        .map((line, index) => ({
+          line: cleanSide(line),
+          previous: index > 0 ? cleanSide(ocrLines[index - 1]) : "",
+        }))
+        .filter(({ line, previous }) =>
+          isTeamish(line) &&
+          !metadataLabelLine.test(previous),
+        )
+        .map(({ line }) => resolveOfficialSide(line, officialNames))
         .filter((value): value is string => !!value),
     ),
   );

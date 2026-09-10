@@ -1213,3 +1213,10 @@ Verification:
 - 2026-09-10: Fixed truncated ticket year OCR causing dates such as "09 SEPTEMBER 20..." to become 2020-09-09. The parser now validates two-digit years against the selected season and derives the correct season year when the fragment is inconsistent. Real-ticket verification passed.
 
 - 2026-09-10: Fixed truncated ticket year OCR causing dates such as "09 SEPTEMBER 20..." to become 2020-09-09. The parser now validates two-digit years against the selected season and derives the correct season year when the fragment is inconsistent. Real-ticket verification passed.
+
+## 2026-09-10 — Ticket recognition fallback hardening
+- Added safer historical fixture widening for no-date ticket recognition from 2018 onward.
+- Added round-only fixture search support and generic numbered-round normalisation.
+- Prevented stadium/seat metadata lines from becoming false team clues.
+- Preserved existing OCR recognition and fixture-selection safety rules.
+- Regression verified on a normal dated ticket and ambiguous no-date FA Cup ticket.
