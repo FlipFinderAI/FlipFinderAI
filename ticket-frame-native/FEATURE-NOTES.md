@@ -1096,3 +1096,5 @@ Verification:
 - Missing image files are logged without deleting, modifying, or hiding the saved ticket record.
 - This is intended to diagnose cases where the app reports saved items but the ticket artwork no longer displays.
 - TypeScript verification: PASS with `NODE_OPTIONS="--max-old-space-size=6144"`.
+
+- Fixed ticket-backed History records saved before kick-off so final fixture scores are reconciled into the existing History record once TFD supplies the result.

@@ -1203,3 +1203,5 @@ Verification:
 - Startup now checks every restored saved ticket image and logs present/missing state plus file size.
 - The diagnostic is read-only and does not change ticket storage, image files, or frame eligibility.
 - TypeScript: PASS with 6 GB Node heap.
+
+- 2026-09-10: Fixed pre-match saved tickets remaining scoreless in History after the fixture result became available.

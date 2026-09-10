@@ -7303,10 +7303,29 @@ const handleTileDrop = (id: string, tx: number, ty: number) => {
           (round === "semi final" ||
             round === "semi finals" ||
             round === "final");
-        if (!neutralFaCup || !fixture?.venue || record.ground === fixture.venue)
+
+        const nextGround =
+          neutralFaCup && fixture?.venue ? fixture.venue : record.ground;
+        const nextHomeScore =
+          fixture?.homeScore != null ? fixture.homeScore : record.homeScore;
+        const nextAwayScore =
+          fixture?.awayScore != null ? fixture.awayScore : record.awayScore;
+
+        if (
+          nextGround === record.ground &&
+          nextHomeScore === record.homeScore &&
+          nextAwayScore === record.awayScore
+        ) {
           return record;
+        }
+
         changed = true;
-        return { ...record, ground: fixture.venue };
+        return {
+          ...record,
+          ground: nextGround,
+          homeScore: nextHomeScore,
+          awayScore: nextAwayScore,
+        };
       });
       return changed ? next : current;
     });
