@@ -47,7 +47,7 @@
 
 /* Begin PBXFileReference section */
 		12F73C0BFA9FBB7434EA9D7F /* Pods-TicketFrame.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-TicketFrame.release.xcconfig"; path = "Target Support Files/Pods-TicketFrame/Pods-TicketFrame.release.xcconfig"; sourceTree = "<group>"; };
-		13B07F961A680F5B00A75B9A /* TicketFrame.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TicketFrame.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		13B07F961A680F5B00A75B9A /* FootballTicketFrame.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FootballTicketFrame.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		13B07FB51A68108700A75B9A /* Images.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Images.xcassets; path = TicketFrame/Images.xcassets; sourceTree = "<group>"; };
 		13B07FB61A68108700A75B9A /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = Info.plist; path = TicketFrame/Info.plist; sourceTree = "<group>"; };
 		18B5257B3B0ADDEE4F078C69 /* ExpoModulesProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ExpoModulesProvider.swift; path = "Pods/Target Support Files/Pods-TicketFrame/ExpoModulesProvider.swift"; sourceTree = "<group>"; };
@@ -67,7 +67,7 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		CA57F9DE3037A311004B591A /* Exceptions for "TicketFrameShare" folder in "TicketFrameShare" target */ = {
+		CA57F9DE3037A311004B591A /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
@@ -77,18 +77,7 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		CA57F9D13037A311004B591A /* TicketFrameShare */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-				CA57F9DE3037A311004B591A /* Exceptions for "TicketFrameShare" folder in "TicketFrameShare" target */,
-			);
-			explicitFileTypes = {
-			};
-			explicitFolders = (
-			);
-			path = TicketFrameShare;
-			sourceTree = "<group>";
-		};
+		CA57F9D13037A311004B591A /* TicketFrameShare */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (CA57F9DE3037A311004B591A /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = TicketFrameShare; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -171,7 +160,7 @@
 		83CBBA001A601CBA00E9B192 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				13B07F961A680F5B00A75B9A /* TicketFrame.app */,
+				13B07F961A680F5B00A75B9A /* FootballTicketFrame.app */,
 				CA57F9D03037A310004B591A /* TicketFrameShare.appex */,
 			);
 			name = Products;
@@ -227,7 +216,7 @@
 			);
 			name = TicketFrame;
 			productName = TicketFrame;
-			productReference = 13B07F961A680F5B00A75B9A /* TicketFrame.app */;
+			productReference = 13B07F961A680F5B00A75B9A /* FootballTicketFrame.app */;
 			productType = "com.apple.product-type.application";
 		};
 		CA57F9CF3037A310004B591A /* TicketFrameShare */ = {
@@ -510,7 +499,7 @@
 				CODE_SIGN_ENTITLEMENTS = TicketFrame/TicketFrame.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = HV76HPV4QV;
 				ENABLE_BITCODE = NO;
 				GCC_PREPROCESSOR_DEFINITIONS = (
@@ -549,7 +538,7 @@
 				CODE_SIGN_ENTITLEMENTS = TicketFrame/TicketFrame.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = HV76HPV4QV;
 				INFOPLIST_FILE = TicketFrame/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.5;
@@ -705,7 +694,7 @@
 				CODE_SIGN_ENTITLEMENTS = TicketFrameShare/TicketFrameShare.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 8;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = HV76HPV4QV;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -754,7 +743,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 8;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = HV76HPV4QV;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
