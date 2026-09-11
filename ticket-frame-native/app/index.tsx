@@ -139,6 +139,7 @@ import {
   refreshMatchAssetInfo,
   matchGeotaggedMatchdayMedia,
   matchPhotoAssets,
+  matchdayExperienceAssets,
   prioritizeMediaIndexFixture,
   removeDuplicateMatchPhotoReferences,
   startMediaIndex,
@@ -363,6 +364,7 @@ function canonicalStoredClub(club: ClubOption | undefined): ClubOption | undefin
 type DraggableHistoryPhotoProps = {
   mediaKey: string;
   editMode: boolean;
+  moveArmed: boolean;
   children: React.ReactNode;
   onDragStart: (mediaKey: string) => void;
   onDrop: (mediaKey: string, absoluteX: number, absoluteY: number) => void;
@@ -371,6 +373,7 @@ type DraggableHistoryPhotoProps = {
 function DraggableHistoryPhoto({
   mediaKey,
   editMode,
+  moveArmed,
   children,
   onDragStart,
   onDrop,
@@ -381,8 +384,8 @@ function DraggableHistoryPhoto({
   const dragging = useSharedValue(false);
 
   const dragGesture = Gesture.Pan()
-    .enabled(editMode)
-    .activateAfterLongPress(200)
+    .enabled(editMode && moveArmed)
+    .activateAfterLongPress(120)
     .minDistance(1)
     .onBegin(() => {
       dragging.value = true;
@@ -600,7 +603,7 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
     Record<string, MatchdayCustomLocation[]>
   >({});
   const [mediaEditMode, setMediaEditMode] = useState(false);
-  const [selectedMediaKeys, setSelectedMediaKeys] = useState<Set<string>>(new Set());
+  const [mediaMoveArmedKey, setMediaMoveArmedKey] = useState<string | null>(null);
   const mediaDropZoneRefs = useRef<Record<string, any>>({});
   const mediaDropZoneAssignmentsRef = useRef<Record<string, MatchdayMediaAssignment>>({});
   const mediaDropZonesRef = useRef<
@@ -652,6 +655,7 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
   const autoPhotoScannedRecordsRef = useRef<Set<string>>(new Set());
   const [autoMediaScannedReady, setAutoMediaScannedReady] = useState(false);
   const mediaIndexSessionStartedAtRef = useRef(Date.now());
+  const matchdayExperienceBackfillRef = useRef<Set<string>>(new Set());
 
   const persistMatchPhotos = (next: Record<string, string[]>) => {
     const payload = JSON.stringify(next);
@@ -1838,8 +1842,7 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
       // Prefer the GPS where the user's media was actually taken because
       // Apple Maps coordinates can point to the centre of a large venue,
       // while the user's photos may come from an entrance, garden or car park.
-      const confirmedVenues = matchdayExperiences
-        .flatMap((item) => item.venues)
+      const confirmedVenues = (experience?.venues ?? [])
         .map((visit) => {
           const latitude =
             typeof visit.confirmedFromLatitude === "number"
@@ -1863,8 +1866,8 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
       const cachedNearbyVenues = (["pub", "restaurant"] as const).flatMap((kind) =>
         ground
           ? [
-              ...(nearbyVenueCache[`${kind}:stadium:${ground.id}`] ?? []),
-              ...(nearbyVenueCache[`${kind}:${ground.id}`] ?? []),
+              ...(nearbyVenueCacheRef.current[`${kind}:stadium:${ground.id}`] ?? []),
+              ...(nearbyVenueCacheRef.current[`${kind}:${ground.id}`] ?? []),
             ].map((venue) => ({
               ...venue,
               kind,
@@ -1872,6 +1875,22 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
             }))
           : [],
       );
+
+      if (__DEV__) {
+        console.log("[matchday-classifier] setup", {
+          historyId: selectedHistoryRecordId,
+          ground: ground
+            ? {
+                id: ground.id,
+                stadium: ground.stadium,
+                latitude: ground.latitude,
+                longitude: ground.longitude,
+              }
+            : null,
+          confirmedVenues,
+          references: references.length,
+        });
+      }
 
       const knownVenues = [...confirmedVenues, ...cachedNearbyVenues].filter(
         (
@@ -1899,16 +1918,12 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
           Number.isFinite(reference.latitude) &&
           Number.isFinite(reference.longitude);
 
-        const cachedInfo = referenceHasLocation
-          ? null
-          : await cachedMatchAssetInfo(reference.assetId);
-
         const location = referenceHasLocation
           ? {
               latitude: reference.latitude as number,
               longitude: reference.longitude as number,
             }
-          : cachedInfo?.location;
+          : null;
 
         if (
           !location ||
@@ -1917,6 +1932,11 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
           !Number.isFinite(location.latitude) ||
           !Number.isFinite(location.longitude)
         ) {
+          additions[key] = {
+            placeName: "Unassigned media",
+            placeKind: "location",
+            source: "automatic",
+          };
           continue;
         }
         const nearest = knownVenues
@@ -1967,7 +1987,7 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
           };
         } else {
           additions[key] = {
-            placeName: "Matchday location",
+            placeName: "Unassigned media",
             placeKind: "location",
             latitude: location.latitude,
             longitude: location.longitude,
@@ -1997,12 +2017,16 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
           return next;
         });
 
-      const pendingCluster = Array.from(otherLocations.entries()).find(
-        ([clusterKey]) =>
-          !promptedMediaLocationGroupsRef.current.has(
-            `${selectedHistoryRecordId}|${clusterKey}`,
-          ),
-      );
+      // Unresolved Matchday Experience media is handled visibly inside
+      // Match Memory, where the user can see the actual same-GPS thumbnails
+      // before choosing a venue. Do not fire the old blind Alert flow.
+      const pendingCluster = undefined as
+        | [string, {
+            latitude: number;
+            longitude: number;
+            keys: string[];
+          }]
+        | undefined;
       if (!pendingCluster) return;
       const [clusterKey, cluster] = pendingCluster;
       promptedMediaLocationGroupsRef.current.add(
@@ -2058,7 +2082,7 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
       let placeCandidates: MediaPlaceCandidate[] = searchKinds
         .flatMap((kind) =>
           (
-            nearbyVenueCache[`gps:${kind}:${gpsVenueCell}`] ?? []
+            nearbyVenueCacheRef.current[`gps:${kind}:${gpsVenueCell}`] ?? []
           ).map((venue) => ({
             venue,
             kind,
@@ -2200,12 +2224,16 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
             {
               text: "Not now",
               style: "cancel",
-              onPress: () =>
+              onPress: () => {
+                promptedMediaLocationGroupsRef.current.delete(
+                  `${selectedHistoryRecordId}|${clusterKey}`,
+                );
                 assignCluster({
-                  placeName: "Matchday location",
+                  placeName: "Unassigned media",
                   placeKind: "location",
-                  source: "manual",
-                }),
+                  source: "automatic",
+                });
+              },
             },
           ],
         );
@@ -2231,13 +2259,18 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
           {
             text: "Not now",
             style: "cancel",
-            onPress: () => assignCluster({ placeName: "Matchday location", placeKind: "location", source: "manual" }),
+            onPress: () => {
+              promptedMediaLocationGroupsRef.current.delete(
+                `${selectedHistoryRecordId}|${clusterKey}`,
+              );
+              assignCluster({ placeName: "Unassigned media", placeKind: "location", source: "automatic" });
+            },
           },
         ],
       );
     })();
     return () => { cancelled = true; };
-  }, [attendanceHistory, matchMediaReferences, matchdayExperiences, matchdayMediaAssignmentsReady, nearbyVenueCache, selectedHistoryRecordId]);
+  }, [attendanceHistory, matchMediaReferences, matchdayExperiences, matchdayMediaAssignmentsReady, selectedHistoryRecordId]);
 
   async function loadParkingForGround(
     ground: FootballGround,
@@ -3701,6 +3734,13 @@ confidence: ${recognition.confidence}%`,
   const [activeSeason, setActiveSeason] = useState(
     () => seasonForDate(new Date()) ?? "",
   );
+
+  const nearbyVenueCacheRef = useRef(nearbyVenueCache);
+
+  useEffect(() => {
+    nearbyVenueCacheRef.current = nearbyVenueCache;
+  }, [nearbyVenueCache]);
+
   const [showSeasonManager, setShowSeasonManager] = useState(false);
   const [venuePrivacyExpanded, setVenuePrivacyExpanded] = useState(false);
   const [settingsDetailsExpanded, setSettingsDetailsExpanded] = useState<
@@ -4407,10 +4447,31 @@ confidence: ${recognition.confidence}%`,
           : undefined) ??
         (selectedHomeClub ? findGroundForClub(selectedHomeClub) : undefined)
       : undefined;
+    const selectedMatchdayExperience = selectedRecord
+      ? matchdayExperiences.find(
+          (experience) =>
+            experience.matchDate?.slice(0, 10) ===
+              selectedRecord.matchDate?.slice(0, 10) &&
+            clubNamesMatch(experience.clubName, selectedRecord.club) &&
+            clubNamesMatch(experience.opponentName, selectedRecord.opponent),
+        )
+      : undefined;
+    const matchdayExperienceStartedAt = selectedMatchdayExperience?.createdAt
+      ? Date.parse(selectedMatchdayExperience.createdAt)
+      : Number.NaN;
+    const matchdayExperienceStoppedAt = selectedMatchdayExperience
+      ? selectedMatchdayExperience.captureEnabled
+        ? Date.now()
+        : selectedMatchdayExperience.captureStoppedAt
+          ? Date.parse(selectedMatchdayExperience.captureStoppedAt)
+          : selectedMatchdayExperience.autoOffAt
+            ? Date.parse(selectedMatchdayExperience.autoOffAt)
+            : Date.parse(selectedMatchdayExperience.updatedAt)
+      : Number.NaN;
     const signature = references
       .map(
         (reference) =>
-          `${reference.assetId}:${reference.type}:${reference.localUri ?? ""}:${reference.previewUri ?? ""}`,
+          `${reference.assetId}:${reference.type}:${reference.localUri ?? ""}:${reference.previewUri ?? ""}:${reference.latitude ?? ""}:${reference.longitude ?? ""}:${reference.creationTime ?? ""}`,
       )
       .join("|");
 
@@ -4586,7 +4647,76 @@ confidence: ${recognition.confidence}%`,
               }
             }
 
-            const location = metadataInfo?.location ?? displayInfo?.location;
+            let recoveredInfo = metadataInfo ?? displayInfo;
+
+            const referenceHasGps =
+              Number.isFinite(Number(reference.latitude)) &&
+              Number.isFinite(Number(reference.longitude));
+            const referenceHasCreationTime =
+              Number.isFinite(Number(reference.creationTime));
+
+            if (
+              (!referenceHasGps || !referenceHasCreationTime) &&
+              !reference.assetId.startsWith("selected-")
+            ) {
+              const freshInfo = await MediaLibrary.getAssetInfoAsync(
+                reference.assetId,
+                { shouldDownloadFromNetwork: false },
+              ).catch(() => null);
+
+              if (freshInfo) recoveredInfo = freshInfo;
+            }
+
+            const recoveredLocation =
+              recoveredInfo?.location ?? displayInfo?.location;
+
+            const recoveredLatitude = Number.isFinite(Number(reference.latitude))
+              ? Number(reference.latitude)
+              : Number.isFinite(Number(recoveredLocation?.latitude))
+                ? Number(recoveredLocation?.latitude)
+                : undefined;
+
+            const recoveredLongitude = Number.isFinite(Number(reference.longitude))
+              ? Number(reference.longitude)
+              : Number.isFinite(Number(recoveredLocation?.longitude))
+                ? Number(recoveredLocation?.longitude)
+                : undefined;
+
+            const recoveredCreationTime = Number.isFinite(
+              Number(reference.creationTime),
+            )
+              ? Number(reference.creationTime)
+              : Number.isFinite(Number(recoveredInfo?.creationTime))
+                ? Number(recoveredInfo?.creationTime)
+                : Number.isFinite(Number(displayInfo?.creationTime))
+                  ? Number(displayInfo?.creationTime)
+                  : undefined;
+
+            const recoveredMetadataChanged =
+              recoveredLatitude !== reference.latitude ||
+              recoveredLongitude !== reference.longitude ||
+              recoveredCreationTime !== reference.creationTime;
+
+            const enrichedReference: MatchMediaReference = {
+              ...reference,
+              latitude: recoveredLatitude,
+              longitude: recoveredLongitude,
+              creationTime: recoveredCreationTime,
+            };
+
+            if (recoveredMetadataChanged) {
+              addMatchMediaReferences(recordId, [enrichedReference]);
+            }
+
+            const location =
+              recoveredLatitude !== undefined &&
+              recoveredLongitude !== undefined
+                ? {
+                    latitude: recoveredLatitude,
+                    longitude: recoveredLongitude,
+                  }
+                : undefined;
+
             if (location && selectedGround) {
               const milesFromGround = distanceMiles(
                 location.latitude,
@@ -4598,15 +4728,27 @@ confidence: ${recognition.confidence}%`,
                 matchdayMediaAssignments[
                   `${recordId}|asset:${reference.assetId}`
                 ];
+              const belongsToMatchdayExperience = Boolean(
+                selectedRecord?.confirmed &&
+                  selectedMatchdayExperience &&
+                  Number.isFinite(enrichedReference.creationTime) &&
+                  Number.isFinite(matchdayExperienceStartedAt) &&
+                  Number.isFinite(matchdayExperienceStoppedAt) &&
+                  (enrichedReference.creationTime as number) >=
+                    matchdayExperienceStartedAt &&
+                  (enrichedReference.creationTime as number) <=
+                    matchdayExperienceStoppedAt,
+              );
               const belongsToExperience = Boolean(
-                assignment &&
-                  assignment.placeKind !== "stadium" &&
-                  (assignment.source === "manual" ||
-                    assignment.venueVisitId ||
-                    assignment.placeKind === "pub" ||
-                    assignment.placeKind === "restaurant" ||
-                    assignment.placeKind === "station" ||
-                    assignment.placeKind === "metro"),
+                belongsToMatchdayExperience ||
+                  (assignment &&
+                    assignment.placeKind !== "stadium" &&
+                    (assignment.source === "manual" ||
+                      assignment.venueVisitId ||
+                      assignment.placeKind === "pub" ||
+                      assignment.placeKind === "restaurant" ||
+                      assignment.placeKind === "station" ||
+                      assignment.placeKind === "metro")),
               );
               // The 1-mile rule protects automatic GPS matching only.
               // Media the user explicitly selected/approved must remain
@@ -4699,6 +4841,7 @@ confidence: ${recognition.confidence}%`,
     matchMediaReferences,
     matchMediaReferencesReady,
     matchdayMediaAssignments,
+    matchdayExperiences,
     attendanceHistory,
     selectedHistoryRecordId,
   ]);
@@ -7112,7 +7255,7 @@ Accept only if these photos are from this match. Choose Another Match for anothe
                 deletedRecordIds.has(selectedHistoryRecordId)
               ) {
                 setMediaEditMode(false);
-                setSelectedMediaKeys(new Set());
+                setMediaMoveArmedKey(null);
                 setSelectedMatchVideoUri(null);
                 setEnlargedMatchPhotoUri(null);
                 setSelectedHistoryRecordId(null);
@@ -7982,6 +8125,270 @@ const handleTileDrop = (id: string, tx: number, ty: number) => {
     // reference store lets newly hydrated legacy data repair immediately.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [matchMediaReferences, mediaIndexFixtures, selectedHistoryRecordId]);
+
+  useEffect(() => {
+    if (
+      !storageReady ||
+      !attendanceHistoryReady ||
+      !matchMediaReferencesReady ||
+      !matchdayMediaAssignmentsReady ||
+      !matchdayExperiences.length
+    ) return;
+
+    let cancelled = false;
+
+    void (async () => {
+      const permission = await MediaLibrary.getPermissionsAsync();
+      if (!permission.granted || cancelled) return;
+
+      for (const experience of matchdayExperiences) {
+        if (cancelled) return;
+        if (!experience.createdAt || !experience.matchDate) continue;
+
+        const history = findMatchingAttendance(attendanceHistory, {
+          club: experience.clubName,
+          opponent: experience.opponentName,
+          matchDate: experience.matchDate.slice(0, 10),
+          competition: experience.competition ?? null,
+          ground: experience.groundName ?? null,
+        });
+
+        if (!history?.confirmed) continue;
+
+        const createdAfter = Date.parse(experience.createdAt);
+        if (!Number.isFinite(createdAfter)) continue;
+
+        let createdBefore: number;
+        if (experience.captureEnabled) {
+          createdBefore = Date.now();
+        } else if (experience.captureStoppedAt) {
+          createdBefore = Date.parse(experience.captureStoppedAt);
+        } else {
+          const legacyUpdatedAt = Date.parse(experience.updatedAt);
+          const legacyAutoOffAt = experience.autoOffAt
+            ? Date.parse(experience.autoOffAt)
+            : Number.NaN;
+
+          createdBefore = Number.isFinite(legacyAutoOffAt)
+            ? legacyAutoOffAt
+            : Number.isFinite(legacyUpdatedAt)
+              ? legacyUpdatedAt
+              : createdAfter;
+        }
+
+        if (!Number.isFinite(createdBefore) || createdBefore < createdAfter)
+          continue;
+
+        const scanKey = experience.captureEnabled
+          ? `${experience.id}|active`
+          : `${experience.id}|${createdAfter}|${createdBefore}`;
+
+        if (matchdayExperienceBackfillRef.current.has(scanKey)) continue;
+        matchdayExperienceBackfillRef.current.add(scanKey);
+
+        try {
+          const assets = await matchdayExperienceAssets(
+            createdAfter,
+            createdBefore,
+          );
+          if (cancelled) return;
+
+          if (__DEV__) {
+            console.log("[matchday-experience] recovery window", {
+              id: experience.id,
+              matchDate: experience.matchDate,
+              createdAfter: new Date(createdAfter).toISOString(),
+              createdBefore: new Date(createdBefore).toISOString(),
+              assets: assets.length,
+            });
+          }
+
+          const references: MatchMediaReference[] = [];
+
+          for (const asset of assets) {
+            const info = await cachedMatchAssetInfo(asset);
+            if (cancelled) return;
+
+            if (__DEV__) {
+              console.log("[matchday-experience] recovered asset", {
+                id: asset.id,
+                type: String(asset.mediaType),
+                created: new Date(asset.creationTime).toISOString(),
+                latitude: info?.location?.latitude ?? null,
+                longitude: info?.location?.longitude ?? null,
+                fileName: asset.filename,
+              });
+            }
+
+            references.push({
+              assetId: asset.id,
+              type:
+                asset.mediaType === MediaLibrary.MediaType.video
+                  ? "video"
+                  : "photo",
+              width: asset.width,
+              height: asset.height,
+              fileName: asset.filename,
+              source: "automatic",
+              latitude: Number.isFinite(Number(info?.location?.latitude))
+                ? Number(info?.location?.latitude)
+                : undefined,
+              longitude: Number.isFinite(Number(info?.location?.longitude))
+                ? Number(info?.location?.longitude)
+                : undefined,
+              creationTime: asset.creationTime,
+              previewUri: asset.uri,
+            });
+          }
+
+          if (!references.length) continue;
+
+          addMatchMediaReferences(history.id, references);
+
+          const recoveryGround =
+            FOOTBALL_GROUNDS.find((item) => item.id === experience.groundId) ??
+            footballGroundForName(experience.groundName ?? "");
+
+          const recoveryVenues = experience.venues
+            .map((visit) => ({
+              visit,
+              latitude:
+                typeof visit.confirmedFromLatitude === "number"
+                  ? visit.confirmedFromLatitude
+                  : visit.latitude,
+              longitude:
+                typeof visit.confirmedFromLongitude === "number"
+                  ? visit.confirmedFromLongitude
+                  : visit.longitude,
+            }))
+            .filter(
+              (item) =>
+                typeof item.latitude === "number" &&
+                typeof item.longitude === "number" &&
+                Number.isFinite(item.latitude) &&
+                Number.isFinite(item.longitude),
+            );
+
+          setMatchdayMediaAssignments((current) => {
+            const next = { ...current };
+            let changed = false;
+
+            for (const reference of references) {
+              const key = `${history.id}|asset:${reference.assetId}`;
+              const existing = next[key];
+
+              if (existing?.source === "manual") continue;
+
+              const hasLocation =
+                typeof reference.latitude === "number" &&
+                typeof reference.longitude === "number" &&
+                Number.isFinite(reference.latitude) &&
+                Number.isFinite(reference.longitude);
+
+              let assignment: MatchdayMediaAssignment = {
+                placeName: "Unassigned media",
+                placeKind: "location",
+                latitude: reference.latitude,
+                longitude: reference.longitude,
+                source: "automatic",
+              };
+
+              if (hasLocation && recoveryGround) {
+                const milesFromGround = distanceMiles(
+                  reference.latitude as number,
+                  reference.longitude as number,
+                  recoveryGround.latitude,
+                  recoveryGround.longitude,
+                );
+
+                if (milesFromGround <= STADIUM_MEDIA_CORE_RADIUS_MILES) {
+                  assignment = {
+                    placeName: recoveryGround.stadium,
+                    placeKind: "stadium",
+                    latitude: reference.latitude,
+                    longitude: reference.longitude,
+                    source: "automatic",
+                  };
+                }
+              }
+
+              if (
+                hasLocation &&
+                assignment.placeKind !== "stadium" &&
+                recoveryVenues.length
+              ) {
+                const nearestSavedVenue = recoveryVenues
+                  .map((venue) => ({
+                    ...venue,
+                    miles: distanceMiles(
+                      reference.latitude as number,
+                      reference.longitude as number,
+                      venue.latitude as number,
+                      venue.longitude as number,
+                    ),
+                  }))
+                  .sort((a, b) => a.miles - b.miles)[0];
+
+                if (nearestSavedVenue && nearestSavedVenue.miles <= 0.04) {
+                  assignment = {
+                    placeName: nearestSavedVenue.visit.venueName,
+                    placeKind: nearestSavedVenue.visit.kind,
+                    venueVisitId: nearestSavedVenue.visit.id,
+                    latitude: nearestSavedVenue.latitude,
+                    longitude: nearestSavedVenue.longitude,
+                    source: "automatic",
+                  };
+                }
+              }
+
+              if (__DEV__) {
+                console.log("[matchday-recovery-assignment]", {
+                  fileName: reference.fileName ?? reference.assetId,
+                  existing: existing?.placeName ?? null,
+                  chosen: assignment.placeName,
+                  kind: assignment.placeKind,
+                });
+              }
+
+              if (
+                !existing ||
+                JSON.stringify(existing) !== JSON.stringify(assignment)
+              ) {
+                next[key] = assignment;
+                changed = true;
+              }
+            }
+
+            if (!changed) return current;
+
+            void AsyncStorage.setItem(
+              MATCHDAY_MEDIA_ASSIGNMENTS_KEY,
+              JSON.stringify(next),
+            );
+            return next;
+          });
+        } catch (error) {
+          matchdayExperienceBackfillRef.current.delete(scanKey);
+          console.warn(
+            "[matchday-experience] media backfill failed",
+            experience.id,
+            error,
+          );
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    attendanceHistory,
+    attendanceHistoryReady,
+    matchMediaReferencesReady,
+    matchdayExperiences,
+    matchdayMediaAssignmentsReady,
+    storageReady,
+  ]);
 
   useEffect(() => () => {
     void stopMediaIndex();
@@ -11704,7 +12111,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
           key: `${selectedHistoryRecord.id}|uri:${uri}`,
           type: "photo" as const,
           hasGps: false,
-          automaticStadium: photosMatchedAutomatically,
+          automaticStadium: false,
         })),
         ...referencedPhotos.map((media) => ({
           key: `${selectedHistoryRecord.id}|asset:${media.assetId}`,
@@ -11714,8 +12121,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
             typeof media.longitude === "number" &&
             Number.isFinite(media.latitude) &&
             Number.isFinite(media.longitude),
-          automaticStadium:
-            media.source === "automatic" || hasStrictStadiumGps(media),
+          automaticStadium: hasStrictStadiumGps(media),
         })),
         ...referencedVideos.map((media) => ({
           key: `${selectedHistoryRecord.id}|asset:${media.assetId}`,
@@ -11725,8 +12131,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
             typeof media.longitude === "number" &&
             Number.isFinite(media.latitude) &&
             Number.isFinite(media.longitude),
-          automaticStadium:
-            media.source === "automatic" || hasStrictStadiumGps(media),
+          automaticStadium: hasStrictStadiumGps(media),
         })),
       ];
       const stadiumLocationName =
@@ -11738,9 +12143,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
         const persistedAssignment = matchdayMediaAssignments[item.key];
         const storedAssignment =
           item.automaticStadium &&
-          (!persistedAssignment ||
-            normaliseFixtureText(persistedAssignment.placeName) ===
-              "unassigned media")
+          !persistedAssignment
             ? {
                 placeName: stadiumLocationName,
                 placeKind: "stadium" as const,
@@ -11801,9 +12204,50 @@ Choose one team. Its colours automatically control the Club Colours frame style.
           });
         }
       }
+      const unresolvedGpsGroups = new Map<
+        string,
+        {
+          latitude: number;
+          longitude: number;
+          keys: string[];
+        }
+      >();
+
+      for (const media of [...referencedPhotos, ...referencedVideos]) {
+        const mediaKey = `${selectedHistoryRecord.id}|asset:${media.assetId}`;
+        const assignment = matchdayMediaAssignments[mediaKey];
+
+        if (
+          assignment?.placeName !== "Unassigned media" ||
+          assignment?.source === "manual" ||
+          typeof media.latitude !== "number" ||
+          typeof media.longitude !== "number" ||
+          !Number.isFinite(media.latitude) ||
+          !Number.isFinite(media.longitude)
+        ) {
+          continue;
+        }
+
+        const clusterKey = `${media.latitude.toFixed(3)}|${media.longitude.toFixed(3)}`;
+        const cluster = unresolvedGpsGroups.get(clusterKey) ?? {
+          latitude: media.latitude,
+          longitude: media.longitude,
+          keys: [],
+        };
+
+        cluster.keys.push(mediaKey);
+        unresolvedGpsGroups.set(clusterKey, cluster);
+      }
+
       const orderedMediaLocationGroups = Array.from(mediaLocationGroups.values()).sort((a, b) => {
         if (a.assignment.placeKind === "stadium") return -1;
         if (b.assignment.placeKind === "stadium") return 1;
+
+        const aUnassigned = a.assignment.placeName === "Unassigned media";
+        const bUnassigned = b.assignment.placeName === "Unassigned media";
+        if (aUnassigned && !bUnassigned) return 1;
+        if (bUnassigned && !aUnassigned) return -1;
+
         const aCreated = (matchdayCustomLocations[selectedHistoryRecord.id] ?? []).find((item) => item.name === a.assignment.placeName)?.createdAt ?? "";
         const bCreated = (matchdayCustomLocations[selectedHistoryRecord.id] ?? []).find((item) => item.name === b.assignment.placeName)?.createdAt ?? "";
         return aCreated.localeCompare(bCreated);
@@ -11831,7 +12275,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
             [selectedHistoryRecord.id]: [...(current[selectedHistoryRecord.id] ?? []), location],
           }));
           setMediaEditMode(true);
-          setSelectedMediaKeys(new Set());
+          setMediaMoveArmedKey(null);
           Alert.alert("Folder created", `Select the photos and videos for ${name}, then tap Move selected.`);
         };
         Alert.alert("New media location", "What type of place is it?", [
@@ -12097,9 +12541,12 @@ Choose one team. Its colours automatically control the Club Colours frame style.
           const searchPlaces = ParkingSearchModule.searchPlaces.bind(
             ParkingSearchModule,
           );
+          const searchPlacesQuery = ParkingSearchModule.searchPlacesQuery.bind(
+            ParkingSearchModule,
+          );
           const venues = (kind === "location"
-            ? (await Promise.all(
-                (["pub", "restaurant", "station", "metro"] as const).map(
+            ? (await Promise.all([
+                ...(["pub", "restaurant", "station", "metro"] as const).map(
                   (placeKind) =>
                     searchPlaces(
                       location!.latitude,
@@ -12109,14 +12556,84 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                       items.map((item) => ({ ...item, placeKind })),
                     ).catch(() => []),
                 ),
-              )).flat()
-            : (await searchPlaces(
-                location.latitude,
-                location.longitude,
-                kind,
-              )).map((item) => ({ ...item, placeKind: kind })))
+                ...(["hotel", "service station", "cafe", "shop", "car park"] as const).map(
+                  (query) =>
+                    searchPlacesQuery(
+                      location!.latitude,
+                      location!.longitude,
+                      "restaurant",
+                      query,
+                    ).then((items) =>
+                      items.map((item) => ({
+                        ...item,
+                        placeKind: "location" as const,
+                      })),
+                    ).catch(() => []),
+                ),
+              ])).flat()
+            : kind === "station"
+              ? (await Promise.all([
+                  searchPlaces(
+                    location.latitude,
+                    location.longitude,
+                    "station",
+                  ).then((items) =>
+                    items.map((item) => ({
+                      ...item,
+                      placeKind: "station" as const,
+                    })),
+                  ).catch(() => []),
+                  searchPlaces(
+                    location.latitude,
+                    location.longitude,
+                    "metro",
+                  ).then((items) =>
+                    items.map((item) => ({
+                      ...item,
+                      placeKind: "station" as const,
+                    })),
+                  ).catch(() => []),
+                  searchPlacesQuery(
+                    location.latitude,
+                    location.longitude,
+                    "station",
+                    "railway station",
+                  ).then((items) =>
+                    items.map((item) => ({
+                      ...item,
+                      placeKind: "station" as const,
+                    })),
+                  ).catch(() => []),
+                  searchPlacesQuery(
+                    location.latitude,
+                    location.longitude,
+                    "station",
+                    "train station",
+                  ).then((items) =>
+                    items.map((item) => ({
+                      ...item,
+                      placeKind: "station" as const,
+                    })),
+                  ).catch(() => []),
+                  searchPlacesQuery(
+                    location.latitude,
+                    location.longitude,
+                    "station",
+                    "underground station",
+                  ).then((items) =>
+                    items.map((item) => ({
+                      ...item,
+                      placeKind: "station" as const,
+                    })),
+                  ).catch(() => []),
+                ])).flat()
+              : (await searchPlaces(
+                  location.latitude,
+                  location.longitude,
+                  kind,
+                )).map((item) => ({ ...item, placeKind: kind })))
             .sort((a, b) => a.distanceMiles - b.distanceMiles)
-            .filter((venue) => venue.distanceMiles <= 3)
+            .filter((venue) => venue.distanceMiles <= 0.75)
             .filter(
               (venue, index, all) =>
                 all.findIndex(
@@ -12199,6 +12716,70 @@ Choose one team. Its colours automatically control the Club Colours frame style.
           );
         }
       };
+      const editIndividualMediaLocation = (mediaKey: string) => {
+        Alert.alert(
+          "Edit media",
+          "Choose what you want to do with this photo.",
+          [
+            { text: "Cancel", style: "cancel" },
+            {
+              text: "Assign Location",
+              onPress: () =>
+                Alert.alert(
+                  "Assign Location",
+                  "Choose the type of place. Nearby results use this photo's GPS.",
+                  [
+                    { text: "Cancel", style: "cancel" },
+                    {
+                      text: "Pub",
+                      onPress: () =>
+                        void findHistoryVenueNearMedia([mediaKey], "pub"),
+                    },
+                    {
+                      text: "Stadium",
+                      onPress: () =>
+                        setMatchdayMediaAssignments((current) => ({
+                          ...current,
+                          [mediaKey]: {
+                            placeName: stadiumLocationName,
+                            placeKind: "stadium",
+                            source: "manual",
+                          },
+                        })),
+                    },
+                    {
+                      text: "Restaurant",
+                      onPress: () =>
+                        void findHistoryVenueNearMedia([mediaKey], "restaurant"),
+                    },
+                    {
+                      text: "Hotel",
+                      onPress: () =>
+                        void findHistoryVenueNearMedia([mediaKey], "location"),
+                    },
+                    {
+                      text: "Other",
+                      onPress: () =>
+                        void findHistoryVenueNearMedia([mediaKey], "location"),
+                    },
+                  ],
+                ),
+            },
+            {
+              text: "Move",
+              onPress: () => {
+                setMediaMoveArmedKey(mediaKey);
+                refreshMediaDropZones();
+                Alert.alert(
+                  "Move photo",
+                  "Long press this photo again, then drag it into another location.",
+                );
+              },
+            },
+          ],
+        );
+      };
+
       const moveMediaGroup = (keys: string[]) => {
         const apply = (assignment: MatchdayMediaAssignment) =>
           setMatchdayMediaAssignments((current) => {
@@ -12216,7 +12797,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
         Alert.alert("Move media group", "Choose where every item in this location group belongs.", [
           { text: "Cancel", style: "cancel" },
           { text: stadiumLocationName, onPress: () => apply({ placeName: stadiumLocationName, placeKind: "stadium", source: "manual" }) },
-          { text: "Matchday location", onPress: () => void findHistoryVenueNearMedia(keys, "location") },
+          { text: "Other nearby", onPress: () => void findHistoryVenueNearMedia(keys, "location") },
           { text: "Pub or bar", onPress: () => void findHistoryVenueNearMedia(keys, "pub") },
           { text: "Restaurant", onPress: () => void findHistoryVenueNearMedia(keys, "restaurant") },
           { text: "Station", onPress: () => void findHistoryVenueNearMedia(keys, "station") },
@@ -12279,7 +12860,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                   );
                 }
 
-                setSelectedMediaKeys(new Set());
+                setMediaMoveArmedKey(null);
                 setMediaEditMode(false);
               },
             },
@@ -12289,7 +12870,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
 
       const closeMatchMemory = () => {
         setMediaEditMode(false);
-        setSelectedMediaKeys(new Set());
+        setMediaMoveArmedKey(null);
         setSelectedMatchVideoUri(null);
         setEnlargedMatchPhotoUri(null);
         restoreHistoryScrollRef.current =
@@ -12418,13 +12999,6 @@ Choose one team. Its colours automatically control the Club Colours frame style.
         );
       };
 
-      const toggleMediaSelection = (key: string) =>
-        setSelectedMediaKeys((current) => {
-          const next = new Set(current);
-          if (next.has(key)) next.delete(key);
-          else next.add(key);
-          return next;
-        });
       const refreshMediaDropZones = () => {
         Object.entries(mediaDropZoneRefs.current).forEach(([dropKey, node]) => {
           const assignment = mediaDropZoneAssignmentsRef.current[dropKey];
@@ -12472,17 +13046,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
           ...current,
           [mediaKey]: target.assignment,
         }));
-        setSelectedMediaKeys(new Set());
-      };
-
-      const finishMovingSelectedMedia = () => {
-        if (!selectedMediaKeys.size) {
-          Alert.alert("Select media", "Tap the photos and videos you want to move first.");
-          return;
-        }
-        moveMediaGroup(Array.from(selectedMediaKeys));
-        setSelectedMediaKeys(new Set());
-        setMediaEditMode(false);
+        setMediaMoveArmedKey(null);
       };
       return hxShell(
         <>
@@ -12588,7 +13152,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
             <View style={[s.collectionCard, { marginBottom: 14, flexDirection: "column", alignItems: "stretch", backgroundColor: "#fffdf8" }]}> 
               <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 4 }}>
                 <Text style={[s.hxSectionTitle, { marginTop: 0, marginBottom: 0, flex: 1 }]}>MEDIA LOCATIONS</Text>
-                <Pressable onPress={() => { setMediaEditMode((current) => !current); setSelectedMediaKeys(new Set()); }} style={{ padding: 7 }} accessibilityLabel="Select photos and videos to move">
+                <Pressable onPress={() => { setMediaEditMode((current) => !current); setMediaMoveArmedKey(null); }} style={{ padding: 7 }} accessibilityLabel="Edit photo and video locations">
                   <Text style={{ fontWeight: "900", color: visibleInkOnCream(favouriteClub.primary) }}>{mediaEditMode ? "DONE" : "EDIT"}</Text>
                 </Pressable>
                 <Pressable onPress={createMediaLocation} style={{ padding: 7 }} accessibilityLabel="Add a media location">
@@ -12608,27 +13172,8 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                       },
                     ]}
                   >
-                    ADD A VENUE OR DRAG AND DROP A PHOTO INTO A VENUE
+                    LONG PRESS A PHOTO TO ASSIGN A LOCATION OR MOVE IT
                   </Text>
-                  <Pressable
-                    onPress={finishMovingSelectedMedia}
-                    style={{
-                      paddingVertical: 9,
-                      borderRadius: 8,
-                      backgroundColor: favouriteClub.primary,
-                      marginBottom: 6,
-                    }}
-                  >
-                    <Text
-                      style={{
-                        textAlign: "center",
-                        fontWeight: "900",
-                        color: readableTextColour(favouriteClub.primary),
-                      }}
-                    >
-                      MOVE {selectedMediaKeys.size} SELECTED
-                    </Text>
-                  </Pressable>
                 </>
               ) : null}
               {orderedMediaLocationGroups.map((group) => (
@@ -12665,6 +13210,150 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                   ) : null}
                 </View>
               ))}
+
+              {Array.from(unresolvedGpsGroups.entries()).map(([clusterKey, cluster], clusterIndex) => {
+                const clusterKeySet = new Set(cluster.keys);
+                const clusterPhotos = referencedPhotos.filter((media) =>
+                  clusterKeySet.has(`${selectedHistoryRecord.id}|asset:${media.assetId}`),
+                );
+                const clusterVideos = referencedVideos.filter((media) =>
+                  clusterKeySet.has(`${selectedHistoryRecord.id}|asset:${media.assetId}`),
+                );
+
+                if (!clusterPhotos.length && !clusterVideos.length) return null;
+
+                return (
+                  <View
+                    key={`unresolved-gps|${clusterKey}`}
+                    style={{
+                      marginTop: 14,
+                      paddingTop: 12,
+                      borderTopWidth: StyleSheet.hairlineWidth,
+                      borderTopColor: "#ddd6c8",
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: "#17221c",
+                        fontWeight: "900",
+                        marginBottom: 7,
+                      }}
+                    >
+                      {clusterPhotos.length === 1
+                        ? "WHAT IS THIS LOCATION?"
+                        : `WHAT ARE THESE ${clusterPhotos.length} PHOTOS?`}
+                    </Text>
+
+                    <View
+                      style={{
+                        flexDirection: "row",
+                        flexWrap: "wrap",
+                        gap: 4,
+                        marginBottom: 8,
+                      }}
+                    >
+                      {clusterPhotos.slice(0, 6).map((media) => (
+                        <Pressable
+                          key={media.assetId}
+                          onPress={() => {
+                            setEnlargedMatchPhotoItems(
+                              clusterPhotos.map((item) => ({
+                                key: `asset:${item.assetId}`,
+                                uri: item.uri,
+                              })),
+                            );
+                            const targetIndex = clusterPhotos.findIndex(
+                              (item) => item.assetId === media.assetId,
+                            );
+                            setEnlargedMatchPhotoIndex(Math.max(0, targetIndex));
+                            setEnlargedMatchPhotoUri(media.uri);
+                            void openReferencedMatchPhoto(
+                              selectedHistoryRecord.id,
+                              media,
+                            );
+                          }}
+                          style={{ width: "32.5%" }}
+                        >
+                          <Image
+                            alt="Unassigned matchday photo"
+                            source={{ uri: media.uri }}
+                            style={{ width: "100%", aspectRatio: 1, borderRadius: 6 }}
+                          />
+                        </Pressable>
+                      ))}
+                    </View>
+
+                    <Text style={[s.helpText, { marginBottom: 8 }]}>
+                      {clusterPhotos.length} photo{clusterPhotos.length === 1 ? "" : "s"}
+                      {clusterVideos.length
+                        ? ` · ${clusterVideos.length} video${clusterVideos.length === 1 ? "" : "s"}`
+                        : ""}
+                      {" · same GPS location"}
+                    </Text>
+
+                    <Pressable
+                      onPress={() => {
+                        Alert.alert(
+                          "What type of place is this?",
+                          "Choose a place type. Ticket Frame will then search closest to these photos.",
+                          [
+                            {
+                              text: "Pub",
+                              onPress: () =>
+                                void findHistoryVenueNearMedia(cluster.keys, "pub"),
+                            },
+                            {
+                              text: "Restaurant",
+                              onPress: () =>
+                                void findHistoryVenueNearMedia(cluster.keys, "restaurant"),
+                            },
+                            {
+                              text: "Station",
+                              onPress: () =>
+                                void findHistoryVenueNearMedia(cluster.keys, "station"),
+                            },
+                            {
+                              text: "Other",
+                              onPress: () =>
+                                void findHistoryVenueNearMedia(cluster.keys, "location"),
+                            },
+                            {
+                              text: "Leave Unassigned",
+                              onPress: () =>
+                                setMatchdayMediaAssignments((current) => {
+                                  const next = { ...current };
+                                  cluster.keys.forEach((key) => {
+                                    next[key] = {
+                                      placeName: "Unassigned media",
+                                      placeKind: "location",
+                                      source: "manual",
+                                    };
+                                  });
+                                  return next;
+                                }),
+                            },
+                          ],
+                        );
+                      }}
+                      style={{
+                        paddingVertical: 9,
+                        borderRadius: 8,
+                        backgroundColor: favouriteClub.primary,
+                      }}
+                    >
+                      <Text
+                        style={{
+                          textAlign: "center",
+                          fontWeight: "900",
+                          color: readableTextColour(favouriteClub.primary),
+                        }}
+                      >
+                        IDENTIFY LOCATION
+                      </Text>
+                    </Pressable>
+                  </View>
+                );
+              })}
             </View>
           ) : null}
           {orderedMediaLocationGroups.map((group, groupIndex) => {
@@ -12850,16 +13539,22 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                           key={`${uri}-${index}`}
                           mediaKey={mediaKey}
                           editMode={mediaEditMode}
+                          moveArmed={mediaMoveArmedKey === mediaKey}
                           onDragStart={beginHistoryPhotoDrag}
                           onDrop={dropHistoryPhoto}
                         >
                           <Pressable
                           onPress={() =>
                             mediaEditMode
-                              ? toggleMediaSelection(mediaKey)
+                              ? undefined
                               : openSavedMatchPhoto(uri)
                           }
-                          onLongPress={() =>
+                          onLongPress={() => {
+                            if (mediaEditMode) {
+                              editIndividualMediaLocation(mediaKey);
+                              return;
+                            }
+
                             Alert.alert(
                               "Delete this photo?",
                               "The match memory copy will be removed. Your original Photos library image is not deleted.",
@@ -12892,13 +13587,13 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                                   },
                                 },
                               ],
-                            )
-                          }
-                          delayLongPress={mediaEditMode ? 100000 : 400}
+                            );
+                          }}
+                          delayLongPress={400}
                           style={({ pressed }) => ({
                             width: "100%",
                             opacity: pressed ? 0.6 : 1,
-                            borderWidth: selectedMediaKeys.has(mediaKey) ? 4 : 0,
+                            borderWidth: mediaMoveArmedKey === mediaKey ? 4 : 0,
                             borderColor: favouriteClub.primary,
                           })}
                         >
@@ -12920,13 +13615,14 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                           key={media.assetId}
                           mediaKey={mediaKey}
                           editMode={mediaEditMode}
+                          moveArmed={mediaMoveArmedKey === mediaKey}
                           onDragStart={beginHistoryPhotoDrag}
                           onDrop={dropHistoryPhoto}
                         >
                           <Pressable
                           onPress={() =>
                             mediaEditMode
-                              ? toggleMediaSelection(mediaKey)
+                              ? undefined
                               : (() => {
                                   const galleryItems: MatchPhotoViewerItem[] = [
                                     ...groupSavedPhotos.map((uri) => ({
@@ -12959,7 +13655,12 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                                   );
                                 })()
                           }
-                          onLongPress={() =>
+                          onLongPress={() => {
+                            if (mediaEditMode) {
+                              editIndividualMediaLocation(mediaKey);
+                              return;
+                            }
+
                             Alert.alert(
                               "Remove this photo?",
                               "The Match Memory copy will be removed. The original in Apple Photos will not be deleted.",
@@ -12975,13 +13676,13 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                                     ),
                                 },
                               ],
-                            )
-                          }
-                          delayLongPress={mediaEditMode ? 100000 : 400}
+                            );
+                          }}
+                          delayLongPress={400}
                           style={({ pressed }) => ({
                             width: "100%",
                             opacity: pressed ? 0.6 : 1,
-                            borderWidth: selectedMediaKeys.has(mediaKey) ? 4 : 0,
+                            borderWidth: mediaMoveArmedKey === mediaKey ? 4 : 0,
                             borderColor: favouriteClub.primary,
                           })}
                         >
@@ -13048,7 +13749,6 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                           delayLongPress={400}
                           onPress={() => {
                             if (mediaEditMode) {
-                              toggleMediaSelection(mediaKey);
                               return;
                             }
 
@@ -13076,7 +13776,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                               alignItems: "center",
                               gap: 10,
                               opacity: pressed ? 0.65 : 1,
-                              borderWidth: selectedMediaKeys.has(mediaKey)
+                              borderWidth: mediaMoveArmedKey === mediaKey
                                 ? 3
                                 : undefined,
                               borderColor: favouriteClub.primary,

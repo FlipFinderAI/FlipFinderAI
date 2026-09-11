@@ -484,13 +484,41 @@ export async function fetchLeagueTable(
   const bundle = footballSeason(leagueLabel, season);
   if (!bundle) return { rows: [], season };
 
-  const storedRows = reconcileDuplicateTableRows(
-    bundle.table ?? [],
-    bundle.fixtures ?? [],
-  );
+  // League tables are generated entirely from the reconciled TFD results.
+  // Provider standings are not required: the fixture list itself defines
+  // the participating teams and completed scores define every table stat.
+  const teams = new Map<string, TableRow>();
 
-  const rows = storedRows
-    .map((stored) => calculatedTeamRow(bundle.fixtures ?? [], stored) ?? stored)
+  for (const fixture of bundle.fixtures ?? []) {
+    for (const side of [
+      { teamId: fixture.homeId, name: fixture.homeName },
+      { teamId: fixture.awayId, name: fixture.awayName },
+    ]) {
+      if (!side.name?.trim()) continue;
+
+      const key = side.teamId?.trim()
+        ? `id:${side.teamId}`
+        : `name:${side.name.trim().toLowerCase()}`;
+
+      if (!teams.has(key)) {
+        teams.set(key, {
+          teamId: side.teamId ?? "",
+          name: side.name,
+          played: 0,
+          win: 0,
+          draw: 0,
+          loss: 0,
+          goalsFor: 0,
+          goalsAgainst: 0,
+          goalDifference: 0,
+          points: 0,
+        });
+      }
+    }
+  }
+
+  const rows = Array.from(teams.values())
+    .map((team) => calculatedTeamRow(bundle.fixtures ?? [], team) ?? team)
     .sort(
       (a, b) =>
         b.points - a.points ||

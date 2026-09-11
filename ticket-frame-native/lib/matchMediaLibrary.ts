@@ -106,6 +106,33 @@ export function matchPhotoAssets(matchDate: string, albumId?: string) {
   return query;
 }
 
+export async function matchdayExperienceAssets(
+  createdAfter: number,
+  createdBefore: number,
+) {
+  const assets: MediaLibrary.Asset[] = [];
+  let after: string | undefined;
+
+  do {
+    const page = await MediaLibrary.getAssetsAsync({
+      mediaType: [
+        MediaLibrary.MediaType.photo,
+        MediaLibrary.MediaType.video,
+      ],
+      createdAfter,
+      createdBefore,
+      first: Math.min(250, MAX_MATCH_PHOTO_ASSETS - assets.length),
+      after,
+      sortBy: [MediaLibrary.SortBy.creationTime],
+    });
+
+    assets.push(...page.assets);
+    after = page.hasNextPage ? page.endCursor : undefined;
+  } while (after && assets.length < MAX_MATCH_PHOTO_ASSETS);
+
+  return assets;
+}
+
 type PersistentMediaMetadata = {
   latitude?: number;
   longitude?: number;

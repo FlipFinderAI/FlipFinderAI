@@ -11,7 +11,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.marcuslee.ticketframe.personal",
-      "buildNumber": "7",
+      "buildNumber": "8",
       "infoPlist": {
         "LSSupportsOpeningDocumentsInPlace": true,
         "NSPhotoLibraryAddUsageDescription": "Football Ticket Frame saves only the ticket frames and match-memory photos you explicitly choose to export.",
