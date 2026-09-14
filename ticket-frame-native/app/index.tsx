@@ -29,6 +29,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
 import * as FileSystem from "expo-file-system/legacy";
+import { File as ExpoFile } from "expo-file-system";
 import { captureRef } from "react-native-view-shot";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import OnboardingFlow, {
@@ -659,6 +660,8 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
   const [selectedMatchVideoUri, setSelectedMatchVideoUri] =
     useState<string | null>(null);
   const resolvingMatchVideoAssetIdsRef = useRef<Set<string>>(new Set());
+  const videoOrphanCleanupRanRef = useRef(false);
+
   const temporaryMatchVideoUriRef = useRef<string | null>(null);
 
   const clearTemporaryMatchVideo = async () => {
@@ -1239,6 +1242,31 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
         throw new Error("Downloaded video was empty");
       }
 
+      if (
+        isPhotosAsset &&
+        sourceUri !== destination &&
+        sourceUri.startsWith("file://") &&
+        sourceUri.includes("/tmp/") &&
+        /\.(mov|mp4|m4v)(?:\?|$)/i.test(sourceUri)
+      ) {
+        try {
+          const temporarySourceFile = new ExpoFile(sourceUri);
+
+          if (temporarySourceFile.exists) {
+            temporarySourceFile.delete();
+          }
+        } catch (error) {
+          console.warn(
+            "[MATCH-VIDEO-TMP-SOURCE-CLEANUP-FAILED]",
+            JSON.stringify({
+              assetId: media.assetId,
+              sourceUri,
+              error: String(error),
+            }),
+          );
+        }
+      }
+
       if (isPhotosAsset) {
         setResolvedMatchMedia((current) => {
           const existingMedia = current[recordId] ?? [];
@@ -1331,10 +1359,266 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
       idempotent: true,
     }).catch(() => {});
 
+    void (async () => {
+      const documentDirectory = FileSystem.documentDirectory;
+      if (!documentDirectory) return;
+
+      const temporaryDirectory = documentDirectory.replace(
+        /Documents\/$/,
+        "tmp/",
+      );
+
+      if (temporaryDirectory === documentDirectory) return;
+
+      const names = await FileSystem.readDirectoryAsync(
+        temporaryDirectory,
+      ).catch(() => []);
+
+      const videoNames = names.filter((name) =>
+        /\.(mov|mp4|m4v)$/i.test(name),
+      );
+
+      let deletedFiles = 0;
+      let reclaimedBytes = 0;
+      let deleteFailureLogs = 0;
+
+      for (const name of videoNames) {
+        const uri = `${temporaryDirectory}${name}`;
+        const info = await FileSystem.getInfoAsync(uri).catch(() => null);
+
+        if (!info?.exists) continue;
+
+        const size =
+          "size" in info && typeof info.size === "number"
+            ? info.size
+            : 0;
+
+        let deleteError: unknown = null;
+
+        try {
+          const file = new ExpoFile(uri);
+
+          if (file.exists) {
+            file.delete();
+          }
+        } catch (error) {
+          deleteError = error;
+        }
+
+        const after = await FileSystem.getInfoAsync(uri).catch(() => null);
+
+        if (!after?.exists) {
+          deletedFiles += 1;
+          reclaimedBytes += size;
+        } else if (deleteError) {
+          if (deleteFailureLogs < 3) {
+            deleteFailureLogs += 1;
+
+            console.warn(
+              "[video-tmp-delete-failed]",
+              JSON.stringify({
+                uri,
+                error: String(deleteError),
+              }),
+            );
+          }
+
+          if (deleteFailureLogs >= 3) {
+            break;
+          }
+        }
+      }
+
+      console.log(
+        "[video-tmp-startup-cleanup]",
+        JSON.stringify({
+          candidates: videoNames.length,
+          deleted: deletedFiles,
+          reclaimedGB: Number(
+            (reclaimedBytes / 1024 / 1024 / 1024).toFixed(2),
+          ),
+        }),
+      );
+    })();
+
     return () => {
       void clearTemporaryMatchVideo();
     };
   }, []);
+
+  useEffect(() => {
+    if (
+      videoOrphanCleanupRanRef.current ||
+      !matchPhotosReady ||
+      !matchMediaReferencesReady
+    ) {
+      return;
+    }
+
+    videoOrphanCleanupRanRef.current = true;
+
+    void (async () => {
+      const memoriesDirectory =
+        `${FileSystem.documentDirectory}match-memories/`;
+
+      const directoryInfo = await FileSystem.getInfoAsync(
+        memoriesDirectory,
+      ).catch(() => null);
+
+      if (!directoryInfo?.exists) {
+        console.log(
+          "[video-orphan-cleanup]",
+          JSON.stringify({
+            diskVideoFiles: 0,
+            diskVideoGB: 0,
+            legacyReferencedFiles: 0,
+            mediaReferencedFiles: 0,
+            uniqueReferencedFiles: 0,
+            orphanVideoFiles: 0,
+            orphanVideoGB: 0,
+          }),
+        );
+        return;
+      }
+
+      const names = await FileSystem.readDirectoryAsync(
+        memoriesDirectory,
+      );
+
+      const videoNames = names.filter((name) =>
+        /\.(mov|mp4|m4v)$/i.test(name),
+      );
+
+      const diskUris = new Set(
+        videoNames.map(
+          (name) => `${memoriesDirectory}${name}`,
+        ),
+      );
+
+      const legacyUris = new Set<string>();
+      for (const values of Object.values(matchPhotos)) {
+        for (const uri of values) {
+          if (
+            typeof uri === "string" &&
+            diskUris.has(uri)
+          ) {
+            legacyUris.add(uri);
+          }
+        }
+      }
+
+      const mediaUris = new Set<string>();
+      for (const references of Object.values(
+        matchMediaReferences,
+      )) {
+        for (const reference of references) {
+          if (
+            reference.type === "video" &&
+            reference.localUri &&
+            diskUris.has(reference.localUri)
+          ) {
+            mediaUris.add(reference.localUri);
+          }
+        }
+      }
+
+      const referencedUris = new Set([
+        ...legacyUris,
+        ...mediaUris,
+      ]);
+
+      let diskBytes = 0;
+      let orphanBytes = 0;
+      const orphanUris: string[] = [];
+
+      for (const uri of diskUris) {
+        const info = await FileSystem.getInfoAsync(uri).catch(
+          () => null,
+        );
+
+        if (!info?.exists) {
+          continue;
+        }
+
+        const size =
+          "size" in info && typeof info.size === "number"
+            ? info.size
+            : 0;
+
+        diskBytes += size;
+
+        if (!referencedUris.has(uri)) {
+          orphanBytes += size;
+          orphanUris.push(uri);
+        }
+      }
+
+      for (const uri of orphanUris) {
+        const info = await FileSystem.getInfoAsync(uri).catch(
+          () => null,
+        );
+
+        const size =
+          info?.exists &&
+          "size" in info &&
+          typeof info.size === "number"
+            ? info.size
+            : 0;
+
+        console.log(
+          "[video-orphan-audit-candidate]",
+          JSON.stringify({
+            file: uri.split("/").pop(),
+            sizeMB: Number(
+              (size / 1024 / 1024).toFixed(1),
+            ),
+          }),
+        );
+      }
+
+      let deletedFiles = 0;
+      let reclaimedBytes = 0;
+
+      for (const uri of orphanUris) {
+        const info = await FileSystem.getInfoAsync(uri).catch(
+          () => null,
+        );
+
+        if (!info?.exists) {
+          continue;
+        }
+
+        const size =
+          "size" in info && typeof info.size === "number"
+            ? info.size
+            : 0;
+
+        await FileSystem.deleteAsync(uri, {
+          idempotent: true,
+        });
+
+        deletedFiles += 1;
+        reclaimedBytes += size;
+      }
+
+      console.log(
+        "[video-orphan-cleanup]",
+        JSON.stringify({
+          candidates: orphanUris.length,
+          deleted: deletedFiles,
+          reclaimedGB: Number(
+            (reclaimedBytes / 1024 / 1024 / 1024).toFixed(2),
+          ),
+          preservedReferencedFiles: referencedUris.size,
+        }),
+      );
+    })();
+  }, [
+    matchPhotosReady,
+    matchMediaReferencesReady,
+    matchPhotos,
+    matchMediaReferences,
+  ]);
 
   const removeMatchMediaReference = (
     recordId: string,
@@ -5507,9 +5791,9 @@ confidence: ${recognition.confidence}%`,
           let photosUri: string | undefined;
 
           if (!reference.assetId.startsWith("selected-")) {
-            // Classification uses the fast persistent GPS cache, while
-            // Match Memory display asks Photos for the full usable asset URI.
-            const metadataInfo = await cachedMatchAssetInfo(reference.assetId);
+            // History must remain reference/thumbnail-only. Metadata needed
+            // for display and assignment is already persisted on the media
+            // reference; do not query Photos again while rendering History.
 
             // V4.0.86 — React Native Image cannot render Apple's ph://
             // identifiers directly. Resolve History photos to a real local
@@ -5523,7 +5807,6 @@ confidence: ${recognition.confidence}%`,
             const needsResolvedPhoto =
               reference.type === "photo" && !durableUri && !previewUri;
 
-            let displayInfo: MediaLibrary.AssetInfo | null = null;
             let thumbnailUri: string | undefined;
 
             if (needsResolvedPhoto) {
@@ -5562,106 +5845,30 @@ confidence: ${recognition.confidence}%`,
                   };
                 });
               }
-
-              const inFlight =
-                historyPhotoResolutionPromisesRef.current.get(
-                  reference.assetId,
-                );
-
-              if (inFlight) {
-                displayInfo = await inFlight;
-              } else {
-                const request = MediaLibrary.getAssetInfoAsync(
-                  reference.assetId,
-                  {
-                    // The selected History photo may need its iCloud original,
-                    // but concurrent renders must share the same expensive
-                    // Photos request instead of downloading it repeatedly.
-                    shouldDownloadFromNetwork: true,
-                  },
-                ).catch(() => null);
-
-                historyPhotoResolutionPromisesRef.current.set(
-                  reference.assetId,
-                  request,
-                );
-
-                try {
-                  displayInfo = await request;
-                } finally {
-                  if (
-                    historyPhotoResolutionPromisesRef.current.get(
-                      reference.assetId,
-                    ) === request
-                  ) {
-                    historyPhotoResolutionPromisesRef.current.delete(
-                      reference.assetId,
-                    );
-                  }
-                }
-              }
             }
-
-            const resolvedPhotosUri =
-              displayInfo?.localUri ??
-              (displayInfo?.uri && !displayInfo.uri.startsWith("ph://")
-                ? displayInfo.uri
-                : undefined);
 
             photosUri =
               durableUri ??
               previewUri ??
-              thumbnailUri ??
-              resolvedPhotosUri;
+              thumbnailUri;
             // Apple Photos/iCloud remains the source of truth for normal
             // discovered photos. Do not promote the resolved original into
             // Ticket Frame Documents; the lightweight reference/thumbnail is
             // sufficient for future History opens.
 
-            let recoveredInfo = metadataInfo ?? displayInfo;
-
-            const referenceHasGps =
-              Number.isFinite(Number(reference.latitude)) &&
-              Number.isFinite(Number(reference.longitude));
-            const referenceHasCreationTime =
-              Number.isFinite(Number(reference.creationTime));
-
-            if (
-              (!referenceHasGps || !referenceHasCreationTime) &&
-              !reference.assetId.startsWith("selected-")
-            ) {
-              const freshInfo = await MediaLibrary.getAssetInfoAsync(
-                reference.assetId,
-                { shouldDownloadFromNetwork: false },
-              ).catch(() => null);
-
-              if (freshInfo) recoveredInfo = freshInfo;
-            }
-
-            const recoveredLocation =
-              recoveredInfo?.location ?? displayInfo?.location;
-
             const recoveredLatitude = Number.isFinite(Number(reference.latitude))
               ? Number(reference.latitude)
-              : Number.isFinite(Number(recoveredLocation?.latitude))
-                ? Number(recoveredLocation?.latitude)
-                : undefined;
+              : undefined;
 
             const recoveredLongitude = Number.isFinite(Number(reference.longitude))
               ? Number(reference.longitude)
-              : Number.isFinite(Number(recoveredLocation?.longitude))
-                ? Number(recoveredLocation?.longitude)
-                : undefined;
+              : undefined;
 
             const recoveredCreationTime = Number.isFinite(
               Number(reference.creationTime),
             )
               ? Number(reference.creationTime)
-              : Number.isFinite(Number(recoveredInfo?.creationTime))
-                ? Number(recoveredInfo?.creationTime)
-                : Number.isFinite(Number(displayInfo?.creationTime))
-                  ? Number(displayInfo?.creationTime)
-                  : undefined;
+              : undefined;
 
             const recoveredMetadataChanged =
               recoveredLatitude !== reference.latitude ||
@@ -6663,6 +6870,13 @@ confidence: ${recognition.confidence}%`,
     const displayAssets = await Promise.all(
       assets.map(async (asset) => {
         if (!asset.uri?.startsWith("ph://")) return asset;
+
+        // A review thumbnail does not need a local playable copy of a video.
+        // Keep the Photos reference lightweight until the user explicitly
+        // chooses to play the video.
+        if (asset.mediaType === MediaLibrary.MediaType.video) {
+          return asset;
+        }
 
         const info = await MediaLibrary.getAssetInfoAsync(asset).catch(() => null);
         const renderableUri =

@@ -1,5 +1,6 @@
 import * as Crypto from "expo-crypto";
 import * as FileSystem from "expo-file-system/legacy";
+import { File as ExpoFile } from "expo-file-system";
 import * as MediaLibrary from "expo-media-library";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
@@ -186,6 +187,43 @@ function schedulePersistentMetadataSave() {
   }, 750);
 }
 
+async function cleanMetadataOnlyVideoTemporaryFile(
+  asset: MediaLibrary.Asset | string,
+  info: MediaLibrary.AssetInfo | null,
+) {
+  if (!info) return;
+
+  const localUri = info.localUri;
+  if (!localUri || !localUri.startsWith("file://")) return;
+  if (!localUri.includes("/tmp/")) return;
+
+  const assetIsVideo =
+    typeof asset !== "string" &&
+    asset.mediaType === MediaLibrary.MediaType.video;
+
+  const temporaryUriIsVideo =
+    /\.(mov|mp4|m4v)(?:\?|$)/i.test(localUri);
+
+  if (!assetIsVideo && !temporaryUriIsVideo) return;
+
+  try {
+    const temporaryFile = new ExpoFile(localUri);
+
+    if (temporaryFile.exists) {
+      temporaryFile.delete();
+    }
+  } catch (error) {
+    console.warn(
+      "[video-metadata-tmp-cleanup-failed]",
+      JSON.stringify({
+        assetId: typeof asset === "string" ? asset : asset.id,
+        localUri,
+        error: String(error),
+      }),
+    );
+  }
+}
+
 export function cachedMatchAssetInfo(asset: MediaLibrary.Asset | string) {
   const assetId = typeof asset === "string" ? asset : asset.id;
   const cached = matchAssetInfoCache.get(assetId);
@@ -214,6 +252,8 @@ export function cachedMatchAssetInfo(asset: MediaLibrary.Asset | string) {
       // automatic scan wait for an iCloud original to download.
       shouldDownloadFromNetwork: false,
     }).catch(() => null);
+
+    await cleanMetadataOnlyVideoTemporaryFile(asset, info);
 
     if (info) {
       persistentMediaMetadata[assetId] = {
@@ -252,6 +292,9 @@ export async function refreshMatchAssetInfo(
   const info = await MediaLibrary.getAssetInfoAsync(asset, {
     shouldDownloadFromNetwork: false,
   }).catch(() => null);
+
+  await cleanMetadataOnlyVideoTemporaryFile(asset, info);
+
   if (info) {
     persistentMediaMetadata[assetId] = {
       latitude: info.location?.latitude,
