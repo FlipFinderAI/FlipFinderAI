@@ -391,6 +391,8 @@ type DraggableHistoryPhotoProps = {
   mediaKey: string;
   editMode: boolean;
   moveArmed: boolean;
+  selectedCount?: number;
+  scrollOffsetShared: { value: number };
   children: React.ReactNode;
   onDragStart: (mediaKey: string) => void;
   onDragMove: (absoluteY: number) => void;
@@ -402,6 +404,8 @@ function DraggableHistoryPhoto({
   mediaKey,
   editMode,
   moveArmed,
+  selectedCount = 1,
+  scrollOffsetShared,
   children,
   onDragStart,
   onDragMove,
@@ -412,6 +416,7 @@ function DraggableHistoryPhoto({
   const translateY = useSharedValue(0);
   const scale = useSharedValue(1);
   const dragging = useSharedValue(false);
+  const dragStartScrollOffset = useSharedValue(0);
 
   const dragGesture = Gesture.Pan()
     .enabled(editMode && moveArmed)
@@ -419,12 +424,15 @@ function DraggableHistoryPhoto({
     .minDistance(1)
     .onBegin(() => {
       dragging.value = true;
-      scale.value = withSpring(1.08);
+      dragStartScrollOffset.value = scrollOffsetShared.value;
+      scale.value = withSpring(selectedCount > 1 ? 1.13 : 1.08);
       runOnJS(onDragStart)(mediaKey);
     })
     .onUpdate((event) => {
       translateX.value = event.translationX;
-      translateY.value = event.translationY;
+      translateY.value =
+        event.translationY +
+        (scrollOffsetShared.value - dragStartScrollOffset.value);
       runOnJS(onDragMove)(event.absoluteY);
     })
     .onEnd((event) => {
@@ -448,10 +456,133 @@ function DraggableHistoryPhoto({
     elevation: dragging.value ? 20 : 0,
   }));
 
+  const backCardOneStyle = useAnimatedStyle(() => ({
+    opacity: dragging.value && selectedCount > 1 ? 0.55 : 0,
+    transform: [
+      { translateX: dragging.value ? 7 : 0 },
+      { translateY: dragging.value ? 7 : 0 },
+      { rotate: dragging.value ? "3deg" : "0deg" },
+    ],
+  }));
+
+  const backCardTwoStyle = useAnimatedStyle(() => ({
+    opacity: dragging.value && selectedCount > 2 ? 0.35 : 0,
+    transform: [
+      { translateX: dragging.value ? 13 : 0 },
+      { translateY: dragging.value ? 13 : 0 },
+      { rotate: dragging.value ? "6deg" : "0deg" },
+    ],
+  }));
+
+  const dragCountStyle = useAnimatedStyle(() => ({
+    opacity: dragging.value && selectedCount > 1 ? 1 : 0,
+  }));
+
   return (
     <GestureDetector gesture={dragGesture}>
       <Reanimated.View style={[{ width: "32.5%" }, animatedStyle]}>
+        {selectedCount > 1 ? (
+          <>
+            <Reanimated.View
+              pointerEvents="none"
+              style={[
+                {
+                  position: "absolute",
+                  inset: 0,
+                  borderRadius: 7,
+                  backgroundColor: "#17221c",
+                },
+                backCardTwoStyle,
+              ]}
+            />
+            <Reanimated.View
+              pointerEvents="none"
+              style={[
+                {
+                  position: "absolute",
+                  inset: 0,
+                  borderRadius: 7,
+                  backgroundColor: "#f4efe4",
+                  borderWidth: 2,
+                  borderColor: "#17221c",
+                },
+                backCardOneStyle,
+              ]}
+            />
+          </>
+        ) : null}
+
         {children}
+
+        {moveArmed ? (
+          <View
+            pointerEvents="none"
+            style={{
+              position: "absolute",
+              top: 0,
+              right: 0,
+              bottom: 0,
+              left: 0,
+              borderWidth: 4,
+              borderColor: "#173f96",
+              backgroundColor: "rgba(8, 18, 34, 0.34)",
+              zIndex: 1001,
+            }}
+          >
+            <View
+              style={{
+                position: "absolute",
+                top: 6,
+                right: 6,
+                width: 27,
+                height: 27,
+                borderRadius: 14,
+                backgroundColor: "#173f96",
+                borderWidth: 2,
+                borderColor: "#ffffff",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <Text
+                style={{
+                  color: "#ffffff",
+                  fontSize: 16,
+                  lineHeight: 18,
+                  fontWeight: "900",
+                }}
+              >
+                ✓
+              </Text>
+            </View>
+          </View>
+        ) : null}
+
+        {selectedCount > 1 ? (
+          <Reanimated.View
+            pointerEvents="none"
+            style={[
+              {
+                position: "absolute",
+                top: -10,
+                right: -10,
+                minWidth: 30,
+                height: 30,
+                paddingHorizontal: 7,
+                borderRadius: 15,
+                backgroundColor: "#17221c",
+                alignItems: "center",
+                justifyContent: "center",
+                zIndex: 1002,
+              },
+              dragCountStyle,
+            ]}
+          >
+            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 13 }}>
+              {selectedCount}
+            </Text>
+          </Reanimated.View>
+        ) : null}
       </Reanimated.View>
     </GestureDetector>
   );
@@ -641,6 +772,10 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
   const [mediaEditMode, setMediaEditMode] = useState(false);
   const [mediaMoveArmedKey, setMediaMoveArmedKey] = useState<string | null>(null);
   const [mediaSelectedKeys, setMediaSelectedKeys] = useState<string[]>([]);
+  const [mediaPhotoDragActive, setMediaPhotoDragActive] = useState(false);
+  const mediaDragPointerYRef = useRef(0);
+  const mediaDragScrollOffsetShared = useSharedValue(0);
+  const stopHistoryMediaAutoScrollRef = useRef<(() => void) | null>(null);
   const mediaDropZoneRefs = useRef<Record<string, any>>({});
   const mediaDropZoneAssignmentsRef = useRef<Record<string, MatchdayMediaAssignment>>({});
   const mediaDropZonesRef = useRef<
@@ -661,6 +796,16 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
     useState<string | null>(null);
   const resolvingMatchVideoAssetIdsRef = useRef<Set<string>>(new Set());
   const videoOrphanCleanupRanRef = useRef(false);
+
+  useEffect(() => {
+    stopHistoryMediaAutoScrollRef.current?.();
+    mediaDropZoneRefs.current = {};
+    mediaDropZoneAssignmentsRef.current = {};
+    mediaDropZonesRef.current = {};
+    setMediaSelectedKeys([]);
+    setMediaMoveArmedKey(null);
+    setMediaPhotoDragActive(false);
+  }, [selectedHistoryRecordId]);
 
   const temporaryMatchVideoUriRef = useRef<string | null>(null);
 
@@ -7199,6 +7344,27 @@ confidence: ${recognition.confidence}%`,
       const mediaByFixture = new Map<string, MediaLibrary.Asset[]>();
       const assetsByDate = new Map<string, MediaLibrary.Asset[]>();
 
+      // A user's accepted/moved History assignment is authoritative.
+      // Once an Apple Photos asset has been manually assigned anywhere in
+      // History, Auto Add must never offer, move or classify it again unless
+      // the user explicitly changes that assignment in History.
+      const manuallyAssignedHistoryAssetIds = new Set(
+        Object.entries(matchdayMediaAssignments)
+          .filter(
+            ([key, assignment]) =>
+              key.includes("|asset:") &&
+              assignment?.source === "manual",
+          )
+          .map(([key]) => {
+            const marker = "|asset:";
+            const markerIndex = key.indexOf(marker);
+            return markerIndex >= 0
+              ? key.slice(markerIndex + marker.length)
+              : "";
+          })
+          .filter(Boolean),
+      );
+
       // Auto Add must not discard a historical photo merely because the
       // currently hydrated/bundled fixture cache is missing that exact date.
       //
@@ -7357,6 +7523,9 @@ confidence: ${recognition.confidence}%`,
           const possible = page.assets.filter((asset) => {
             if (inspectedAssetIds.has(asset.id)) return false;
             inspectedAssetIds.add(asset.id);
+
+            // Manual/accepted History placement wins permanently over Auto Add.
+            if (manuallyAssignedHistoryAssetIds.has(asset.id)) return false;
 
             const taken = new Date(asset.creationTime);
             const date = `${taken.getFullYear()}-${String(
@@ -13428,10 +13597,13 @@ Choose one team. Its colours automatically control the Club Colours frame style.
           <ScrollView
             directionalLockEnabled
             ref={historyScrollRef}
+            scrollEnabled={!mediaPhotoDragActive}
             style={{ backgroundColor: "#f5f1e8" }}
             contentContainerStyle={[s.page, { paddingBottom: 120 }]}
             onScroll={(event) => {
               mediaDragScrollOffsetRef.current =
+                event.nativeEvent.contentOffset.y;
+              mediaDragScrollOffsetShared.value =
                 event.nativeEvent.contentOffset.y;
 
               if (
@@ -15043,11 +15215,16 @@ Choose one team. Its colours automatically control the Club Colours frame style.
         }
       };
 
+      stopHistoryMediaAutoScrollRef.current =
+        stopHistoryMediaAutoScroll;
+
       const updateHistoryMediaAutoScroll = (
         absoluteY: number,
       ) => {
+        mediaDragPointerYRef.current = absoluteY;
+
         const windowHeight = Dimensions.get("window").height;
-        const edgeSize = 135;
+        const edgeSize = 150;
 
         const direction: -1 | 0 | 1 =
           absoluteY <= edgeSize
@@ -15069,22 +15246,53 @@ Choose one team. Its colours automatically control the Club Colours frame style.
 
         mediaDragAutoScrollDirectionRef.current = direction;
 
+        let refreshTick = 0;
+
         mediaDragAutoScrollTimerRef.current = setInterval(() => {
+          const currentPointerY = mediaDragPointerYRef.current;
+          const currentWindowHeight = Dimensions.get("window").height;
+
+          const distanceIntoEdge =
+            direction < 0
+              ? Math.max(0, edgeSize - currentPointerY)
+              : Math.max(
+                  0,
+                  currentPointerY -
+                    (currentWindowHeight - edgeSize),
+                );
+
+          const intensity = Math.min(
+            1,
+            distanceIntoEdge / edgeSize,
+          );
+
+          const pixelsThisFrame =
+            4 + intensity * intensity * 28;
+
           const nextOffset = Math.max(
             0,
             mediaDragScrollOffsetRef.current +
-              direction * 22,
+              direction * pixelsThisFrame,
           );
 
-          mediaDragScrollOffsetRef.current = nextOffset;
+          if (
+            nextOffset === mediaDragScrollOffsetRef.current &&
+            direction < 0
+          ) {
+            return;
+          }
 
           historyScrollRef.current?.scrollTo({
             y: nextOffset,
             animated: false,
           });
 
-          requestAnimationFrame(refreshMediaDropZones);
-        }, 32);
+          refreshTick += 1;
+
+          if (refreshTick % 6 === 0) {
+            requestAnimationFrame(refreshMediaDropZones);
+          }
+        }, 16);
       };
 
       const toggleMediaPhotoSelection = (mediaKey: string) => {
@@ -15100,11 +15308,18 @@ Choose one team. Its colours automatically control the Club Colours frame style.
       const beginHistoryPhotoDrag = (mediaKey: string) => {
         if (!mediaEditMode) return;
 
+        setMediaPhotoDragActive(true);
+
         setMediaSelectedKeys((current) =>
           current.includes(mediaKey) ? current : [...current, mediaKey],
         );
 
         refreshMediaDropZones();
+      };
+
+      const finishHistoryPhotoDrag = () => {
+        stopHistoryMediaAutoScroll();
+        setMediaPhotoDragActive(false);
       };
 
       const dropHistoryPhoto = (
@@ -15114,11 +15329,26 @@ Choose one team. Its colours automatically control the Club Colours frame style.
       ) => {
         stopHistoryMediaAutoScroll();
 
-        if (!mediaEditMode) return;
+        if (!mediaEditMode || !selectedHistoryRecordId) return;
 
-        refreshMediaDropZones();
+        const currentRecordPrefix = `${selectedHistoryRecordId}|`;
 
-        const target = Object.values(mediaDropZonesRef.current).find(
+        if (!mediaKey.startsWith(currentRecordPrefix)) {
+          return;
+        }
+
+        const currentDropZones = Object.values(
+          mediaDropZonesRef.current,
+        ).filter((zone) =>
+          Object.values(
+            mediaDropZoneAssignmentsRef.current,
+          ).some(
+            (assignment) =>
+              assignment === zone.assignment,
+          ),
+        );
+
+        const target = currentDropZones.find(
           (zone) =>
             absoluteX >= zone.x &&
             absoluteX <= zone.x + zone.width &&
@@ -15136,7 +15366,10 @@ Choose one team. Its colours automatically control the Club Colours frame style.
           const next = { ...current };
 
           for (const key of movingKeys) {
-            next[key] = target.assignment;
+            next[key] = {
+              ...target.assignment,
+              source: "manual",
+            };
           }
 
           return next;
@@ -15478,12 +15711,18 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                             moveArmed={mediaSelectedKeys.includes(
                               mediaKey,
                             )}
-                            onDragStart={beginHistoryPhotoDrag}
+                            selectedCount={
+                              mediaSelectedKeys.includes(mediaKey)
+                                ? mediaSelectedKeys.length
+                                : 1
+                            }
+                            scrollOffsetShared={mediaDragScrollOffsetShared}
+                          onDragStart={beginHistoryPhotoDrag}
                             onDragMove={
                               updateHistoryMediaAutoScroll
                             }
                             onDragFinish={
-                              stopHistoryMediaAutoScroll
+                              finishHistoryPhotoDrag
                             }
                             onDrop={dropHistoryPhoto}
                           >
@@ -15867,9 +16106,15 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                           mediaKey={mediaKey}
                           editMode={mediaEditMode}
                           moveArmed={mediaSelectedKeys.includes(mediaKey)}
+                          selectedCount={
+                            mediaSelectedKeys.includes(mediaKey)
+                              ? mediaSelectedKeys.length
+                              : 1
+                          }
+                          scrollOffsetShared={mediaDragScrollOffsetShared}
                           onDragStart={beginHistoryPhotoDrag}
                           onDragMove={updateHistoryMediaAutoScroll}
-                          onDragFinish={stopHistoryMediaAutoScroll}
+                          onDragFinish={finishHistoryPhotoDrag}
                           onDrop={dropHistoryPhoto}
                         >
                           <Pressable
@@ -15922,8 +16167,6 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                           style={({ pressed }) => ({
                             width: "100%",
                             opacity: pressed ? 0.6 : 1,
-                            borderWidth: mediaSelectedKeys.includes(mediaKey) ? 4 : 0,
-                            borderColor: favouriteClub.primary,
                           })}
                         >
                           <Image
@@ -15945,9 +16188,15 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                           mediaKey={mediaKey}
                           editMode={mediaEditMode}
                           moveArmed={mediaSelectedKeys.includes(mediaKey)}
+                          selectedCount={
+                            mediaSelectedKeys.includes(mediaKey)
+                              ? mediaSelectedKeys.length
+                              : 1
+                          }
+                          scrollOffsetShared={mediaDragScrollOffsetShared}
                           onDragStart={beginHistoryPhotoDrag}
                           onDragMove={updateHistoryMediaAutoScroll}
-                          onDragFinish={stopHistoryMediaAutoScroll}
+                          onDragFinish={finishHistoryPhotoDrag}
                           onDrop={dropHistoryPhoto}
                         >
                           <Pressable
@@ -16013,8 +16262,6 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                           style={({ pressed }) => ({
                             width: "100%",
                             opacity: pressed ? 0.6 : 1,
-                            borderWidth: mediaSelectedKeys.includes(mediaKey) ? 4 : 0,
-                            borderColor: favouriteClub.primary,
                           })}
                         >
                           <Image
