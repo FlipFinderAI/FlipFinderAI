@@ -659,6 +659,23 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
   const [selectedMatchVideoUri, setSelectedMatchVideoUri] =
     useState<string | null>(null);
   const resolvingMatchVideoAssetIdsRef = useRef<Set<string>>(new Set());
+  const temporaryMatchVideoUriRef = useRef<string | null>(null);
+
+  const clearTemporaryMatchVideo = async () => {
+    const uri = temporaryMatchVideoUriRef.current;
+    temporaryMatchVideoUriRef.current = null;
+
+    if (!uri) return;
+
+    const cacheDirectory =
+      `${FileSystem.cacheDirectory}match-memory-video-playback/`;
+
+    if (!uri.startsWith(cacheDirectory)) return;
+
+    await FileSystem.deleteAsync(uri, {
+      idempotent: true,
+    }).catch(() => {});
+  };
   const [expandedSeasonPhotoFixtureKey, setExpandedSeasonPhotoFixtureKey] =
     useState<string | null>(null);
   const matchPhotoWriteChainRef = useRef<Promise<void>>(Promise.resolve());
@@ -1176,8 +1193,12 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
         throw new Error("Apple Photos returned no usable video file");
       }
 
-      const directory =
-        `${FileSystem.documentDirectory}match-memories/`;
+      const isPhotosAsset =
+        !media.assetId.startsWith("selected-");
+
+      const directory = isPhotosAsset
+        ? `${FileSystem.cacheDirectory}match-memory-video-playback/`
+        : `${FileSystem.documentDirectory}match-memories/`;
 
       await FileSystem.makeDirectoryAsync(directory, {
         intermediates: true,
@@ -1218,6 +1239,40 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
         throw new Error("Downloaded video was empty");
       }
 
+      if (isPhotosAsset) {
+        setResolvedMatchMedia((current) => {
+          const existingMedia = current[recordId] ?? [];
+
+          return {
+            ...current,
+            [recordId]: existingMedia.map((item) =>
+              item.assetId === media.assetId
+                ? {
+                    ...item,
+                    uri: destination,
+                  }
+                : item,
+            ),
+          };
+        });
+
+        await clearTemporaryMatchVideo();
+        temporaryMatchVideoUriRef.current = destination;
+        setSelectedMatchVideoUri(destination);
+
+        console.log(
+          "[MATCH-VIDEO-ON-DEMAND]",
+          JSON.stringify({
+            assetId: media.assetId,
+            source: "apple-photos-temp-cache",
+            permanentCopy: false,
+            size: copied.size,
+          }),
+        );
+
+        return;
+      }
+
       const durableMedia = {
         ...media,
         localUri: destination,
@@ -1246,6 +1301,7 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
         "[MATCH-VIDEO-ON-DEMAND]",
         JSON.stringify({
           assetId: media.assetId,
+          source: "ticket-frame-local",
           destination,
           size: copied.size,
         }),
@@ -1266,6 +1322,19 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
       );
     }
   };
+
+  useEffect(() => {
+    const cacheDirectory =
+      `${FileSystem.cacheDirectory}match-memory-video-playback/`;
+
+    void FileSystem.deleteAsync(cacheDirectory, {
+      idempotent: true,
+    }).catch(() => {});
+
+    return () => {
+      void clearTemporaryMatchVideo();
+    };
+  }, []);
 
   const removeMatchMediaReference = (
     recordId: string,
@@ -1332,8 +1401,7 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
     // Photos/iCloud. Persist their Ticket Frame assignment and metadata, but
     // do not create another full-resolution copy in Documents.
     const referencesNeedingDurableCopy = enrichedReferences.filter(
-      (reference) =>
-        reference.type !== "photo" || reference.assetId.startsWith("selected-"),
+      (reference) => reference.assetId.startsWith("selected-"),
     );
 
     if (!referencesNeedingDurableCopy.length) return enrichedReferences;
@@ -15337,10 +15405,10 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                               media.localUri ?? media.uri;
 
                             if (
-                              media.localUri &&
                               selectedMatchVideoUri === playableUri
                             ) {
                               setSelectedMatchVideoUri(null);
+                              void clearTemporaryMatchVideo();
                               return;
                             }
 
