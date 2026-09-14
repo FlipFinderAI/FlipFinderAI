@@ -751,6 +751,104 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
     });
   };
 
+  const historyPhotoStorageMigrationStartedRef = useRef(false);
+
+  useEffect(() => {
+    if (!matchMediaReferencesReady || !matchPhotosReady) return;
+    if (historyPhotoStorageMigrationStartedRef.current) return;
+
+    historyPhotoStorageMigrationStartedRef.current = true;
+
+    void (async () => {
+      const directory = `${FileSystem.documentDirectory}match-memories/`;
+
+      const referencedUris = new Set<string>();
+
+      for (const uris of Object.values(matchPhotos)) {
+        for (const uri of uris) {
+          if (uri.startsWith(directory)) referencedUris.add(uri);
+        }
+      }
+
+      for (const references of Object.values(
+        matchMediaReferencesRef.current,
+      )) {
+        for (const reference of references) {
+          if (
+            reference.localUri &&
+            reference.localUri.startsWith(directory)
+          ) {
+            referencedUris.add(reference.localUri);
+          }
+        }
+      }
+
+      const referencedFileNames = new Set(
+        [...referencedUris].map((uri) =>
+          decodeURIComponent(uri.split("/").pop() ?? ""),
+        ),
+      );
+
+      const diskFiles = await FileSystem.readDirectoryAsync(directory).catch(
+        () => [],
+      );
+
+      const orphanHistoryFiles = diskFiles.filter(
+        (fileName) =>
+          fileName.startsWith("history-") &&
+          !referencedFileNames.has(fileName),
+      );
+
+      let deleted = 0;
+      let reclaimedBytes = 0;
+
+      for (const fileName of orphanHistoryFiles) {
+        const uri = `${directory}${fileName}`;
+
+        try {
+          const info = await FileSystem.getInfoAsync(uri);
+
+          if (!info.exists) continue;
+
+          const size = info.size ?? 0;
+
+          await FileSystem.deleteAsync(uri, {
+            idempotent: true,
+          });
+
+          deleted += 1;
+          reclaimedBytes += size;
+        } catch (error) {
+          console.warn(
+            "[history-photo-orphan-cleanup] could not delete",
+            fileName,
+            error,
+          );
+        }
+      }
+
+      console.log(
+        "[history-photo-orphan-cleanup]",
+        JSON.stringify({
+          candidates: orphanHistoryFiles.length,
+          deleted,
+          reclaimedMB: Number(
+            (reclaimedBytes / 1048576).toFixed(1),
+          ),
+        }),
+      );
+    })().catch((error) => {
+      console.warn(
+        "[history-photo-orphan-cleanup] failed",
+        error,
+      );
+    });
+  }, [
+    matchMediaReferencesReady,
+    matchPhotosReady,
+    matchPhotos,
+  ]);
+
   const closeEnlargedMatchPhoto = () => {
     enlargedMatchPhotoRequestRef.current += 1;
     enlargedMatchPhotoRetryRef.current = null;
