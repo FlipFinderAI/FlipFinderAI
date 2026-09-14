@@ -1,8 +1,15 @@
 #import <React/RCTBridgeModule.h>
+#import <React/RCTViewManager.h>
+#import <React/RCTComponent.h>
 
 @interface RCT_EXTERN_MODULE(ParkingSearchModule, NSObject)
 
 RCT_EXTERN_METHOD(search:(nonnull NSNumber *)latitude
+                  longitude:(nonnull NSNumber *)longitude
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(pickPlace:(nonnull NSNumber *)latitude
                   longitude:(nonnull NSNumber *)longitude
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
@@ -23,6 +30,19 @@ RCT_EXTERN_METHOD(searchPlacesQuery:(nonnull NSNumber *)latitude
 + (BOOL)requiresMainQueueSetup
 {
   return NO;
+}
+
+@end
+
+@interface RCT_EXTERN_MODULE(HistoryStadiumMapViewManager, RCTViewManager)
+
+RCT_EXPORT_VIEW_PROPERTY(stadiums, NSArray)
+RCT_EXPORT_VIEW_PROPERTY(mapType, NSString)
+RCT_EXPORT_VIEW_PROPERTY(onSelect, RCTBubblingEventBlock)
+
++ (BOOL)requiresMainQueueSetup
+{
+  return YES;
 }
 
 @end

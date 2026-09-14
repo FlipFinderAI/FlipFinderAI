@@ -56,6 +56,43 @@ final class ParkingSearchModule: NSObject {
     }
   }
 
+  @objc(pickPlace:longitude:resolver:rejecter:)
+  func pickPlace(
+    _ latitude: NSNumber,
+    longitude: NSNumber,
+    resolver resolve: @escaping RCTPromiseResolveBlock,
+    rejecter reject: @escaping RCTPromiseRejectBlock
+  ) {
+    DispatchQueue.main.async {
+      guard let presenter = HistoryPlaceSearchViewController.topViewController()
+      else {
+        reject(
+          "place_picker_unavailable",
+          "Ticket Frame could not open the place picker.",
+          nil
+        )
+        return
+      }
+
+      let picker = HistoryPlaceSearchViewController(
+        latitude: latitude.doubleValue,
+        longitude: longitude.doubleValue
+      )
+
+      picker.onComplete = { result in
+        if let result {
+          resolve(result)
+        } else {
+          resolve(NSNull())
+        }
+      }
+
+      let navigation = UINavigationController(rootViewController: picker)
+      navigation.modalPresentationStyle = .pageSheet
+      presenter.present(navigation, animated: true)
+    }
+  }
+
   @objc(searchPlaces:longitude:kind:resolver:rejecter:)
   func searchPlaces(
     _ latitude: NSNumber,
@@ -227,5 +264,531 @@ final class ParkingSearchModule: NSObject {
       context.cgContext.setLineWidth(4)
       context.cgContext.strokeEllipse(in: circle.insetBy(dx: 2, dy: 2))
     }
+  }
+}
+
+final class HistoryPlaceSearchViewController:
+  UIViewController,
+  UISearchBarDelegate,
+  UITableViewDataSource,
+  UITableViewDelegate
+{
+  var onComplete: (([String: Any]?) -> Void)?
+
+  private let origin: CLLocationCoordinate2D
+  private let searchBar = UISearchBar()
+  private let tableView = UITableView(frame: .zero, style: .plain)
+  private let statusLabel = UILabel()
+  private var results: [MKMapItem] = []
+  private var searchWorkItem: DispatchWorkItem?
+  private var activeSearches: [MKLocalSearch] = []
+
+  init(latitude: Double, longitude: Double) {
+    self.origin = CLLocationCoordinate2D(
+      latitude: latitude,
+      longitude: longitude
+    )
+    super.init(nibName: nil, bundle: nil)
+  }
+
+  required init?(coder: NSCoder) {
+    fatalError("init(coder:) has not been implemented")
+  }
+
+  override func viewDidLoad() {
+    super.viewDidLoad()
+
+    title = "Find a location"
+    view.backgroundColor = .systemBackground
+
+    navigationItem.leftBarButtonItem = UIBarButtonItem(
+      barButtonSystemItem: .cancel,
+      target: self,
+      action: #selector(cancel)
+    )
+
+    searchBar.placeholder = "Search place or location"
+    searchBar.autocapitalizationType = .words
+    searchBar.delegate = self
+
+    statusLabel.text = "Nearby places"
+    statusLabel.font = .preferredFont(forTextStyle: .subheadline)
+    statusLabel.textColor = .secondaryLabel
+    statusLabel.numberOfLines = 0
+
+    tableView.dataSource = self
+    tableView.delegate = self
+    tableView.keyboardDismissMode = .onDrag
+
+    [searchBar, statusLabel, tableView].forEach {
+      $0.translatesAutoresizingMaskIntoConstraints = false
+      view.addSubview($0)
+    }
+
+    NSLayoutConstraint.activate([
+      searchBar.topAnchor.constraint(
+        equalTo: view.safeAreaLayoutGuide.topAnchor
+      ),
+      searchBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+      searchBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+
+      statusLabel.topAnchor.constraint(
+        equalTo: searchBar.bottomAnchor,
+        constant: 4
+      ),
+      statusLabel.leadingAnchor.constraint(
+        equalTo: view.leadingAnchor,
+        constant: 16
+      ),
+      statusLabel.trailingAnchor.constraint(
+        equalTo: view.trailingAnchor,
+        constant: -16
+      ),
+
+      tableView.topAnchor.constraint(
+        equalTo: statusLabel.bottomAnchor,
+        constant: 6
+      ),
+      tableView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+      tableView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+      tableView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+    ])
+
+    loadNearbySuggestions()
+  }
+
+  @objc private func cancel() {
+    dismiss(animated: true) {
+      self.onComplete?(nil)
+    }
+  }
+
+  func searchBar(
+    _ searchBar: UISearchBar,
+    textDidChange searchText: String
+  ) {
+    searchWorkItem?.cancel()
+
+    let cleaned = searchText.trimmingCharacters(
+      in: .whitespacesAndNewlines
+    )
+
+    guard cleaned.count >= 2 else {
+      statusLabel.text = "Nearby places"
+      loadNearbySuggestions()
+      return
+    }
+
+    statusLabel.text = "Searching Apple Maps…"
+
+    let item = DispatchWorkItem { [weak self] in
+      self?.runSearch(query: cleaned)
+    }
+
+    searchWorkItem = item
+
+    DispatchQueue.main.asyncAfter(
+      deadline: .now() + 0.30,
+      execute: item
+    )
+  }
+
+  private func runSearch(query: String) {
+    activeSearches.forEach { $0.cancel() }
+    activeSearches.removeAll()
+
+    let request = MKLocalSearch.Request()
+    request.naturalLanguageQuery = query
+    request.resultTypes = [.pointOfInterest, .address]
+    request.region = MKCoordinateRegion(
+      center: origin,
+      latitudinalMeters: 50_000,
+      longitudinalMeters: 50_000
+    )
+
+    let search = MKLocalSearch(request: request)
+    activeSearches = [search]
+
+    search.start { [weak self] response, _ in
+      guard let self else { return }
+
+      DispatchQueue.main.async {
+        self.results = Array((response?.mapItems ?? []).prefix(12))
+        self.statusLabel.text = self.results.isEmpty
+          ? "No matching places found"
+          : "Search results"
+        self.tableView.reloadData()
+      }
+    }
+  }
+
+  private func loadNearbySuggestions() {
+    activeSearches.forEach { $0.cancel() }
+    activeSearches.removeAll()
+
+    let queries = [
+      "pub",
+      "restaurant",
+      "cafe",
+      "hotel",
+      "train station",
+      "shop",
+    ]
+
+    let group = DispatchGroup()
+    let lock = NSLock()
+    var found: [MKMapItem] = []
+
+    for query in queries {
+      let request = MKLocalSearch.Request()
+      request.naturalLanguageQuery = query
+      request.resultTypes = .pointOfInterest
+      request.region = MKCoordinateRegion(
+        center: origin,
+        latitudinalMeters: 4_000,
+        longitudinalMeters: 4_000
+      )
+
+      let search = MKLocalSearch(request: request)
+      activeSearches.append(search)
+
+      group.enter()
+
+      search.start { response, _ in
+        lock.lock()
+        found.append(contentsOf: response?.mapItems ?? [])
+        lock.unlock()
+        group.leave()
+      }
+    }
+
+    group.notify(queue: .main) { [weak self] in
+      guard let self else { return }
+
+      let originLocation = CLLocation(
+        latitude: self.origin.latitude,
+        longitude: self.origin.longitude
+      )
+
+      var seen = Set<String>()
+
+      self.results = found
+        .sorted {
+          let left = originLocation.distance(
+            from: CLLocation(
+              latitude: $0.placemark.coordinate.latitude,
+              longitude: $0.placemark.coordinate.longitude
+            )
+          )
+          let right = originLocation.distance(
+            from: CLLocation(
+              latitude: $1.placemark.coordinate.latitude,
+              longitude: $1.placemark.coordinate.longitude
+            )
+          )
+          return left < right
+        }
+        .filter { item in
+          let coordinate = item.placemark.coordinate
+          let key = [
+            item.name ?? "",
+            String(format: "%.5f", coordinate.latitude),
+            String(format: "%.5f", coordinate.longitude),
+          ].joined(separator: "|")
+
+          if seen.contains(key) {
+            return false
+          }
+
+          seen.insert(key)
+          return true
+        }
+
+      self.results = Array(self.results.prefix(12))
+      self.statusLabel.text = "Nearby places"
+      self.tableView.reloadData()
+    }
+  }
+
+  func tableView(
+    _ tableView: UITableView,
+    numberOfRowsInSection section: Int
+  ) -> Int {
+    results.count
+  }
+
+  func tableView(
+    _ tableView: UITableView,
+    cellForRowAt indexPath: IndexPath
+  ) -> UITableViewCell {
+    let cell = UITableViewCell(
+      style: .subtitle,
+      reuseIdentifier: nil
+    )
+
+    let item = results[indexPath.row]
+    let coordinate = item.placemark.coordinate
+
+    cell.textLabel?.text = item.name ?? "Location"
+
+    let address = [
+      item.placemark.subThoroughfare,
+      item.placemark.thoroughfare,
+      item.placemark.locality,
+    ]
+      .compactMap { $0 }
+      .joined(separator: " ")
+
+    let distance = CLLocation(
+      latitude: origin.latitude,
+      longitude: origin.longitude
+    ).distance(
+      from: CLLocation(
+        latitude: coordinate.latitude,
+        longitude: coordinate.longitude
+      )
+    ) / 1609.344
+
+    if address.isEmpty {
+      cell.detailTextLabel?.text = String(
+        format: "%.2f mi away",
+        distance
+      )
+    } else {
+      cell.detailTextLabel?.text = String(
+        format: "%@ · %.2f mi",
+        address,
+        distance
+      )
+    }
+
+    cell.accessoryType = .disclosureIndicator
+    return cell
+  }
+
+  func tableView(
+    _ tableView: UITableView,
+    didSelectRowAt indexPath: IndexPath
+  ) {
+    let item = results[indexPath.row]
+    let coordinate = item.placemark.coordinate
+
+    dismiss(animated: true) {
+      self.onComplete?([
+        "name": item.name ?? "Location",
+        "latitude": coordinate.latitude,
+        "longitude": coordinate.longitude,
+      ])
+    }
+  }
+
+  static func topViewController(
+    base: UIViewController? = {
+      let scene = UIApplication.shared.connectedScenes
+        .compactMap { $0 as? UIWindowScene }
+        .first { $0.activationState == .foregroundActive }
+
+      return scene?.windows
+        .first { $0.isKeyWindow }?
+        .rootViewController
+    }()
+  ) -> UIViewController? {
+    if let navigation = base as? UINavigationController {
+      return topViewController(base: navigation.visibleViewController)
+    }
+
+    if let tab = base as? UITabBarController {
+      return topViewController(base: tab.selectedViewController)
+    }
+
+    if let presented = base?.presentedViewController {
+      return topViewController(base: presented)
+    }
+
+    return base
+  }
+}
+
+private final class HistoryStadiumAnnotation:
+  NSObject,
+  MKAnnotation
+{
+  let coordinate: CLLocationCoordinate2D
+  let stadiumName: String
+  let clubName: String
+  let visits: Int
+
+  var title: String? {
+    stadiumName
+  }
+
+  var subtitle: String? {
+    let visitText = visits == 1 ? "1 visit" : "\(visits) visits"
+
+    if clubName.isEmpty {
+      return visitText
+    }
+
+    return "\(clubName) · \(visitText)"
+  }
+
+  init(
+    coordinate: CLLocationCoordinate2D,
+    stadiumName: String,
+    clubName: String,
+    visits: Int
+  ) {
+    self.coordinate = coordinate
+    self.stadiumName = stadiumName
+    self.clubName = clubName
+    self.visits = visits
+    super.init()
+  }
+}
+
+@objc(HistoryStadiumMapView)
+final class HistoryStadiumMapView:
+  UIView,
+  MKMapViewDelegate
+{
+  private let mapView = MKMapView(frame: .zero)
+
+  @objc var stadiums: NSArray = [] {
+    didSet {
+      updateAnnotations()
+    }
+  }
+
+  @objc var mapType: NSString = "standard" {
+    didSet {
+      switch mapType as String {
+      case "satellite":
+        mapView.mapType = .satellite
+      case "hybrid":
+        mapView.mapType = .hybrid
+      default:
+        mapView.mapType = .standard
+      }
+    }
+  }
+
+  @objc var onSelect: RCTBubblingEventBlock?
+
+  override init(frame: CGRect) {
+    super.init(frame: frame)
+
+    mapView.translatesAutoresizingMaskIntoConstraints = false
+    mapView.delegate = self
+    mapView.showsCompass = true
+    mapView.showsScale = true
+
+    addSubview(mapView)
+
+    NSLayoutConstraint.activate([
+      mapView.topAnchor.constraint(equalTo: topAnchor),
+      mapView.leadingAnchor.constraint(equalTo: leadingAnchor),
+      mapView.trailingAnchor.constraint(equalTo: trailingAnchor),
+      mapView.bottomAnchor.constraint(equalTo: bottomAnchor),
+    ])
+  }
+
+  required init?(coder: NSCoder) {
+    fatalError("init(coder:) has not been implemented")
+  }
+
+  private func updateAnnotations() {
+    mapView.removeAnnotations(mapView.annotations)
+
+    let annotations: [HistoryStadiumAnnotation] = stadiums.compactMap {
+      guard
+        let stadium = $0 as? [String: Any],
+        let name = stadium["name"] as? String,
+        let latitude = stadium["latitude"] as? NSNumber,
+        let longitude = stadium["longitude"] as? NSNumber
+      else {
+        return nil
+      }
+
+      let club = stadium["club"] as? String ?? ""
+      let visits = (stadium["visits"] as? NSNumber)?.intValue ?? 0
+
+      return HistoryStadiumAnnotation(
+        coordinate: CLLocationCoordinate2D(
+          latitude: latitude.doubleValue,
+          longitude: longitude.doubleValue
+        ),
+        stadiumName: name,
+        clubName: club,
+        visits: visits
+      )
+    }
+
+    guard !annotations.isEmpty else {
+      return
+    }
+
+    mapView.addAnnotations(annotations)
+
+    mapView.showAnnotations(
+      annotations,
+      animated: false
+    )
+  }
+
+  func mapView(
+    _ mapView: MKMapView,
+    viewFor annotation: MKAnnotation
+  ) -> MKAnnotationView? {
+    guard let stadium = annotation as? HistoryStadiumAnnotation else {
+      return nil
+    }
+
+    let identifier = "HistoryStadium"
+
+    let view =
+      mapView.dequeueReusableAnnotationView(
+        withIdentifier: identifier
+      ) as? MKMarkerAnnotationView
+      ?? MKMarkerAnnotationView(
+        annotation: stadium,
+        reuseIdentifier: identifier
+      )
+
+    view.annotation = stadium
+    view.canShowCallout = true
+    view.markerTintColor = .systemRed
+    view.glyphImage = UIImage(systemName: "sportscourt.fill")
+    view.rightCalloutAccessoryView = UIButton(
+      type: .detailDisclosure
+    )
+
+    return view
+  }
+
+  func mapView(
+    _ mapView: MKMapView,
+    annotationView view: MKAnnotationView,
+    calloutAccessoryControlTapped control: UIControl
+  ) {
+    guard
+      let stadium = view.annotation as? HistoryStadiumAnnotation
+    else {
+      return
+    }
+
+    onSelect?([
+      "name": stadium.stadiumName,
+    ])
+  }
+}
+
+@objc(HistoryStadiumMapViewManager)
+final class HistoryStadiumMapViewManager: RCTViewManager {
+  override func view() -> UIView! {
+    HistoryStadiumMapView()
+  }
+
+  override static func requiresMainQueueSetup() -> Bool {
+    true
   }
 }

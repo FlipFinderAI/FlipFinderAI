@@ -11,6 +11,7 @@ import {
   Linking,
   Modal,
   NativeModules,
+  requireNativeComponent,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -416,31 +417,63 @@ function DraggableHistoryPhoto({
   const translateY = useSharedValue(0);
   const scale = useSharedValue(1);
   const dragging = useSharedValue(false);
+  const dragStarted = useSharedValue(false);
   const dragStartScrollOffset = useSharedValue(0);
+  const dragMoveFrame = useSharedValue(0);
 
   const dragGesture = Gesture.Pan()
     .enabled(editMode && moveArmed)
-    .activateAfterLongPress(120)
-    .minDistance(1)
+    .minDistance(6)
     .onBegin(() => {
-      dragging.value = true;
+      // Long press by itself must not disturb the highlighted grid.
+      // The visible concertina/drag starts only after real movement.
+      dragStarted.value = false;
       dragStartScrollOffset.value = scrollOffsetShared.value;
-      scale.value = withSpring(selectedCount > 1 ? 1.13 : 1.08);
-      runOnJS(onDragStart)(mediaKey);
     })
     .onUpdate((event) => {
+      if (!dragStarted.value) {
+        const distance =
+          Math.abs(event.translationX) + Math.abs(event.translationY);
+
+        if (distance < 6) {
+          return;
+        }
+
+        dragStarted.value = true;
+        dragging.value = true;
+        dragMoveFrame.value = 0;
+        scale.value = withSpring(selectedCount > 1 ? 1.13 : 1.08);
+        runOnJS(onDragStart)(mediaKey);
+      }
+
       translateX.value = event.translationX;
       translateY.value =
         event.translationY +
         (scrollOffsetShared.value - dragStartScrollOffset.value);
-      runOnJS(onDragMove)(event.absoluteY);
+
+      // Keep the actual photo movement on the UI thread.
+      // JavaScript is only needed occasionally for edge auto-scroll.
+      dragMoveFrame.value += 1;
+      if (dragMoveFrame.value % 3 === 0) {
+        runOnJS(onDragMove)(event.absoluteY);
+      }
     })
     .onEnd((event) => {
-      runOnJS(onDrop)(mediaKey, event.absoluteX, event.absoluteY);
+      if (dragStarted.value) {
+        runOnJS(onDrop)(mediaKey, event.absoluteX, event.absoluteY);
+      }
     })
     .onFinalize(() => {
-      runOnJS(onDragFinish)();
+      if (dragStarted.value) {
+        runOnJS(onDragFinish)();
+      }
+
+      // Whether the drop succeeded or missed a target, the visible stack
+      // returns cleanly to its grid position. A successful assignment causes
+      // React to render the selected media in the new location afterwards.
       dragging.value = false;
+      dragStarted.value = false;
+      dragMoveFrame.value = 0;
       translateX.value = withSpring(0);
       translateY.value = withSpring(0);
       scale.value = withSpring(1);
@@ -773,6 +806,7 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
   const [mediaMoveArmedKey, setMediaMoveArmedKey] = useState<string | null>(null);
   const [mediaSelectedKeys, setMediaSelectedKeys] = useState<string[]>([]);
   const [mediaPhotoDragActive, setMediaPhotoDragActive] = useState(false);
+  const mediaPhotoDragActiveRef = useRef(false);
   const mediaDragPointerYRef = useRef(0);
   const mediaDragScrollOffsetShared = useSharedValue(0);
   const stopHistoryMediaAutoScrollRef = useRef<(() => void) | null>(null);
@@ -2182,6 +2216,18 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
   const [matchdayFinder, setMatchdayFinder] =
     useState<MatchdayFinderKind | null>(null);
   const [matchdayVenueQuery, setMatchdayVenueQuery] = useState("");
+
+  const [historyStadiumMode, setHistoryStadiumMode] =
+    useState<"list" | "map">("list");
+  const [historyStadiumMapType, setHistoryStadiumMapType] =
+    useState<"standard" | "satellite" | "hybrid">("standard");
+  const [historyStadiumMapFullscreen, setHistoryStadiumMapFullscreen] =
+    useState(false);
+
+  const HistoryStadiumNativeMap = useMemo(
+    () => requireNativeComponent<any>("HistoryStadiumMapView"),
+    [],
+  );
   const [matchdaySearchOrigin, setMatchdaySearchOrigin] = useState<{
     latitude: number;
     longitude: number;
@@ -13317,6 +13363,37 @@ Choose one team. Its colours automatically control the Club Colours frame style.
         ),
     );
 
+    const stadiumMapRows = stadiumRows
+      .map((stadium) => {
+        const stadiumName = normaliseFixtureText(stadium.name);
+
+        const ground = FOOTBALL_GROUNDS.find(
+          (item) =>
+            normaliseFixtureText(item.stadium) === stadiumName,
+        );
+
+        if (!ground) return null;
+
+        return {
+          name: stadium.name,
+          club: stadium.club ?? ground.club,
+          visits: stadium.visits,
+          latitude: ground.latitude,
+          longitude: ground.longitude,
+        };
+      })
+      .filter(
+        (
+          stadium,
+        ): stadium is {
+          name: string;
+          club: string;
+          visits: number;
+          latitude: number;
+          longitude: number;
+        } => stadium !== null,
+      );
+
     const seasonOptions = Array.from(seasonKeySet).sort().reverse();
     const seasonMatches = newestFirst.filter(
       (record) =>
@@ -14823,10 +14900,138 @@ Choose one team. Its colours automatically control the Club Colours frame style.
           );
         }
       };
+      const searchOtherHistoryLocation = async (keys: string[]) => {
+        let latitude: number | null = null;
+        let longitude: number | null = null;
+
+        for (const key of keys) {
+          const marker = "|asset:";
+          const markerIndex = key.indexOf(marker);
+
+          if (markerIndex < 0) continue;
+
+          const assetId = key.slice(markerIndex + marker.length);
+
+          if (!assetId || assetId.startsWith("selected-")) continue;
+
+          const reference = (
+            matchMediaReferences[selectedHistoryRecord.id] ?? []
+          ).find((item) => item.assetId === assetId);
+
+          if (
+            typeof reference?.latitude === "number" &&
+            typeof reference?.longitude === "number" &&
+            Number.isFinite(reference.latitude) &&
+            Number.isFinite(reference.longitude)
+          ) {
+            latitude = reference.latitude;
+            longitude = reference.longitude;
+            break;
+          }
+
+          const info = await refreshMatchAssetInfo(assetId);
+          const candidateLocation = info?.location;
+
+          if (
+            candidateLocation &&
+            typeof candidateLocation.latitude === "number" &&
+            typeof candidateLocation.longitude === "number" &&
+            Number.isFinite(candidateLocation.latitude) &&
+            Number.isFinite(candidateLocation.longitude)
+          ) {
+            latitude = candidateLocation.latitude;
+            longitude = candidateLocation.longitude;
+            break;
+          }
+        }
+
+        if (latitude === null || longitude === null) {
+          const recordGround = normaliseFixtureText(
+            selectedHistoryRecord.ground ?? "",
+          );
+
+          const ground = FOOTBALL_GROUNDS.find(
+            (item) =>
+              normaliseFixtureText(item.stadium) === recordGround,
+          );
+
+          if (ground) {
+            latitude = ground.latitude;
+            longitude = ground.longitude;
+          }
+        }
+
+        if (latitude === null || longitude === null) {
+          Alert.alert(
+            "Search location unavailable",
+            "Ticket Frame could not find GPS for these photos or the fixture stadium.",
+            [{ text: "Close", style: "cancel" }],
+          );
+          return;
+        }
+
+        const picker = (ParkingSearchModule as any)?.pickPlace;
+
+        if (!picker) {
+          Alert.alert(
+            "Place search unavailable",
+            "The Apple Maps place picker is not available in this build.",
+          );
+          return;
+        }
+
+        try {
+          const result = await (ParkingSearchModule as any).pickPlace(
+            latitude,
+            longitude,
+          );
+
+          if (
+            !result ||
+            typeof result.name !== "string" ||
+            typeof result.latitude !== "number" ||
+            typeof result.longitude !== "number"
+          ) {
+            return;
+          }
+
+          setMatchdayMediaAssignments((current) => {
+            const next = { ...current };
+
+            keys.forEach((key) => {
+              next[key] = {
+                placeName: result.name,
+                placeKind: "location",
+                latitude: result.latitude,
+                longitude: result.longitude,
+                source: "manual",
+              };
+            });
+
+            return next;
+          });
+        } catch {
+          Alert.alert(
+            "Place search unavailable",
+            "Apple Maps could not complete the place search.",
+          );
+        }
+      };
+
       const editIndividualMediaLocation = (mediaKey: string) => {
+        const selectedKeys = mediaSelectedKeys.includes(mediaKey)
+          ? [...mediaSelectedKeys]
+          : [mediaKey];
+
+        const editingMultiple = selectedKeys.length > 1;
+
         Alert.alert(
-          "Edit media",
-          "Choose what you want to do with this photo.",
+          editingMultiple
+            ? `Edit ${selectedKeys.length} selected items`
+            : "Edit media",
+          editingMultiple
+            ? "Choose what you want to do with all selected photos and videos."
+            : "Choose what you want to do with this photo.",
           [
             { text: "Cancel", style: "cancel" },
             {
@@ -14836,52 +15041,49 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                   "Assign Location",
                   "Choose the type of place. Nearby results use this photo's GPS.",
                   [
-                    { text: "Cancel", style: "cancel" },
+                    {
+                      text: stadiumLocationName,
+                      onPress: () =>
+                        setMatchdayMediaAssignments((current) => {
+                          const next = { ...current };
+
+                          selectedKeys.forEach((key) => {
+                            next[key] = {
+                              placeName: stadiumLocationName,
+                              placeKind: "stadium",
+                              source: "manual",
+                            };
+                          });
+
+                          return next;
+                        }),
+                    },
                     {
                       text: "Pub",
                       onPress: () =>
-                        void findHistoryVenueNearMedia([mediaKey], "pub"),
-                    },
-                    {
-                      text: "Stadium",
-                      onPress: () =>
-                        setMatchdayMediaAssignments((current) => ({
-                          ...current,
-                          [mediaKey]: {
-                            placeName: stadiumLocationName,
-                            placeKind: "stadium",
-                            source: "manual",
-                          },
-                        })),
+                        void findHistoryVenueNearMedia(selectedKeys, "pub"),
                     },
                     {
                       text: "Restaurant",
                       onPress: () =>
-                        void findHistoryVenueNearMedia([mediaKey], "restaurant"),
+                        void findHistoryVenueNearMedia(selectedKeys, "restaurant"),
                     },
                     {
                       text: "Hotel",
                       onPress: () =>
-                        void findHistoryVenueNearMedia([mediaKey], "location"),
+                        void findHistoryVenueNearMedia(selectedKeys, "location"),
                     },
                     {
                       text: "Other",
                       onPress: () =>
-                        void findHistoryVenueNearMedia([mediaKey], "location"),
+                        void searchOtherHistoryLocation(selectedKeys),
+                    },
+                    {
+                      text: "Close",
+                      style: "cancel",
                     },
                   ],
                 ),
-            },
-            {
-              text: "Move",
-              onPress: () => {
-                setMediaMoveArmedKey(mediaKey);
-                refreshMediaDropZones();
-                Alert.alert(
-                  "Move photo",
-                  "Long press this photo again, then drag it into another location.",
-                );
-              },
             },
           ],
         );
@@ -14980,12 +15182,12 @@ Choose one team. Its colours automatically control the Club Colours frame style.
             ),
           }));
         Alert.alert("Move media group", "Choose where every item in this location group belongs.", [
-          { text: "Cancel", style: "cancel" },
           { text: stadiumLocationName, onPress: () => apply({ placeName: stadiumLocationName, placeKind: "stadium", source: "manual" }) },
           { text: "Other nearby", onPress: () => void findHistoryVenueNearMedia(keys, "location") },
           { text: "Pub or bar", onPress: () => void findHistoryVenueNearMedia(keys, "pub") },
           { text: "Restaurant", onPress: () => void findHistoryVenueNearMedia(keys, "restaurant") },
           { text: "Station", onPress: () => void findHistoryVenueNearMedia(keys, "station") },
+          { text: "Close", style: "cancel" },
         ]);
       };
       const deleteMediaLocation = (
@@ -15055,6 +15257,8 @@ Choose one team. Its colours automatically control the Club Colours frame style.
 
       const closeMatchMemory = () => {
         stopHistoryMediaAutoScroll();
+        mediaPhotoDragActiveRef.current = false;
+        setMediaPhotoDragActive(false);
         setMediaEditMode(false);
         setMediaMoveArmedKey(null);
         setSelectedMatchVideoUri(null);
@@ -15223,6 +15427,11 @@ Choose one team. Its colours automatically control the Club Colours frame style.
       ) => {
         mediaDragPointerYRef.current = absoluteY;
 
+        if (!mediaPhotoDragActiveRef.current) {
+          mediaPhotoDragActiveRef.current = true;
+          setMediaPhotoDragActive(true);
+        }
+
         const windowHeight = Dimensions.get("window").height;
         const edgeSize = 150;
 
@@ -15298,6 +15507,8 @@ Choose one team. Its colours automatically control the Club Colours frame style.
       const toggleMediaPhotoSelection = (mediaKey: string) => {
         if (!mediaEditMode) return;
 
+        setMediaMoveArmedKey(null);
+
         setMediaSelectedKeys((current) =>
           current.includes(mediaKey)
             ? current.filter((key) => key !== mediaKey)
@@ -15308,8 +15519,6 @@ Choose one team. Its colours automatically control the Club Colours frame style.
       const beginHistoryPhotoDrag = (mediaKey: string) => {
         if (!mediaEditMode) return;
 
-        setMediaPhotoDragActive(true);
-
         setMediaSelectedKeys((current) =>
           current.includes(mediaKey) ? current : [...current, mediaKey],
         );
@@ -15319,6 +15528,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
 
       const finishHistoryPhotoDrag = () => {
         stopHistoryMediaAutoScroll();
+        mediaPhotoDragActiveRef.current = false;
         setMediaPhotoDragActive(false);
       };
 
@@ -15327,7 +15537,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
         absoluteX: number,
         absoluteY: number,
       ) => {
-        stopHistoryMediaAutoScroll();
+        finishHistoryPhotoDrag();
 
         if (!mediaEditMode || !selectedHistoryRecordId) return;
 
@@ -15667,7 +15877,10 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                   clusterKeySet.has(`${selectedHistoryRecord.id}|asset:${media.assetId}`),
                 );
 
-                if (!clusterPhotos.length && !clusterVideos.length) return null;
+                // Video-only unresolved GPS clusters are already represented
+                // in the normal media-location groups. Do not render an empty
+                // "Identify location" card with zero photo thumbnails.
+                if (!clusterPhotos.length) return null;
 
                 return (
                   <View
@@ -15708,9 +15921,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                             key={media.assetId}
                             mediaKey={mediaKey}
                             editMode={mediaEditMode}
-                            moveArmed={mediaSelectedKeys.includes(
-                              mediaKey,
-                            )}
+                            moveArmed={mediaSelectedKeys.includes(mediaKey)}
                             selectedCount={
                               mediaSelectedKeys.includes(mediaKey)
                                 ? mediaSelectedKeys.length
@@ -15779,6 +15990,10 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                                       : 0,
                                   borderColor:
                                     favouriteClub.primary,
+                                  opacity:
+                                    mediaSelectedKeys.includes(mediaKey)
+                                      ? 0.52
+                                      : 1,
                                 }}
                               />
 
@@ -15831,6 +16046,23 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                           "Choose a place type. Ticket Frame will then search closest to these photos.",
                           [
                             {
+                              text: stadiumLocationName,
+                              onPress: () =>
+                                setMatchdayMediaAssignments((current) => {
+                                  const next = { ...current };
+
+                                  cluster.keys.forEach((key) => {
+                                    next[key] = {
+                                      placeName: stadiumLocationName,
+                                      placeKind: "stadium",
+                                      source: "manual",
+                                    };
+                                  });
+
+                                  return next;
+                                }),
+                            },
+                            {
                               text: "Pub",
                               onPress: () =>
                                 void findHistoryVenueNearMedia(cluster.keys, "pub"),
@@ -15849,6 +16081,10 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                               text: "Other",
                               onPress: () =>
                                 void findHistoryVenueNearMedia(cluster.keys, "location"),
+                            },
+                            {
+                              text: "Close",
+                              style: "cancel",
                             },
                             {
                               text: "Leave Unassigned",
@@ -16172,7 +16408,18 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                           <Image
                             alt="Saved match memory"
                             source={{ uri }}
-                            style={{ width: "100%", aspectRatio: 1 }}
+                            style={{
+                              width: "100%",
+                              aspectRatio: 1,
+                              opacity: mediaSelectedKeys.includes(mediaKey)
+                                ? 0.52
+                                : 1,
+                              borderWidth: mediaSelectedKeys.includes(mediaKey)
+                                ? 4
+                                : 0,
+                              borderColor: favouriteClub.primary,
+                              borderRadius: 6,
+                            }}
                           />
                         </Pressable>
                         </DraggableHistoryPhoto>
@@ -16267,7 +16514,18 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                           <Image
                             alt="Saved Apple Photos match memory"
                             source={{ uri: media.uri }}
-                            style={{ width: "100%", aspectRatio: 1 }}
+                            style={{
+                              width: "100%",
+                              aspectRatio: 1,
+                              opacity: mediaSelectedKeys.includes(mediaKey)
+                                ? 0.52
+                                : 1,
+                              borderWidth: mediaSelectedKeys.includes(mediaKey)
+                                ? 4
+                                : 0,
+                              borderColor: favouriteClub.primary,
+                              borderRadius: 6,
+                            }}
                           />
                         </Pressable>
                         </DraggableHistoryPhoto>
@@ -17511,7 +17769,296 @@ const manualCompetitionFixtures = draftMatch.competition
             once — repeat matches add visits.
           </Text>
           {historySearchBox}
-          {stadiumRows.length ? (
+
+          <View
+            style={{
+              flexDirection: "row",
+              gap: 8,
+              marginTop: 12,
+              marginBottom: 12,
+            }}
+          >
+            {(["list", "map"] as const).map((mode) => {
+              const active = historyStadiumMode === mode;
+
+              return (
+                <Pressable
+                  key={mode}
+                  onPress={() => setHistoryStadiumMode(mode)}
+                  style={{
+                    flex: 1,
+                    minHeight: 42,
+                    borderRadius: 10,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    backgroundColor: active
+                      ? favouriteClub.primary
+                      : "#ffffff",
+                    borderWidth: 1,
+                    borderColor: favouriteClub.primary,
+                  }}
+                >
+                  <Text
+                    style={{
+                      fontWeight: "900",
+                      color: active ? "#ffffff" : favouriteClub.primary,
+                    }}
+                  >
+                    {mode === "list" ? "LIST" : "MAP"}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
+          {historyStadiumMode === "map" ? (
+            <>
+              <View
+                style={{
+                  flexDirection: "row",
+                  gap: 6,
+                  marginBottom: 10,
+                }}
+              >
+                {(["standard", "satellite", "hybrid"] as const).map(
+                  (mapType) => {
+                    const active = historyStadiumMapType === mapType;
+
+                    return (
+                      <Pressable
+                        key={mapType}
+                        onPress={() => setHistoryStadiumMapType(mapType)}
+                        style={{
+                          flex: 1,
+                          paddingVertical: 9,
+                          borderRadius: 8,
+                          alignItems: "center",
+                          backgroundColor: active
+                            ? favouriteClub.primary
+                            : "#f2f2f2",
+                        }}
+                      >
+                        <Text
+                          style={{
+                            fontSize: 12,
+                            fontWeight: "800",
+                            color: active ? "#ffffff" : "#17221c",
+                          }}
+                        >
+                          {mapType === "standard"
+                            ? "STANDARD"
+                            : mapType === "satellite"
+                              ? "SATELLITE"
+                              : "HYBRID"}
+                        </Text>
+                      </Pressable>
+                    );
+                  },
+                )}
+              </View>
+
+              {stadiumMapRows.length ? (
+                <>
+                  <Pressable
+                    onPress={() => setHistoryStadiumMapFullscreen(true)}
+                    style={{
+                      minHeight: 42,
+                      borderRadius: 10,
+                      alignItems: "center",
+                      justifyContent: "center",
+                      backgroundColor: favouriteClub.primary,
+                      marginBottom: 10,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: "#ffffff",
+                        fontWeight: "900",
+                        fontSize: 13,
+                      }}
+                    >
+                      FULL SCREEN
+                    </Text>
+                  </Pressable>
+
+                  <View
+                    style={{
+                      height: 430,
+                      borderRadius: 14,
+                      overflow: "hidden",
+                      marginBottom: 12,
+                    }}
+                  >
+                    <HistoryStadiumNativeMap
+                      style={{ flex: 1 }}
+                      stadiums={stadiumMapRows}
+                      mapType={historyStadiumMapType}
+                      onSelect={(event: any) => {
+                        const stadiumName = event?.nativeEvent?.name;
+
+                        if (typeof stadiumName === "string" && stadiumName) {
+                          setSelectedHistoryStadium(stadiumName);
+                        }
+                      }}
+                    />
+                  </View>
+
+                  <Modal
+                    visible={historyStadiumMapFullscreen}
+                    animationType="slide"
+                    presentationStyle="fullScreen"
+                    onRequestClose={() => setHistoryStadiumMapFullscreen(false)}
+                  >
+                    <View
+                      style={{
+                        flex: 1,
+                        backgroundColor: "#ffffff",
+                        paddingTop: 54,
+                      }}
+                    >
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          alignItems: "center",
+                          paddingHorizontal: 12,
+                          paddingBottom: 10,
+                          gap: 8,
+                        }}
+                      >
+                        <Pressable
+                          onPress={() => setHistoryStadiumMapFullscreen(false)}
+                          style={{
+                            minHeight: 42,
+                            paddingHorizontal: 16,
+                            borderRadius: 10,
+                            alignItems: "center",
+                            justifyContent: "center",
+                            backgroundColor: favouriteClub.primary,
+                          }}
+                        >
+                          <Text
+                            style={{
+                              color: "#ffffff",
+                              fontWeight: "900",
+                              fontSize: 13,
+                            }}
+                          >
+                            MINIMIZE
+                          </Text>
+                        </Pressable>
+
+                        <Text
+                          style={{
+                            flex: 1,
+                            fontSize: 18,
+                            fontWeight: "900",
+                            color: "#17221c",
+                            textAlign: "center",
+                          }}
+                        >
+                          Stadiums Attended
+                        </Text>
+
+                        <View style={{ width: 92 }} />
+                      </View>
+
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          gap: 6,
+                          paddingHorizontal: 12,
+                          paddingBottom: 10,
+                        }}
+                      >
+                        {(["standard", "satellite", "hybrid"] as const).map(
+                          (mapType) => {
+                            const active = historyStadiumMapType === mapType;
+
+                            return (
+                              <Pressable
+                                key={`fullscreen-${mapType}`}
+                                onPress={() =>
+                                  setHistoryStadiumMapType(mapType)
+                                }
+                                style={{
+                                  flex: 1,
+                                  paddingVertical: 10,
+                                  borderRadius: 8,
+                                  alignItems: "center",
+                                  backgroundColor: active
+                                    ? favouriteClub.primary
+                                    : "#f2f2f2",
+                                }}
+                              >
+                                <Text
+                                  style={{
+                                    fontSize: 12,
+                                    fontWeight: "800",
+                                    color: active ? "#ffffff" : "#17221c",
+                                  }}
+                                >
+                                  {mapType === "standard"
+                                    ? "STANDARD"
+                                    : mapType === "satellite"
+                                      ? "SATELLITE"
+                                      : "HYBRID"}
+                                </Text>
+                              </Pressable>
+                            );
+                          },
+                        )}
+                      </View>
+
+                      <HistoryStadiumNativeMap
+                        style={{ flex: 1 }}
+                        stadiums={stadiumMapRows}
+                        mapType={historyStadiumMapType}
+                        onSelect={(event: any) => {
+                          const stadiumName = event?.nativeEvent?.name;
+
+                          if (
+                            typeof stadiumName === "string" &&
+                            stadiumName
+                          ) {
+                            setHistoryStadiumMapFullscreen(false);
+                            setSelectedHistoryStadium(stadiumName);
+                          }
+                        }}
+                      />
+                    </View>
+                  </Modal>
+
+                  {stadiumMapRows.length < stadiumRows.length ? (
+                    <Text
+                      style={[
+                        s.helpText,
+                        {
+                          textAlign: "center",
+                          marginBottom: 12,
+                        },
+                      ]}
+                    >
+                      {stadiumRows.length - stadiumMapRows.length} attended
+                      {stadiumRows.length - stadiumMapRows.length === 1
+                        ? " stadium does"
+                        : " stadiums do"}{" "}
+                      not yet have a matching coordinate entry.
+                    </Text>
+                  ) : null}
+                </>
+              ) : (
+                <Text
+                  style={[
+                    s.helpText,
+                    { textAlign: "center", marginTop: 20 },
+                  ]}
+                >
+                  No attended stadium coordinates are available for this
+                  selection yet.
+                </Text>
+              )}
+            </>
+          ) : stadiumRows.length ? (
             stadiumRows.map((stadium) => (
               <Pressable
                 key={stadium.name}
