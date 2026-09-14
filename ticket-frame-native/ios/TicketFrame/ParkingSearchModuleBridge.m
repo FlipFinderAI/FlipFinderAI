@@ -41,6 +41,20 @@ RCT_EXTERN_METHOD(consumePendingAction:(RCTPromiseResolveBlock)resolve
 
 @end
 
+@interface RCT_EXTERN_MODULE(PdfTicketRendererModule, NSObject)
+
+RCT_EXTERN_METHOD(renderFirstPage:(NSString *)sourceUri
+                  maxDimension:(nonnull NSNumber *)maxDimension
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
++ (BOOL)requiresMainQueueSetup
+{
+  return NO;
+}
+
+@end
+
 @interface RCT_EXTERN_MODULE(HistoryPhotoThumbnailModule, NSObject)
 
 RCT_EXTERN_METHOD(thumbnail:(NSString *)assetId

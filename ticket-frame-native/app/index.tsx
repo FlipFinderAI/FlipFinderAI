@@ -290,9 +290,6 @@ import {
   type RecognizedTicket,
 } from "@/lib/ticketRecognition";
 import {
-  listPendingWalletPasses,
-  readWalletPassEvidence,
-  removePendingWalletPass,
   listPendingTicketScreenshots,
   queueWalletScreenshotsSince,
   detectWalletTicketBounds,
@@ -359,6 +356,9 @@ const WALLET_PHOTOS_SAVED_FINGERPRINTS_KEY =
 
 const WALLET_STALE_SCREENSHOT_CLEANUP_KEY =
   "ticket-frame.wallet-stale-screenshot-cleanup.v1";
+
+const ADD_TICKET_NOTICE_CONFIRMED_KEY =
+  "ticket-frame.add-ticket-notice-confirmed.v1";
 
 const SCORE_PREFIX = /^\s*\(\d{1,2}\s*[-–—]\s*\d{1,2}\)\s*/;
 
@@ -4487,67 +4487,185 @@ confidence: ${recognition.confidence}%`,
   const [walletImportUnderstood, setWalletImportUnderstood] =
     useState(false);
   const [walletSaveCrops, setWalletSaveCrops] = useState(true);
+  const [ticketPhotosAlbumTitle, setTicketPhotosAlbumTitle] =
+    useState("Football Ticket Frame");
+  const [addTicketImportOpen, setAddTicketImportOpen] = useState(false);
   const [walletCaptureStartedAt, setWalletCaptureStartedAt] =
     useState<number | null>(null);
   const [walletFinishing, setWalletFinishing] = useState(false);
 
   const chooseWalletPhotosAlbum = useCallback(
     async (): Promise<MediaLibrary.Album | null> => {
-      const albums = await MediaLibrary.getAlbumsAsync({
-        includeSmartAlbums: false,
-      });
+      const saveToFootballTicketFrame = async () => {
+        await AsyncStorage.setItem(
+          WALLET_PHOTOS_MODE_KEY,
+          "album",
+        );
 
-      return new Promise((resolve) => {
+        await AsyncStorage.setItem(
+          WALLET_PHOTOS_ALBUM_TITLE_KEY,
+          "Football Ticket Frame",
+        );
+
+        await AsyncStorage.removeItem(
+          WALLET_PHOTOS_ALBUM_ID_KEY,
+        );
+
+        setWalletSaveCrops(true);
+        setTicketPhotosAlbumTitle("Football Ticket Frame");
+      };
+
+      const saveToLibrary = async () => {
+        await AsyncStorage.setItem(
+          WALLET_PHOTOS_MODE_KEY,
+          "library",
+        );
+
+        await AsyncStorage.setItem(
+          WALLET_PHOTOS_ALBUM_TITLE_KEY,
+          "Library",
+        );
+
+        await AsyncStorage.removeItem(
+          WALLET_PHOTOS_ALBUM_ID_KEY,
+        );
+
+        setWalletSaveCrops(true);
+        setTicketPhotosAlbumTitle("Library");
+      };
+
+      const addNewFolder = () => {
+        Alert.prompt(
+          "Add New Folder",
+          "Enter the Photos album name.",
+          async (title) => {
+            const cleanTitle = title?.trim();
+
+            if (!cleanTitle) return;
+
+            await AsyncStorage.setItem(
+              WALLET_PHOTOS_MODE_KEY,
+              "album",
+            );
+
+            await AsyncStorage.setItem(
+              WALLET_PHOTOS_ALBUM_TITLE_KEY,
+              cleanTitle,
+            );
+
+            await AsyncStorage.removeItem(
+              WALLET_PHOTOS_ALBUM_ID_KEY,
+            );
+
+            setWalletSaveCrops(true);
+            setTicketPhotosAlbumTitle(cleanTitle);
+          },
+          "plain-text",
+          "Football Ticket Frame",
+        );
+      };
+
+      const openFolder = async () => {
+        const albums = await MediaLibrary.getAlbumsAsync({
+          includeSmartAlbums: false,
+        });
+
+        if (!albums.length) {
+          Alert.alert(
+            "No folders found",
+            "No Photos albums are available to select.",
+          );
+          return;
+        }
+
         const options = [
-          "Create New Album",
           ...albums.map((album) => album.title),
           "Cancel",
         ];
 
         ActionSheetIOS.showActionSheetWithOptions(
           {
-            title: "Save Wallet Tickets To",
+            title: "Open Folder",
             message:
-              "Choose the Photos album for cropped Ticket Frame tickets.",
+              "Choose an existing Photos album for saved ticket images.",
             options,
             cancelButtonIndex: options.length - 1,
           },
           (index) => {
-            if (index === options.length - 1) {
+            if (index === options.length - 1) return;
+
+            const selectedAlbum = albums[index];
+
+            if (!selectedAlbum) return;
+
+            void (async () => {
+              await AsyncStorage.setItem(
+                WALLET_PHOTOS_MODE_KEY,
+                "album",
+              );
+
+              await AsyncStorage.setItem(
+                WALLET_PHOTOS_ALBUM_ID_KEY,
+                selectedAlbum.id,
+              );
+
+              await AsyncStorage.setItem(
+                WALLET_PHOTOS_ALBUM_TITLE_KEY,
+                selectedAlbum.title,
+              );
+
+              setWalletSaveCrops(true);
+              setTicketPhotosAlbumTitle(selectedAlbum.title);
+            })();
+          },
+        );
+      };
+
+      return new Promise((resolve) => {
+        const options = [
+          "Football Ticket Frame",
+          "Library",
+          "Add New Folder",
+          "Open Folder",
+          "Cancel",
+        ];
+
+        ActionSheetIOS.showActionSheetWithOptions(
+          {
+            title: "Change Folder",
+            message:
+              "Choose where cropped ticket images are saved in Photos.",
+            options,
+            cancelButtonIndex: 4,
+          },
+          (index) => {
+            if (index === 0) {
+              void saveToFootballTicketFrame().then(() =>
+                resolve(null),
+              );
+              return;
+            }
+
+            if (index === 1) {
+              void saveToLibrary().then(() =>
+                resolve(null),
+              );
+              return;
+            }
+
+            if (index === 2) {
+              addNewFolder();
               resolve(null);
               return;
             }
 
-            if (index === 0) {
-              Alert.prompt(
-                "New Photos Album",
-                "Enter the album name.",
-                async (title) => {
-                  const cleanTitle = title?.trim();
-
-                  if (!cleanTitle) {
-                    resolve(null);
-                    return;
-                  }
-
-                  await AsyncStorage.setItem(
-                    WALLET_PHOTOS_ALBUM_TITLE_KEY,
-                    cleanTitle,
-                  );
-
-                  resolve({
-                    id: "",
-                    title: cleanTitle,
-                  } as unknown as MediaLibrary.Album);
-                },
-                "plain-text",
-                "Ticket Frame",
-              );
-
+            if (index === 3) {
+              void openFolder();
+              resolve(null);
               return;
             }
 
-            resolve(albums[index - 1] ?? null);
+            resolve(null);
           },
         );
       });
@@ -4555,81 +4673,112 @@ confidence: ${recognition.confidence}%`,
     [],
   );
 
+  useEffect(() => {
+    void (async () => {
+      const storedMode = await AsyncStorage.getItem(
+        WALLET_PHOTOS_MODE_KEY,
+      );
+
+      setWalletSaveCrops(storedMode !== "never");
+
+      const storedTitle = await AsyncStorage.getItem(
+        WALLET_PHOTOS_ALBUM_TITLE_KEY,
+      );
+
+      if (!storedTitle || storedTitle === "Ticket Frame") {
+        setTicketPhotosAlbumTitle("Football Ticket Frame");
+
+        await AsyncStorage.setItem(
+          WALLET_PHOTOS_ALBUM_TITLE_KEY,
+          "Football Ticket Frame",
+        );
+
+        await AsyncStorage.removeItem(
+          WALLET_PHOTOS_ALBUM_ID_KEY,
+        );
+      } else {
+        setTicketPhotosAlbumTitle(storedTitle);
+      }
+    })();
+  }, []);
+
   const configureWalletPhotoSaving =
     useCallback(async (): Promise<boolean> => {
       const remembered = await AsyncStorage.getItem(
         WALLET_PHOTOS_MODE_KEY,
       );
 
-      if (remembered === "album") return true;
-      if (remembered === "never") return false;
+      if (remembered === "never") {
+        return false;
+      }
 
-      return new Promise((resolve) => {
-        Alert.alert(
-          "Keep Cropped Tickets In Photos?",
-          "Ticket Frame can automatically keep a clean cropped copy of every Wallet ticket in a Photos album. You will only be asked this once.",
-          [
-            {
-              text: "Don't Save",
-              style: "cancel",
-              onPress: async () => {
-                await AsyncStorage.setItem(
-                  WALLET_PHOTOS_MODE_KEY,
-                  "never",
-                );
-                resolve(false);
-              },
-            },
-            {
-              text: "Choose Album",
-              onPress: async () => {
-                const permission =
-                  await MediaLibrary.requestPermissionsAsync();
-
-                if (!permission.granted) {
-                  resolve(false);
-                  return;
-                }
-
-                const album = await chooseWalletPhotosAlbum();
-
-                if (!album) {
-                  resolve(false);
-                  return;
-                }
-
-                if (album.id) {
-                  await AsyncStorage.setItem(
-                    WALLET_PHOTOS_ALBUM_ID_KEY,
-                    album.id,
-                  );
-                }
-
-                await AsyncStorage.setItem(
-                  WALLET_PHOTOS_ALBUM_TITLE_KEY,
-                  album.title,
-                );
-
-                await AsyncStorage.setItem(
-                  WALLET_PHOTOS_MODE_KEY,
-                  "album",
-                );
-
-                resolve(true);
-              },
-            },
-          ],
+      if (
+        remembered !== "album" &&
+        remembered !== "library"
+      ) {
+        await AsyncStorage.setItem(
+          WALLET_PHOTOS_MODE_KEY,
+          "album",
         );
-      });
-    }, [chooseWalletPhotosAlbum]);
+      }
+
+      const storedTitle = await AsyncStorage.getItem(
+        WALLET_PHOTOS_ALBUM_TITLE_KEY,
+      );
+
+      if (!storedTitle || storedTitle === "Ticket Frame") {
+        await AsyncStorage.setItem(
+          WALLET_PHOTOS_ALBUM_TITLE_KEY,
+          "Football Ticket Frame",
+        );
+
+        await AsyncStorage.removeItem(
+          WALLET_PHOTOS_ALBUM_ID_KEY,
+        );
+      }
+
+      return true;
+    }, []);
 
   const saveWalletCropToPhotos = useCallback(
     async (
       uri: string,
       fingerprint: string,
     ): Promise<void> => {
+      console.log(
+        "[ticket-photos] SAVE FUNCTION ENTERED",
+        fingerprint,
+      );
+
+      const storedModeBeforeSave = await AsyncStorage.getItem(
+        WALLET_PHOTOS_MODE_KEY,
+      );
+
+      const storedTitleBeforeSave = await AsyncStorage.getItem(
+        WALLET_PHOTOS_ALBUM_TITLE_KEY,
+      );
+
+      console.log(
+        "[ticket-photos] stored destination before save:",
+        {
+          mode: storedModeBeforeSave,
+          title: storedTitleBeforeSave,
+        },
+      );
+
       const enabled = await configureWalletPhotoSaving();
-      if (!enabled) return;
+
+      console.log(
+        "[ticket-photos] saving enabled:",
+        enabled,
+      );
+
+      if (!enabled) {
+        console.log(
+          "[ticket-photos] SAVE ABORTED because Photos saving is disabled",
+        );
+        return;
+      }
 
       try {
         const savedRaw = await AsyncStorage.getItem(
@@ -4654,24 +4803,72 @@ confidence: ${recognition.confidence}%`,
 
         // Never create a second Photos asset for the same imported ticket.
         if (savedFingerprints.includes(fingerprint)) {
+          console.log(
+            "[ticket-photos] skipped duplicate fingerprint:",
+            fingerprint,
+          );
           return;
         }
+
+        console.log(
+          "[ticket-photos] new ticket eligible for Photos save:",
+          fingerprint,
+        );
 
         const permission =
           await MediaLibrary.requestPermissionsAsync();
 
         if (!permission.granted) return;
 
-        const asset = await MediaLibrary.createAssetAsync(uri);
-
-        const storedAlbumId = await AsyncStorage.getItem(
-          WALLET_PHOTOS_ALBUM_ID_KEY,
+        const photoMode = await AsyncStorage.getItem(
+          WALLET_PHOTOS_MODE_KEY,
         );
 
-        const storedTitle =
-          (await AsyncStorage.getItem(
+        const storedTitleRaw = await AsyncStorage.getItem(
+          WALLET_PHOTOS_ALBUM_TITLE_KEY,
+        );
+
+        const saveToLibrary =
+          photoMode === "library" &&
+          storedTitleRaw === "Library";
+
+        const asset = await MediaLibrary.createAssetAsync(uri);
+
+        console.log(
+          "[ticket-photos]",
+          "mode:",
+          photoMode,
+          "title:",
+          storedTitleRaw,
+          "libraryOnly:",
+          saveToLibrary,
+        );
+
+        if (!saveToLibrary) {
+          const storedAlbumIdRaw = await AsyncStorage.getItem(
+            WALLET_PHOTOS_ALBUM_ID_KEY,
+          );
+
+        const migrateOldDefaultAlbum =
+          !storedTitleRaw || storedTitleRaw === "Ticket Frame";
+
+        const storedTitle = migrateOldDefaultAlbum
+          ? "Football Ticket Frame"
+          : storedTitleRaw;
+
+        const storedAlbumId = migrateOldDefaultAlbum
+          ? null
+          : storedAlbumIdRaw;
+
+        if (migrateOldDefaultAlbum) {
+          await AsyncStorage.setItem(
             WALLET_PHOTOS_ALBUM_TITLE_KEY,
-          )) || "Ticket Frame";
+            "Football Ticket Frame",
+          );
+          await AsyncStorage.removeItem(
+            WALLET_PHOTOS_ALBUM_ID_KEY,
+          );
+        }
 
         const albums = await MediaLibrary.getAlbumsAsync({
           includeSmartAlbums: false,
@@ -4685,6 +4882,22 @@ confidence: ${recognition.confidence}%`,
           null;
 
         if (album) {
+          console.log(
+            "[ticket-photos] adding to existing folder:",
+            {
+              id: album.id,
+              title: album.title,
+              storedAlbumId,
+              storedTitle,
+              matchingAlbums: albums
+                .filter((item) => item.title === storedTitle)
+                .map((item) => ({
+                  id: item.id,
+                  title: item.title,
+                })),
+            },
+          );
+
           await MediaLibrary.addAssetsToAlbumAsync(
             [asset],
             album,
@@ -4696,6 +4909,11 @@ confidence: ${recognition.confidence}%`,
             album.id,
           );
         } else {
+          console.log(
+            "[ticket-photos] creating folder:",
+            storedTitle,
+          );
+
           album = await MediaLibrary.createAlbumAsync(
             storedTitle,
             asset,
@@ -4706,6 +4924,8 @@ confidence: ${recognition.confidence}%`,
             WALLET_PHOTOS_ALBUM_ID_KEY,
             album.id,
           );
+        }
+
         }
 
         const nextFingerprints = [
@@ -4832,11 +5052,6 @@ confidence: ${recognition.confidence}%`,
                 ].join("|"),
           );
 
-          await saveWalletCropToPhotos(
-            edited.uri,
-            fingerprint,
-          );
-
           const alreadyExists = tickets.some(
             (ticket) => ticket.fingerprint === fingerprint,
           );
@@ -4924,6 +5139,11 @@ confidence: ${recognition.confidence}%`,
             await FileSystem.deleteAsync(savedUri, {
               idempotent: true,
             }).catch(() => {});
+          } else {
+            await saveWalletCropToPhotos(
+              savedUri,
+              fingerprint,
+            );
           }
 
           await new Promise((resolve) => setTimeout(resolve, 100));
@@ -4952,135 +5172,6 @@ confidence: ${recognition.confidence}%`,
   const walletInboxProcessingRef = useRef(false);
   const walletInboxProcessedRef = useRef<Set<string>>(new Set());
 
-  const importPendingWalletPasses = useCallback(async () => {
-    if (
-      walletInboxProcessingRef.current ||
-      !storageReady ||
-      !favouriteClub?.name
-    ) {
-      return;
-    }
-
-    walletInboxProcessingRef.current = true;
-
-    try {
-      const pending = await listPendingWalletPasses();
-
-      for (const pendingPass of pending) {
-        if (walletInboxProcessedRef.current.has(pendingPass.name)) {
-          continue;
-        }
-
-        walletInboxProcessedRef.current.add(pendingPass.name);
-
-        try {
-          const evidence = await readWalletPassEvidence(pendingPass.name);
-          const stableEvidence = JSON.stringify({
-            description: evidence.description,
-            organizationName: evidence.organizationName,
-            logoText: evidence.logoText,
-            relevantDate: evidence.relevantDate,
-            expirationDate: evidence.expirationDate,
-            serialNumber: evidence.serialNumber,
-            passTypeIdentifier: evidence.passTypeIdentifier,
-            teamIdentifier: evidence.teamIdentifier,
-            fieldText: evidence.fieldText,
-            barcodeText: evidence.barcodeText,
-            locations: evidence.locations,
-          });
-
-          const fingerprint = await Crypto.digestStringAsync(
-            Crypto.CryptoDigestAlgorithm.SHA256,
-            stableEvidence,
-          );
-
-          const alreadyExists = tickets.some(
-            (ticket) => ticket.fingerprint === fingerprint,
-          );
-
-          if (alreadyExists) {
-            await removePendingWalletPass(pendingPass.name);
-            continue;
-          }
-
-          const ticket: SeasonTicket = {
-            id: `wallet-${fingerprint}`,
-            fingerprint,
-            name: evidence.description || "Wallet Ticket",
-            uri: undefined,
-            matchDate: null,
-            kickoffTime: null,
-            competition: null,
-            details: undefined,
-            seasonKey: "",
-            scale: 1,
-            boxScale: 1,
-            offsetX: 0,
-            offsetY: 0,
-          };
-
-          setTickets((current) =>
-            current.some((item) => item.fingerprint === fingerprint)
-              ? current
-              : [...current, ticket].sort(byMatchDateOldestFirst),
-          );
-
-          const reviewFinished = new Promise<"saved" | "skipped">(
-            (resolve) => {
-              ticketReviewResolversRef.current.set(ticket.id, resolve);
-            },
-          );
-
-          const queued = await recogniseWalletAndQueue(ticket, evidence);
-
-          if (!queued) {
-            ticketReviewResolversRef.current.delete(ticket.id);
-            walletInboxProcessedRef.current.delete(pendingPass.name);
-            continue;
-          }
-
-          // Wallet import is ready for review.
-          // Return to Ticket Frame Home and leave the recognised ticket
-          // waiting in the existing confirmation/edit flow.
-          setEnlargedTicketId(undefined);
-          setHomeFrameFocused(false);
-          setFinished(false);
-          setHomeViewMode("frame");
-          setActiveTab("frames");
-
-          const result = await reviewFinished;
-
-          if (result === "skipped") {
-            setTickets((current) =>
-              current.filter((item) => item.id !== ticket.id),
-            );
-          }
-
-          await new Promise((resolve) => setTimeout(resolve, 100));
-          await savedFrameWriteChainRef.current.catch(() => {});
-          await removePendingWalletPass(pendingPass.name);
-
-          Alert.alert(
-            result === "saved" ? "Wallet ticket saved" : "Wallet ticket skipped",
-            result === "saved"
-              ? "The forwarded Wallet ticket has been added to Football Ticket Frame."
-              : "The forwarded Wallet ticket was not added.",
-          );
-        } catch (error) {
-          walletInboxProcessedRef.current.delete(pendingPass.name);
-          console.log("[wallet-ticket-import] failed", error);
-        }
-      }
-    } finally {
-      walletInboxProcessingRef.current = false;
-    }
-  }, [
-    activeSeason,
-    favouriteClub?.league,
-    favouriteClub?.name,
-    storageReady,
-    tickets,
-  ]);
 
   useEffect(() => {
     if (!storageReady) return;
@@ -5136,10 +5227,8 @@ confidence: ${recognition.confidence}%`,
   useEffect(() => {
     if (!storageReady || !favouriteClub?.name) return;
 
-    // Screenshot imports are intentionally NOT started here.
-    // Screenshots remain queued until Finish Import is chosen.
-    void importPendingWalletPasses();
-
+    // Wallet tickets enter Ticket Frame only as screenshots
+    // explicitly shared by the user.
     const importSharedWalletScreenshotsIfPresent = async () => {
       try {
         // Do not start Share imports until the one-time stale queue
@@ -5176,7 +5265,6 @@ confidence: ${recognition.confidence}%`,
 
     const subscription = AppState.addEventListener("change", (state) => {
       if (state === "active") {
-        void importPendingWalletPasses();
         void importSharedWalletScreenshotsIfPresent();
       }
     });
@@ -5185,7 +5273,6 @@ confidence: ${recognition.confidence}%`,
   }, [
     favouriteClub?.name,
     importPendingSharedScreenshots,
-    importPendingWalletPasses,
     storageReady,
   ]);
 
@@ -6698,15 +6785,20 @@ confidence: ${recognition.confidence}%`,
         "album",
       );
 
-      await AsyncStorage.setItem(
+      const storedTitle = await AsyncStorage.getItem(
         WALLET_PHOTOS_ALBUM_TITLE_KEY,
-        "Ticket Frame",
       );
 
-      // Resolve/create the Ticket Frame album afresh.
-      await AsyncStorage.removeItem(
-        WALLET_PHOTOS_ALBUM_ID_KEY,
-      );
+      if (!storedTitle || storedTitle === "Ticket Frame") {
+        await AsyncStorage.setItem(
+          WALLET_PHOTOS_ALBUM_TITLE_KEY,
+          "Football Ticket Frame",
+        );
+
+        await AsyncStorage.removeItem(
+          WALLET_PHOTOS_ALBUM_ID_KEY,
+        );
+      }
     } else {
       await AsyncStorage.setItem(
         WALLET_PHOTOS_MODE_KEY,
@@ -6781,10 +6873,10 @@ confidence: ${recognition.confidence}%`,
     }
   }
 
-  function importTicket() {
+  function chooseTicketImportMethod() {
     Alert.alert(
-      "Add New Ticket",
-      "Choose how you want to add your ticket.",
+      "Choose Ticket Source",
+      "How would you like to add your ticket?",
       [
         {
           text: "Add Photo",
@@ -6804,6 +6896,54 @@ confidence: ${recognition.confidence}%`,
         },
       ],
     );
+  }
+
+  function importTicket() {
+    void (async () => {
+      const rememberedMode = await AsyncStorage.getItem(
+        WALLET_PHOTOS_MODE_KEY,
+      );
+
+      const enabled = rememberedMode !== "never";
+      setWalletSaveCrops(enabled);
+
+      if (!rememberedMode) {
+        await AsyncStorage.setItem(
+          WALLET_PHOTOS_MODE_KEY,
+          "album",
+        );
+      }
+
+      const storedTitle = await AsyncStorage.getItem(
+        WALLET_PHOTOS_ALBUM_TITLE_KEY,
+      );
+
+      if (!storedTitle || storedTitle === "Ticket Frame") {
+        setTicketPhotosAlbumTitle("Football Ticket Frame");
+
+        await AsyncStorage.setItem(
+          WALLET_PHOTOS_ALBUM_TITLE_KEY,
+          "Football Ticket Frame",
+        );
+
+        await AsyncStorage.removeItem(
+          WALLET_PHOTOS_ALBUM_ID_KEY,
+        );
+      } else {
+        setTicketPhotosAlbumTitle(storedTitle);
+      }
+
+      const noticeConfirmed = await AsyncStorage.getItem(
+        ADD_TICKET_NOTICE_CONFIRMED_KEY,
+      );
+
+      if (noticeConfirmed === "1") {
+        chooseTicketImportMethod();
+        return;
+      }
+
+      setAddTicketImportOpen(true);
+    })();
   }
 
   function askSeasonTicketQuestion(
@@ -8055,6 +8195,8 @@ Accept only if these photos are from this match. Choose Another Match for anothe
           height?: number;
         } | null;
 
+        let userConfirmedCrop = false;
+
         {
           try {
             await new Promise((resolve) => setTimeout(resolve, 400));
@@ -8075,6 +8217,8 @@ Accept only if these photos are from this match. Choose Another Match for anothe
               suggestedCrop.cropRect,
             );
             edited = cropperResult;
+            userConfirmedCrop = Boolean(cropperResult);
+
             if (!edited) {
               const fallback = await new Promise<"original" | "skip">(
                 (resolve) =>
@@ -8201,6 +8345,11 @@ Accept only if these photos are from this match. Choose Another Match for anothe
           await FileSystem.deleteAsync(savedUri, { idempotent: true }).catch(
             () => {},
           );
+        } else if (userConfirmedCrop) {
+          await saveWalletCropToPhotos(
+            savedUri,
+            fingerprint,
+          );
         }
 
         // Confirmation updates React state first; wait for the serial saved-
@@ -8244,52 +8393,371 @@ Accept only if these photos are from this match. Choose Another Match for anothe
     const result = await DocumentPicker.getDocumentAsync({
       type: [
         "application/pdf",
-        "application/vnd.apple.pkpass",
         "image/*",
       ],
       copyToCacheDirectory: true,
       multiple: true,
     });
-    if (!result.canceled) {
-      const added = await Promise.all(
-        result.assets.map(async (asset, index) => {
-          const fingerprint = await Crypto.digestStringAsync(
-            Crypto.CryptoDigestAlgorithm.SHA256,
-            `${asset.name}|${asset.size}|${asset.mimeType}`,
-          );
-          const uri = asset.mimeType?.startsWith("image/")
-            ? await permanentTicketUri(asset.uri, fingerprint, asset.mimeType)
-            : undefined;
-          return {
-            id: `${fingerprint}-${index}`,
-            fingerprint,
-            name: asset.name,
-            uri,
-            seasonKey: "",
-            scale: 1,
-            boxScale: 1,
-            offsetX: 0,
-            offsetY: 0,
-          };
-        }),
+
+    if (result.canceled) return;
+
+    const knownFingerprints = new Set(
+      tickets
+        .filter(
+          (ticket) =>
+            !ticket.seasonKey ||
+            ticket.seasonKey === seasonFrame.season,
+        )
+        .map((ticket) => ticket.fingerprint),
+    );
+
+    const nonImageTickets: SeasonTicket[] = [];
+
+    for (const [index, asset] of result.assets.entries()) {
+      const fingerprint = await Crypto.digestStringAsync(
+        Crypto.CryptoDigestAlgorithm.SHA256,
+        `${asset.name}|${asset.size}|${asset.mimeType}`,
       );
+
+      if (knownFingerprints.has(fingerprint)) {
+        await new Promise<void>((resolve) =>
+          Alert.alert(
+            "Duplicate ticket skipped",
+            "This ticket is already in the collection.",
+            [{ text: "Continue", onPress: () => resolve() }],
+            { cancelable: false },
+          ),
+        );
+        continue;
+      }
+
+      const isImageFile =
+        asset.mimeType?.startsWith("image/") === true;
+
+      const isPdfFile =
+        asset.mimeType === "application/pdf" ||
+        asset.name.toLowerCase().endsWith(".pdf");
+
+      let sourceImageUri: string | null =
+        isImageFile ? asset.uri : null;
+
+      if (isPdfFile) {
+        try {
+          const renderer =
+            NativeModules.PdfTicketRendererModule;
+
+          if (!renderer?.renderFirstPage) {
+            Alert.alert(
+              "PDF Import Unavailable",
+              "The Ticket Frame PDF renderer is not available in this build.",
+            );
+            continue;
+          }
+
+          const rendered =
+            await renderer.renderFirstPage(
+              asset.uri,
+              2400,
+            );
+
+          if (!rendered?.uri) {
+            Alert.alert(
+              "PDF Import Error",
+              "Ticket Frame could not render the first page of this PDF.",
+            );
+            continue;
+          }
+
+          sourceImageUri = rendered.uri;
+        } catch (pdfError) {
+          console.warn(
+            "[ticket-pdf-import] render failed",
+            pdfError,
+          );
+
+          Alert.alert(
+            "PDF Import Error",
+            "Ticket Frame could not turn this PDF into a ticket image.",
+          );
+
+          continue;
+        }
+      }
+
+      if (!sourceImageUri) {
+        nonImageTickets.push({
+          id: `${fingerprint}-${index}`,
+          fingerprint,
+          name: asset.name,
+          seasonKey: "",
+          scale: 1,
+          boxScale: 1,
+          offsetX: 0,
+          offsetY: 0,
+        });
+
+        knownFingerprints.add(fingerprint);
+        continue;
+      }
+
+      let edited: {
+        uri: string;
+        width?: number;
+        height?: number;
+      } | null = null;
+
+      let userConfirmedCrop = false;
+
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+
+        const encodeContext =
+          ImageManipulator.manipulate(sourceImageUri);
+
+        const encodeRendered =
+          await encodeContext.renderAsync();
+
+        const encodeSaved =
+          await encodeRendered.saveAsync({
+            compress: 1,
+            format: SaveFormat.JPEG,
+          });
+
+        const suggestedCrop =
+          await autoCropTicketScreenshot(
+            encodeSaved.uri,
+          );
+
+        void logTicketImage(
+          "editor-open",
+          suggestedCrop.uri,
+        );
+
+        const cropperResult =
+          await openNativeCropper(
+            suggestedCrop.uri,
+            suggestedCrop.cropRect,
+          );
+
+        edited = cropperResult;
+        userConfirmedCrop = Boolean(cropperResult);
+
+        if (!edited) {
+          const fallback =
+            await new Promise<"original" | "skip">(
+              (resolve) =>
+                Alert.alert(
+                  "Use original image?",
+                  "The suggested crop was cancelled. You can keep the complete original ticket instead.",
+                  [
+                    {
+                      text: "Skip File",
+                      style: "cancel",
+                      onPress: () => resolve("skip"),
+                    },
+                    {
+                      text: "Use Original Image",
+                      onPress: () => resolve("original"),
+                    },
+                  ],
+                  { cancelable: false },
+                ),
+            );
+
+          edited =
+            fallback === "original"
+              ? {
+                  uri: encodeSaved.uri,
+                  width: encodeSaved.width,
+                  height: encodeSaved.height,
+                }
+              : null;
+        }
+      } catch (cropperError) {
+        console.warn(
+          "[ticket-file-import] cropper threw",
+          cropperError,
+        );
+
+        Alert.alert(
+          "Cropper problem",
+          String(cropperError),
+        );
+
+        continue;
+      }
+
+      if (!edited) continue;
+
+      void logTicketImage(
+        "cropped",
+        edited.uri,
+        edited.width,
+        edited.height,
+      );
+
+      const savedUri = await permanentTicketUri(
+        edited.uri,
+        fingerprint,
+        "image/jpeg",
+      );
+
+      const ticketId = `${fingerprint}-${index}`;
+
+      recognitionImageUrisRef.current.set(
+        ticketId,
+        savedUri,
+      );
+
+      const ticket: SeasonTicket = {
+        id: ticketId,
+        fingerprint,
+        name: "",
+        uri: savedUri,
+        aspectRatio:
+          edited.width && edited.height
+            ? edited.width / edited.height
+            : undefined,
+        cropWidth: edited.width,
+        cropHeight: edited.height,
+        matchDate: null,
+        kickoffTime: null,
+        competition: null,
+        details: undefined,
+        seasonKey: "",
+        scale: 1,
+        boxScale: 1,
+        offsetX: 0,
+        offsetY: 0,
+      };
+
+      knownFingerprints.add(fingerprint);
+
+      setTickets((current) =>
+        current.some(
+          (item) =>
+            item.fingerprint === fingerprint,
+        )
+          ? current
+          : [...current, ticket].sort(
+              byMatchDateOldestFirst,
+            ),
+      );
+
+      const reviewFinished =
+        new Promise<"saved" | "skipped">(
+          (resolve) => {
+            ticketReviewResolversRef.current.set(
+              ticket.id,
+              resolve,
+            );
+          },
+        );
+
+      const queued =
+        await recogniseAndQueue(ticket);
+
+      if (!queued) {
+        ticketReviewResolversRef.current.delete(
+          ticket.id,
+        );
+
+        await new Promise<void>((resolve) =>
+          Alert.alert(
+            "Ticket needs attention",
+            "Recognition did not finish. This ticket remains in My Tickets for a later retry.",
+            [
+              {
+                text: "Continue",
+                onPress: () => resolve(),
+              },
+            ],
+            { cancelable: false },
+          ),
+        );
+
+        continue;
+      }
+
+      const reviewResult =
+        await reviewFinished;
+
+      if (reviewResult === "skipped") {
+        setTickets((current) =>
+          current.filter(
+            (item) => item.id !== ticket.id,
+          ),
+        );
+
+        recognitionImageUrisRef.current.delete(
+          ticket.id,
+        );
+
+        await FileSystem.deleteAsync(
+          savedUri,
+          { idempotent: true },
+        ).catch(() => {});
+      } else if (userConfirmedCrop) {
+        await saveWalletCropToPhotos(
+          savedUri,
+          fingerprint,
+        );
+      }
+
+      await new Promise((resolve) =>
+        setTimeout(resolve, 100),
+      );
+
+      await savedFrameWriteChainRef.current.catch(
+        () => {},
+      );
+
+      await new Promise<void>((resolve) =>
+        Alert.alert(
+          reviewResult === "saved"
+            ? "Ticket saved"
+            : "Ticket skipped",
+          reviewResult === "saved"
+            ? "This ticket is complete."
+            : "This ticket was skipped.",
+          [
+            {
+              text: "Continue",
+              onPress: () => resolve(),
+            },
+          ],
+          { cancelable: false },
+        ),
+      );
+    }
+
+    if (nonImageTickets.length > 0) {
       setTickets((current) => {
         const known = new Set(
           current
             .filter(
               (ticket) =>
                 !ticket.seasonKey ||
-                ticket.seasonKey === seasonFrame.season,
+                ticket.seasonKey ===
+                  seasonFrame.season,
             )
-            .map((ticket) => ticket.fingerprint),
+            .map(
+              (ticket) =>
+                ticket.fingerprint,
+            ),
         );
-        const unique = added.filter((ticket) => !known.has(ticket.fingerprint));
-        if (unique.length < added.length)
-          Alert.alert(
-            "Duplicate skipped",
-            `${added.length - unique.length} ticket already existed in this frame.`,
+
+        const unique =
+          nonImageTickets.filter(
+            (ticket) =>
+              !known.has(
+                ticket.fingerprint,
+              ),
           );
-        return [...current, ...unique].sort(byMatchDateOldestFirst);
+
+        return [...current, ...unique].sort(
+          byMatchDateOldestFirst,
+        );
       });
     }
   }
@@ -18149,7 +18617,186 @@ const manualCompetitionFixtures = draftMatch.competition
               backgroundColor: "#ffffff",
             }}
           >
-            <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 4 }}>
+            <View
+            style={{
+              borderWidth: 1,
+              borderColor: favouriteClub.primary,
+              borderRadius: 12,
+              padding: 9,
+              marginBottom: 7,
+              backgroundColor: "#ffffff",
+            }}
+          >
+            <Text
+              style={{
+                fontWeight: "900",
+                fontSize: 14,
+                marginBottom: 4,
+              }}
+            >
+              TICKET SAVING
+            </Text>
+
+            <Text style={[s.helpText, { marginBottom: 8 }]}>
+              Save cropped ticket images to Apple Photos after the ticket has
+              been reviewed and saved in Ticket Frame.
+            </Text>
+
+            <Pressable
+              onPress={() => {
+                const enabled = !walletSaveCrops;
+                setWalletSaveCrops(enabled);
+
+                void (async () => {
+                  await AsyncStorage.setItem(
+                    WALLET_PHOTOS_MODE_KEY,
+                    enabled
+                      ? ticketPhotosAlbumTitle === "Library"
+                        ? "library"
+                        : "album"
+                      : "never",
+                  );
+
+                  if (!enabled) return;
+
+                  const storedTitle = await AsyncStorage.getItem(
+                    WALLET_PHOTOS_ALBUM_TITLE_KEY,
+                  );
+
+                  if (!storedTitle || storedTitle === "Ticket Frame") {
+                    await AsyncStorage.setItem(
+                      WALLET_PHOTOS_ALBUM_TITLE_KEY,
+                      "Football Ticket Frame",
+                    );
+
+                    await AsyncStorage.removeItem(
+                      WALLET_PHOTOS_ALBUM_ID_KEY,
+                    );
+
+                    setTicketPhotosAlbumTitle(
+                      "Football Ticket Frame",
+                    );
+                  } else {
+                    setTicketPhotosAlbumTitle(storedTitle);
+                  }
+                })();
+              }}
+              style={({ pressed }) => ({
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                borderRadius: 10,
+                paddingHorizontal: 10,
+                paddingVertical: 8,
+                opacity: pressed ? 0.6 : 1,
+                backgroundColor: walletSaveCrops
+                  ? favouriteClub.secondary
+                  : "#e4e1da",
+              })}
+              accessibilityRole="switch"
+              accessibilityState={{ checked: walletSaveCrops }}
+            >
+              <Text
+                style={{
+                  fontWeight: "900",
+                  color: walletSaveCrops
+                    ? readableTextColour(favouriteClub.secondary)
+                    : "#555555",
+                }}
+              >
+                SAVE CROPPED TICKETS TO PHOTOS: {walletSaveCrops ? "ON" : "OFF"}
+              </Text>
+
+              <Ionicons
+                name={walletSaveCrops ? "toggle" : "toggle-outline"}
+                size={30}
+                color={
+                  walletSaveCrops
+                    ? favouriteClub.primary
+                    : "#777777"
+                }
+              />
+            </Pressable>
+
+            <View
+              style={{
+                marginTop: 10,
+                borderRadius: 10,
+                paddingHorizontal: 10,
+                paddingVertical: 10,
+                backgroundColor: "#eae6dd",
+              }}
+            >
+              <Text
+                style={{
+                  fontSize: 12,
+                  fontWeight: "900",
+                  color: "#555555",
+                }}
+              >
+                SAVE LOCATION
+              </Text>
+
+              <Text
+                style={{
+                  marginTop: 3,
+                  fontWeight: "900",
+                  color: "#17221c",
+                }}
+              >
+                Photos → {ticketPhotosAlbumTitle}
+              </Text>
+            </View>
+
+            <Pressable
+              onPress={() => void chooseWalletPhotosAlbum()}
+              disabled={!walletSaveCrops}
+              style={({ pressed }) => ({
+                marginTop: 8,
+                borderRadius: 10,
+                paddingHorizontal: 10,
+                paddingVertical: 11,
+                backgroundColor: "#eae6dd",
+                opacity: !walletSaveCrops
+                  ? 0.4
+                  : pressed
+                    ? 0.6
+                    : 1,
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+              })}
+            >
+              <Text
+                style={{
+                  fontWeight: "900",
+                  color: "#17221c",
+                }}
+              >
+                CHANGE FOLDER
+              </Text>
+
+              <Ionicons
+                name="albums-outline"
+                size={22}
+                color={favouriteClub.primary}
+              />
+            </Pressable>
+
+            <Text
+              style={[
+                s.helpText,
+                {
+                  marginTop: 8,
+                  marginBottom: 0,
+                },
+              ]}
+            >
+              Tickets are copied to Photos only after you crop them and press
+              Save. Cancelled, skipped and duplicate imports are not copied.
+            </Text>
+          </View>
+          <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 4 }}>
               <Text style={{ flex: 1, fontWeight: "900", fontSize: 14 }}>
                 USE PHOTOS FOR MATCH MEMORIES
               </Text>
@@ -19566,6 +20213,186 @@ const manualCompetitionFixtures = draftMatch.competition
     <SafeAreaView style={[s.safe, { backgroundColor: "#f5f1e8" }]} {...mainTabSwipeProps}>
 
       <Modal
+        visible={addTicketImportOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setAddTicketImportOpen(false)}
+      >
+        <View
+          style={{
+            flex: 1,
+            backgroundColor: "rgba(0,0,0,0.55)",
+            justifyContent: "center",
+            padding: 22,
+          }}
+        >
+          <View
+            style={{
+              backgroundColor: "#f5f1e8",
+              borderRadius: 22,
+              padding: 22,
+              gap: 14,
+              maxWidth: 520,
+              width: "100%",
+              alignSelf: "center",
+            }}
+          >
+            <Text
+              style={{
+                fontSize: 24,
+                fontWeight: "900",
+              }}
+            >
+              Add New Ticket
+            </Text>
+
+            <Pressable
+              onPress={() => {
+                const enabled = !walletSaveCrops;
+                setWalletSaveCrops(enabled);
+
+                void (async () => {
+                  await AsyncStorage.setItem(
+                    WALLET_PHOTOS_MODE_KEY,
+                    enabled
+                      ? ticketPhotosAlbumTitle === "Library"
+                        ? "library"
+                        : "album"
+                      : "never",
+                  );
+
+                  if (!enabled) return;
+
+                  const storedTitle = await AsyncStorage.getItem(
+                    WALLET_PHOTOS_ALBUM_TITLE_KEY,
+                  );
+
+                  if (!storedTitle || storedTitle === "Ticket Frame") {
+                    await AsyncStorage.setItem(
+                      WALLET_PHOTOS_ALBUM_TITLE_KEY,
+                      "Football Ticket Frame",
+                    );
+
+                    await AsyncStorage.removeItem(
+                      WALLET_PHOTOS_ALBUM_ID_KEY,
+                    );
+                  }
+                })();
+              }}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: walletSaveCrops }}
+              style={{
+                flexDirection: "row",
+                alignItems: "flex-start",
+                gap: 12,
+                paddingVertical: 4,
+              }}
+            >
+              <View
+                style={{
+                  width: 26,
+                  height: 26,
+                  borderWidth: 2,
+                  borderColor: "#111111",
+                  borderRadius: 5,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  marginTop: 1,
+                }}
+              >
+                {walletSaveCrops ? (
+                  <Ionicons
+                    name="checkmark"
+                    size={20}
+                    color="#111111"
+                  />
+                ) : null}
+              </View>
+
+              <View style={{ flex: 1 }}>
+                <Text
+                  style={{
+                    fontSize: 16,
+                    lineHeight: 22,
+                    fontWeight: "900",
+                  }}
+                >
+                  Save tickets to Photos
+                </Text>
+                <Text
+                  style={{
+                    fontSize: 15,
+                    lineHeight: 21,
+                    marginTop: 5,
+                  }}
+                >
+                  {ticketPhotosAlbumTitle === "Library"
+                    ? "Your cropped tickets will also be saved to your Photos Library."
+                    : `Your cropped tickets will also be saved to Photos in the “${ticketPhotosAlbumTitle}” album.`}
+                </Text>
+
+                <Text
+                  style={{
+                    fontSize: 15,
+                    lineHeight: 21,
+                    marginTop: 8,
+                  }}
+                >
+                  Photos will only appear there once they have been cropped
+                  and saved.
+                </Text>
+
+                <Text
+                  style={{
+                    fontSize: 15,
+                    lineHeight: 21,
+                    marginTop: 8,
+                  }}
+                >
+                  To change the album or turn this off, go to
+                  Settings → Ticket Saving.
+                </Text>
+              </View>
+            </Pressable>
+
+            <Pressable
+              onPress={() => {
+                void (async () => {
+                  await AsyncStorage.setItem(
+                    ADD_TICKET_NOTICE_CONFIRMED_KEY,
+                    "1",
+                  );
+
+                  setAddTicketImportOpen(false);
+
+                  setTimeout(() => {
+                    chooseTicketImportMethod();
+                  }, 250);
+                })();
+              }}
+              style={{
+                paddingVertical: 15,
+                paddingHorizontal: 14,
+                borderRadius: 12,
+                backgroundColor: favouriteClub.primary,
+                alignItems: "center",
+              }}
+            >
+              <Text
+                style={{
+                  color: readableTextColour(favouriteClub.primary),
+                  fontSize: 17,
+                  fontWeight: "900",
+                }}
+              >
+                CONFIRM
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
         visible={walletImportOpen}
         transparent
         animationType="fade"
@@ -19656,50 +20483,6 @@ const manualCompetitionFixtures = draftMatch.competition
                     }}
                   >
                     I understand and I’m happy to enable Wallet Import
-                  </Text>
-                </Pressable>
-
-                <Pressable
-                  onPress={() =>
-                    setWalletSaveCrops(
-                      (value) => !value,
-                    )
-                  }
-                  style={{
-                    flexDirection: "row",
-                    alignItems: "flex-start",
-                    gap: 12,
-                  }}
-                >
-                  <View
-                    style={{
-                      width: 25,
-                      height: 25,
-                      borderWidth: 2,
-                      borderColor: "#111",
-                      borderRadius: 5,
-                      alignItems: "center",
-                      justifyContent: "center",
-                    }}
-                  >
-                    {walletSaveCrops ? (
-                      <Ionicons
-                        name="checkmark"
-                        size={20}
-                        color="#111"
-                      />
-                    ) : null}
-                  </View>
-
-                  <Text
-                    style={{
-                      flex: 1,
-                      fontSize: 16,
-                      lineHeight: 22,
-                    }}
-                  >
-                    Save clean cropped tickets to a “Ticket Frame”
-                    album in Photos
                   </Text>
                 </Pressable>
 

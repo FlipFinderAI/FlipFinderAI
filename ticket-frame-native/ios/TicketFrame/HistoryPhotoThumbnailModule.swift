@@ -1,4 +1,5 @@
 import Foundation
+import PDFKit
 import Photos
 import React
 import UIKit
@@ -109,6 +110,170 @@ final class HistoryPhotoThumbnailModule: NSObject {
       } catch {
         resolved = true
         resolve(nil)
+      }
+    }
+  }
+
+  @objc static func requiresMainQueueSetup() -> Bool {
+    false
+  }
+}
+
+
+@objc(PdfTicketRendererModule)
+final class PdfTicketRendererModule: NSObject {
+  @objc(renderFirstPage:maxDimension:resolver:rejecter:)
+  func renderFirstPage(
+    _ sourceUri: NSString,
+    maxDimension: NSNumber,
+    resolver resolve: @escaping RCTPromiseResolveBlock,
+    rejecter reject: @escaping RCTPromiseRejectBlock
+  ) {
+    DispatchQueue.global(qos: .userInitiated).async {
+      let source = sourceUri as String
+
+      let sourceURL: URL
+      if source.hasPrefix("file://"),
+         let parsedURL = URL(string: source) {
+        sourceURL = parsedURL
+      } else {
+        sourceURL = URL(fileURLWithPath: source)
+      }
+
+      guard
+        let document = PDFDocument(url: sourceURL),
+        let page = document.page(at: 0)
+      else {
+        reject(
+          "pdf_open_failed",
+          "Ticket Frame could not open the PDF.",
+          nil
+        )
+        return
+      }
+
+      let bounds = page.bounds(for: .mediaBox)
+
+      guard bounds.width > 0, bounds.height > 0 else {
+        reject(
+          "pdf_invalid_page",
+          "The first PDF page has an invalid size.",
+          nil
+        )
+        return
+      }
+
+      let requestedMax = max(
+        512.0,
+        maxDimension.doubleValue
+      )
+
+      let scale = min(
+        requestedMax / max(bounds.width, bounds.height),
+        4.0
+      )
+
+      let outputSize = CGSize(
+        width: max(1, floor(bounds.width * scale)),
+        height: max(1, floor(bounds.height * scale))
+      )
+
+      let format = UIGraphicsImageRendererFormat()
+      format.scale = 1
+      format.opaque = true
+
+      let renderer = UIGraphicsImageRenderer(
+        size: outputSize,
+        format: format
+      )
+
+      let image = renderer.image { context in
+        UIColor.white.setFill()
+
+        context.fill(
+          CGRect(
+            origin: .zero,
+            size: outputSize
+          )
+        )
+
+        let cg = context.cgContext
+
+        cg.saveGState()
+
+        cg.translateBy(
+          x: 0,
+          y: outputSize.height
+        )
+
+        cg.scaleBy(
+          x: scale,
+          y: -scale
+        )
+
+        cg.translateBy(
+          x: -bounds.minX,
+          y: -bounds.minY
+        )
+
+        page.draw(
+          with: .mediaBox,
+          to: cg
+        )
+
+        cg.restoreGState()
+      }
+
+      guard
+        let data = image.jpegData(
+          compressionQuality: 0.94
+        )
+      else {
+        reject(
+          "pdf_render_failed",
+          "Ticket Frame could not render the PDF.",
+          nil
+        )
+        return
+      }
+
+      do {
+        let cacheDirectory =
+          FileManager.default.urls(
+            for: .cachesDirectory,
+            in: .userDomainMask
+          )[0]
+          .appendingPathComponent(
+            "ticket-pdf-renders",
+            isDirectory: true
+          )
+
+        try FileManager.default.createDirectory(
+          at: cacheDirectory,
+          withIntermediateDirectories: true
+        )
+
+        let destination =
+          cacheDirectory.appendingPathComponent(
+            "ticket-\(UUID().uuidString).jpg"
+          )
+
+        try data.write(
+          to: destination,
+          options: .atomic
+        )
+
+        resolve([
+          "uri": destination.absoluteString,
+          "width": Int(outputSize.width),
+          "height": Int(outputSize.height),
+        ])
+      } catch {
+        reject(
+          "pdf_write_failed",
+          "Ticket Frame could not create the temporary PDF image.",
+          error
+        )
       }
     }
   }
