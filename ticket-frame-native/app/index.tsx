@@ -15589,8 +15589,8 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                       const mediaKey = `${selectedHistoryRecord.id}|asset:${media.assetId}`;
 
                       return (
-                        <Pressable
-                          key={media.assetId}
+                        <View key={media.assetId}>
+                          <Pressable
                           onLongPress={() =>
                             Alert.alert(
                               `Remove Video ${index + 1}?`,
@@ -15659,20 +15659,19 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                           <Text style={[s.clubName, { flex: 1 }]}>
                             {`Video ${index + 1}`}
                           </Text>
-                        </Pressable>
+                          </Pressable>
+
+                          {activeVideoUri === media.uri ? (
+                            <View style={{ marginTop: 4, marginBottom: 8 }}>
+                              <MatchMemoryVideoPlayer
+                                key={`${selectedHistoryRecord.id}:${activeVideoUri}`}
+                                uri={activeVideoUri}
+                              />
+                            </View>
+                          ) : null}
+                        </View>
                       );
                     })}
-
-                    {groupReferencedVideos.some(
-                      (media) => media.uri === activeVideoUri,
-                    ) && activeVideoUri ? (
-                      <View style={{ marginTop: 4 }}>
-                        <MatchMemoryVideoPlayer
-                          key={`${selectedHistoryRecord.id}:${activeVideoUri}`}
-                          uri={activeVideoUri}
-                        />
-                      </View>
-                    ) : null}
                   </>
                 ) : (
                   <Text
