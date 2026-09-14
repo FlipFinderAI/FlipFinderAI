@@ -979,33 +979,16 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
       if (!sourceUri)
         throw new Error("Apple Photos returned no usable local file");
 
-      const memoryDirectory = `${FileSystem.documentDirectory}match-memories/`;
-      await FileSystem.makeDirectoryAsync(memoryDirectory, { intermediates: true });
-      const sourceName = assetInfo.filename ?? media.fileName ?? sourceUri;
-      const extensionMatch = sourceName.match(/\.([a-zA-Z0-9]{2,5})(?:\?|$)/);
-      const extension = extensionMatch?.[1]?.toLowerCase() ?? "jpg";
-      const digest = await Crypto.digestStringAsync(
-        Crypto.CryptoDigestAlgorithm.SHA256,
-        `${recordId}|${media.assetId}|fullscreen-photo`,
-      );
-      const safeRecordId = recordId.replace(/[^a-zA-Z0-9_-]/g, "_");
-      const destination = `${memoryDirectory}${safeRecordId}-${digest.slice(0, 20)}.${extension}`;
-      const destinationInfo = await FileSystem.getInfoAsync(destination);
-      if (!destinationInfo.exists || (destinationInfo.size ?? 0) === 0)
-        await FileSystem.copyAsync({ from: sourceUri, to: destination });
-
-      const copiedInfo = await FileSystem.getInfoAsync(destination);
-      if (!copiedInfo.exists || (copiedInfo.size ?? 0) === 0)
-        throw new Error("Downloaded photo was empty");
-
-      addMatchMediaReferences(recordId, [{ ...media, localUri: destination }]);
+      // Apple Photos remains the source of truth for normal Match Memory
+      // photos. Use the resolved Photos/iCloud file for this viewing session
+      // instead of creating another permanent full-resolution app copy.
       updateGalleryItem({
-        uri: destination,
+        uri: sourceUri,
         loading: false,
         error: null,
       });
       if (enlargedMatchPhotoRequestRef.current === requestId) {
-        setEnlargedMatchPhotoUri(destination);
+        setEnlargedMatchPhotoUri(sourceUri);
         setEnlargedMatchPhotoError(null);
       }
     } catch (error) {
@@ -5444,50 +5427,10 @@ confidence: ${recognition.confidence}%`,
               previewUri ??
               thumbnailUri ??
               resolvedPhotosUri;
-            // V4.0.89 — once History has successfully resolved a photo,
-            // keep an app-owned copy so a cold restart can display it without
-            // asking Photos/iCloud for the same image again.
-            if (
-              reference.type === "photo" &&
-              !durableUri &&
-              resolvedPhotosUri
-            ) {
-              try {
-                const memoryDirectory =
-                  `${FileSystem.documentDirectory}match-memories/`;
-                await FileSystem.makeDirectoryAsync(memoryDirectory, {
-                  intermediates: true,
-                });
-
-                const safeAssetId = reference.assetId.replace(
-                  /[^a-zA-Z0-9._-]/g,
-                  "_",
-                );
-                const extension =
-                  reference.fileName?.match(/\.[a-zA-Z0-9]+$/)?.[0] ?? ".jpg";
-                const destination =
-                  `${memoryDirectory}history-${safeAssetId}${extension}`;
-
-                const existingCopy =
-                  await FileSystem.getInfoAsync(destination).catch(() => null);
-
-                if (!existingCopy?.exists || !existingCopy.size) {
-                  await FileSystem.copyAsync({
-                    from: resolvedPhotosUri,
-                    to: destination,
-                  });
-                }
-
-                durableUri = destination;
-
-                addMatchMediaReferences(recordId, [
-                  { ...reference, localUri: destination },
-                ]);
-              } catch {
-                // Keep using the Photos result for this session if creation
-                // of the durable app-owned copy fails.
-              }
-            }
+            // Apple Photos/iCloud remains the source of truth for normal
+            // discovered photos. Do not promote the resolved original into
+            // Ticket Frame Documents; the lightweight reference/thumbnail is
+            // sufficient for future History opens.
 
             let recoveredInfo = metadataInfo ?? displayInfo;
 
