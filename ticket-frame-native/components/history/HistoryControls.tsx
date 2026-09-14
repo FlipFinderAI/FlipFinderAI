@@ -1,10 +1,13 @@
 import { Ionicons } from "@expo/vector-icons";
+import { useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Animated,
   Dimensions,
   Image,
   NativeScrollEvent,
   NativeSyntheticEvent,
+  PanResponder,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -43,6 +46,7 @@ export type MatchPhotoViewerItem = {
   uri: string;
   loading?: boolean;
   error?: string | null;
+  fullQuality?: boolean;
 };
 
 export function MatchPhotoViewer({
@@ -61,10 +65,56 @@ export function MatchPhotoViewer({
   onImageError?: (index: number) => void;
 }) {
   const width = Dimensions.get("window").width;
+  const height = Dimensions.get("window").height;
   const safeInitialIndex = Math.max(
     0,
     Math.min(initialIndex, Math.max(0, items.length - 1)),
   );
+  const [activeIndex, setActiveIndex] = useState(safeInitialIndex);
+  const pullY = useRef(new Animated.Value(0)).current;
+  const zoomScaleRef = useRef(1);
+
+  const dismissViewer = () => {
+    Animated.timing(pullY, {
+      toValue: Math.max(220, height * 0.34),
+      duration: 160,
+      useNativeDriver: true,
+    }).start(onClose);
+  };
+
+  const restoreViewer = () => {
+    Animated.spring(pullY, {
+      toValue: 0,
+      damping: 22,
+      stiffness: 240,
+      mass: 0.8,
+      useNativeDriver: true,
+    }).start();
+  };
+
+  const pullDownResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_event, gesture) =>
+        zoomScaleRef.current <= 1.01 &&
+        gesture.dy > 8 &&
+        Math.abs(gesture.dy) > Math.abs(gesture.dx) * 1.15,
+      onMoveShouldSetPanResponderCapture: (_event, gesture) =>
+        zoomScaleRef.current <= 1.01 &&
+        gesture.dy > 12 &&
+        Math.abs(gesture.dy) > Math.abs(gesture.dx) * 1.2,
+      onPanResponderMove: (_event, gesture) => {
+        pullY.setValue(Math.max(0, gesture.dy));
+      },
+      onPanResponderRelease: (_event, gesture) => {
+        if (gesture.dy > 120 || gesture.vy > 1.15) {
+          dismissViewer();
+        } else {
+          restoreViewer();
+        }
+      },
+      onPanResponderTerminate: restoreViewer,
+    }),
+  ).current;
 
   const handleMomentumEnd = (
     event: NativeSyntheticEvent<NativeScrollEvent>,
@@ -77,78 +127,111 @@ export function MatchPhotoViewer({
         Math.max(0, items.length - 1),
       ),
     );
+    zoomScaleRef.current = 1;
+    setActiveIndex(nextIndex);
     onIndexChange?.(nextIndex);
   };
 
+  const viewerOpacity = pullY.interpolate({
+    inputRange: [0, 280],
+    outputRange: [1, 0.55],
+    extrapolate: "clamp",
+  });
+
+  const viewerScale = pullY.interpolate({
+    inputRange: [0, 280],
+    outputRange: [1, 0.96],
+    extrapolate: "clamp",
+  });
+
   return (
     <View style={styles.photoViewer}>
-      <ScrollView
-        horizontal
-        pagingEnabled
-        bounces={false}
-        showsHorizontalScrollIndicator={false}
-        contentOffset={{ x: safeInitialIndex * width, y: 0 }}
-        onMomentumScrollEnd={handleMomentumEnd}
-        scrollEventThrottle={16}
-        style={styles.photoPager}
+      <Animated.View
+        {...pullDownResponder.panHandlers}
+        style={[
+          styles.photoViewerContent,
+          {
+            opacity: viewerOpacity,
+            transform: [{ translateY: pullY }, { scale: viewerScale }],
+          },
+        ]}
       >
-        {items.map((item, index) => (
-          <View key={item.key} style={[styles.photoPage, { width }]}>
-            <ScrollView
-              style={styles.photoZoom}
-              contentContainerStyle={styles.photoZoomContent}
-              minimumZoomScale={1}
-              maximumZoomScale={5}
-              bouncesZoom
-              centerContent
-              showsHorizontalScrollIndicator={false}
-              showsVerticalScrollIndicator={false}
-            >
-              <Image
-                alt="Enlarged match memory"
-                source={{ uri: item.uri }}
-                resizeMode="contain"
-                style={[styles.photo, { width }]}
-                onError={() => onImageError?.(index)}
-              />
-            </ScrollView>
-
-            {item.loading ? (
-              <View style={styles.photoLoadingPill} pointerEvents="none">
-                <ActivityIndicator size="small" color="#ffffff" />
-                <Text style={styles.photoLoadingPillText}>Loading full quality…</Text>
-              </View>
-            ) : null}
-
-            {item.error ? (
-              <View style={styles.photoError}>
-                <Text style={styles.photoErrorTitle}>Photo could not open</Text>
-                <Text style={styles.photoErrorText}>{item.error}</Text>
-                {onRetry ? (
-                  <Pressable
-                    onPress={() => onRetry(index)}
-                    style={styles.retryButton}
-                  >
-                    <Text style={styles.retryText}>TRY AGAIN</Text>
-                  </Pressable>
-                ) : null}
-              </View>
-            ) : null}
-          </View>
-        ))}
-      </ScrollView>
-
-      {items.length > 1 ? (
-        <View style={styles.photoCounter} pointerEvents="none">
-          <Text style={styles.photoCounterText}>
-            {safeInitialIndex + 1} / {items.length}
-          </Text>
+        <View style={styles.dismissHandle} pointerEvents="none">
+          <View style={styles.dismissHandleBar} />
         </View>
-      ) : null}
 
-      <Pressable onPress={onClose} hitSlop={12} style={styles.closeButton}>
-        <Ionicons name="close-circle" size={38} color="#ffffff" />
-      </Pressable>
+        <ScrollView
+          horizontal
+          pagingEnabled
+          bounces={false}
+          showsHorizontalScrollIndicator={false}
+          contentOffset={{ x: safeInitialIndex * width, y: 0 }}
+          onMomentumScrollEnd={handleMomentumEnd}
+          scrollEventThrottle={16}
+          style={styles.photoPager}
+        >
+          {items.map((item, index) => (
+            <View key={item.key} style={[styles.photoPage, { width }]}>
+              <ScrollView
+                style={styles.photoZoom}
+                contentContainerStyle={styles.photoZoomContent}
+                minimumZoomScale={1}
+                maximumZoomScale={5}
+                bouncesZoom
+                centerContent
+                showsHorizontalScrollIndicator={false}
+                showsVerticalScrollIndicator={false}
+                scrollEventThrottle={16}
+                onScroll={(event) => {
+                  if (index !== activeIndex) return;
+                  zoomScaleRef.current =
+                    event.nativeEvent.zoomScale ?? 1;
+                }}
+              >
+                <Image
+                  alt="Enlarged match memory"
+                  source={{ uri: item.uri }}
+                  resizeMode="contain"
+                  style={[styles.photo, { width }]}
+                  onError={() => onImageError?.(index)}
+                />
+              </ScrollView>
+
+              {item.loading ? (
+                <View style={styles.photoLoadingPill} pointerEvents="none">
+                  <ActivityIndicator size="small" color="#ffffff" />
+                  <Text style={styles.photoLoadingPillText}>
+                    Loading full quality…
+                  </Text>
+                </View>
+              ) : null}
+
+              {item.error ? (
+                <View style={styles.photoError}>
+                  <Text style={styles.photoErrorTitle}>Photo could not open</Text>
+                  <Text style={styles.photoErrorText}>{item.error}</Text>
+                  {onRetry ? (
+                    <Pressable
+                      onPress={() => onRetry(index)}
+                      style={styles.retryButton}
+                    >
+                      <Text style={styles.retryText}>TRY AGAIN</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+              ) : null}
+            </View>
+          ))}
+        </ScrollView>
+
+        {items.length > 1 ? (
+          <View style={styles.photoCounter} pointerEvents="none">
+            <Text style={styles.photoCounterText}>
+              {activeIndex + 1} / {items.length}
+            </Text>
+          </View>
+        ) : null}
+      </Animated.View>
     </View>
   );
 }
@@ -169,12 +252,22 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.94)",
     justifyContent: "center",
   },
-  closeButton: {
+  photoViewerContent: {
+    flex: 1,
+  },
+  dismissHandle: {
     position: "absolute",
-    top: 56,
-    right: 22,
-    zIndex: 2,
-    padding: 10,
+    top: 54,
+    left: 0,
+    right: 0,
+    zIndex: 3,
+    alignItems: "center",
+  },
+  dismissHandleBar: {
+    width: 42,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: "rgba(255,255,255,0.72)",
   },
   photoPager: {
     flex: 1,

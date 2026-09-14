@@ -930,6 +930,7 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
             uri: media.localUri,
             loading: false,
             error: null,
+            fullQuality: true,
           });
           if (enlargedMatchPhotoRequestRef.current === requestId)
             setEnlargedMatchPhotoUri(media.localUri);
@@ -986,6 +987,7 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
         uri: sourceUri,
         loading: false,
         error: null,
+        fullQuality: true,
       });
       if (enlargedMatchPhotoRequestRef.current === requestId) {
         setEnlargedMatchPhotoUri(sourceUri);
@@ -1227,11 +1229,22 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
       }),
     );
     addMatchMediaReferences(recordId, enrichedReferences);
+
+    // Photos that have a genuine Apple Photos asset ID remain owned by
+    // Photos/iCloud. Persist their Ticket Frame assignment and metadata, but
+    // do not create another full-resolution copy in Documents.
+    const referencesNeedingDurableCopy = enrichedReferences.filter(
+      (reference) =>
+        reference.type !== "photo" || reference.assetId.startsWith("selected-"),
+    );
+
+    if (!referencesNeedingDurableCopy.length) return enrichedReferences;
+
     const directory = `${FileSystem.documentDirectory}match-memories/`;
     await FileSystem.makeDirectoryAsync(directory, { intermediates: true });
     const durable: MatchMediaReference[] = [];
 
-    for (const reference of enrichedReferences) {
+    for (const reference of referencesNeedingDurableCopy) {
       let sourceUri = sourceUris[reference.assetId] || reference.localUri;
       if (!sourceUri) {
         const info = await cachedMatchAssetInfo(reference.assetId);
@@ -1263,7 +1276,14 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
     }
 
     addMatchMediaReferences(recordId, durable);
-    return durable;
+
+    const durableByAssetId = new Map(
+      durable.map((reference) => [reference.assetId, reference]),
+    );
+
+    return enrichedReferences.map(
+      (reference) => durableByAssetId.get(reference.assetId) ?? reference,
+    );
   };
   useEffect(() => {
     persistMediaReferencesRef.current = persistMediaReferences;
@@ -12612,7 +12632,34 @@ Choose one team. Its colours automatically control the Club Colours frame style.
           <MatchPhotoViewer
             items={enlargedMatchPhotoItems}
             initialIndex={enlargedMatchPhotoIndex}
-            onIndexChange={setEnlargedMatchPhotoIndex}
+            onIndexChange={(nextIndex) => {
+              setEnlargedMatchPhotoIndex(nextIndex);
+
+              const nextItem = enlargedMatchPhotoItems[nextIndex];
+              if (
+                !nextItem ||
+                nextItem.fullQuality ||
+                !selectedHistoryRecordId ||
+                !nextItem.key.startsWith("asset:")
+              ) {
+                return;
+              }
+
+              const assetId = nextItem.key.slice("asset:".length);
+              const nextMedia = (
+                resolvedMatchMedia[selectedHistoryRecordId] ?? []
+              ).find(
+                (media) =>
+                  media.type === "photo" && media.assetId === assetId,
+              );
+
+              if (!nextMedia) return;
+
+              void openReferencedMatchPhoto(
+                selectedHistoryRecordId,
+                nextMedia,
+              );
+            }}
             onClose={closeEnlargedMatchPhoto}
             onRetry={() => enlargedMatchPhotoRetryRef.current?.()}
             onImageError={(index) => {
