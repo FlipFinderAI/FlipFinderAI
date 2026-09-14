@@ -1,6 +1,7 @@
 /* eslint-disable react-hooks/immutability */
 import { useEffect, useRef, useState, useCallback, useMemo, Fragment } from "react";
 import {
+  ActionSheetIOS,
   Alert,
   ActivityIndicator,
   AppState,
@@ -8,6 +9,7 @@ import {
   Image,
     Keyboard,
   Linking,
+  Modal,
   NativeModules,
   Pressable,
   SafeAreaView,
@@ -66,6 +68,7 @@ import TicketViewer from "@/components/tickets/TicketViewer";
 import MatchConfirmationOverlay from "@/components/tickets/MatchConfirmationOverlay";
 import OldSchoolCard from "@/components/tickets/OldSchoolCard";
 import OldSchoolCaptureHost from "@/components/tickets/OldSchoolCaptureHost";
+import WalletPassCaptureHost from "@/components/tickets/WalletPassCaptureHost";
 import {
   BottomNavigation,
   type MainTab,
@@ -289,6 +292,10 @@ import {
   listPendingWalletPasses,
   readWalletPassEvidence,
   removePendingWalletPass,
+  listPendingTicketScreenshots,
+  queueWalletScreenshotsSince,
+  detectWalletTicketBounds,
+  removePendingTicketScreenshot,
   walletPassEvidenceToRecognitionText,
   type WalletPassEvidence,
 } from "@/lib/walletPass";
@@ -334,6 +341,24 @@ import Reanimated, {
   withTiming,
 } from "react-native-reanimated";
 
+
+const WALLET_PHOTOS_MODE_KEY =
+  "ticket-frame.wallet-photo-save-mode.v1";
+const WALLET_PHOTOS_ALBUM_ID_KEY =
+  "ticket-frame.wallet-photo-album-id.v1";
+const WALLET_PHOTOS_ALBUM_TITLE_KEY =
+  "ticket-frame.wallet-photo-album-title.v1";
+
+const WALLET_IMPORT_SETUP_KEY =
+  "ticket-frame.wallet-import-setup.v1";
+const WALLET_HIDE_INSTRUCTIONS_KEY =
+  "ticket-frame.wallet-hide-instructions.v1";
+const WALLET_PHOTOS_SAVED_FINGERPRINTS_KEY =
+  "ticket-frame.wallet-photo-saved-fingerprints.v1";
+
+const WALLET_STALE_SCREENSHOT_CLEANUP_KEY =
+  "ticket-frame.wallet-stale-screenshot-cleanup.v1";
+
 const SCORE_PREFIX = /^\s*\(\d{1,2}\s*[-–—]\s*\d{1,2}\)\s*/;
 
 function canonicalStoredClub(club: ClubOption | undefined): ClubOption | undefined {
@@ -367,6 +392,8 @@ type DraggableHistoryPhotoProps = {
   moveArmed: boolean;
   children: React.ReactNode;
   onDragStart: (mediaKey: string) => void;
+  onDragMove: (absoluteY: number) => void;
+  onDragFinish: () => void;
   onDrop: (mediaKey: string, absoluteX: number, absoluteY: number) => void;
 };
 
@@ -376,6 +403,8 @@ function DraggableHistoryPhoto({
   moveArmed,
   children,
   onDragStart,
+  onDragMove,
+  onDragFinish,
   onDrop,
 }: DraggableHistoryPhotoProps) {
   const translateX = useSharedValue(0);
@@ -395,11 +424,13 @@ function DraggableHistoryPhoto({
     .onUpdate((event) => {
       translateX.value = event.translationX;
       translateY.value = event.translationY;
+      runOnJS(onDragMove)(event.absoluteY);
     })
     .onEnd((event) => {
       runOnJS(onDrop)(mediaKey, event.absoluteX, event.absoluteY);
     })
     .onFinalize(() => {
+      runOnJS(onDragFinish)();
       dragging.value = false;
       translateX.value = withSpring(0);
       translateY.value = withSpring(0);
@@ -566,6 +597,10 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
     useState(false);
   const historyScrollRef = useRef<ScrollView>(null);
   const historyScrollOffsetRef = useRef(0);
+  const mediaDragScrollOffsetRef = useRef(0);
+  const mediaDragAutoScrollDirectionRef = useRef<-1 | 0 | 1>(0);
+  const mediaDragAutoScrollTimerRef =
+    useRef<ReturnType<typeof setInterval> | null>(null);
   const restoreHistoryScrollRef = useRef(false);
   const [selectedHistoryStadium, setSelectedHistoryStadium] =
     useState<string | null>(null);
@@ -604,6 +639,7 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
   >({});
   const [mediaEditMode, setMediaEditMode] = useState(false);
   const [mediaMoveArmedKey, setMediaMoveArmedKey] = useState<string | null>(null);
+  const [mediaSelectedKeys, setMediaSelectedKeys] = useState<string[]>([]);
   const mediaDropZoneRefs = useRef<Record<string, any>>({});
   const mediaDropZoneAssignmentsRef = useRef<Record<string, MatchdayMediaAssignment>>({});
   const mediaDropZonesRef = useRef<
@@ -934,8 +970,14 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
       if (!assetInfo)
         throw new Error("Apple Photos returned no usable file");
 
-      const sourceUri = assetInfo.localUri ?? assetInfo.uri;
-      if (!sourceUri) throw new Error("Apple Photos returned no usable file");
+      const sourceUri =
+        assetInfo.localUri ??
+        (assetInfo.uri && !assetInfo.uri.startsWith("ph://")
+          ? assetInfo.uri
+          : undefined);
+
+      if (!sourceUri)
+        throw new Error("Apple Photos returned no usable local file");
 
       const memoryDirectory = `${FileSystem.documentDirectory}match-memories/`;
       await FileSystem.makeDirectoryAsync(memoryDirectory, { intermediates: true });
@@ -2889,10 +2931,12 @@ ticket: ${ticket.name || "Wallet ticket"}
 season: ${ticket.seasonKey || activeSeason}
 selected club: ${favouriteClub.name}
 structured fields: ${evidence.fieldText.length}
-relevant date: ${evidence.relevantDate ?? "-"}`,
+barcode fields: ${evidence.barcodeText.length}
+relevant date: ${evidence.relevantDate ?? "-"}
+embedded image: ${evidence.embeddedImage?.fileName ?? "-"}`,
     );
 
-    if (!recognitionText.trim()) {
+    if (!recognitionText.trim() && !evidence.embeddedImage) {
       Alert.alert(
         "Wallet ticket needs attention",
         "This Wallet pass does not contain enough readable match information.",
@@ -2905,12 +2949,156 @@ relevant date: ${evidence.relevantDate ?? "-"}`,
     }
 
     try {
-      const recognition = await recogniseFromText(
-        recognitionText,
-        favouriteClub.name,
-        ticket.seasonKey || activeSeason,
-        { league: favouriteClub.league },
-      );
+      let walletTicket = ticket;
+      let walletImageUri: string | undefined;
+
+      if (evidence.embeddedImage?.base64) {
+        try {
+          const tempBase =
+            FileSystem.cacheDirectory ??
+            FileSystem.documentDirectory;
+
+          if (tempBase) {
+            const tempUri =
+              `${tempBase}wallet-pass-${ticket.fingerprint}.png`;
+
+            await FileSystem.writeAsStringAsync(
+              tempUri,
+              evidence.embeddedImage.base64,
+              {
+                encoding: FileSystem.EncodingType.Base64,
+              },
+            );
+
+            walletImageUri = await permanentTicketUri(
+              tempUri,
+              ticket.fingerprint,
+              evidence.embeddedImage.mimeType,
+            );
+
+            recognitionImageUrisRef.current.set(
+              ticket.id,
+              walletImageUri,
+            );
+
+            walletTicket = {
+              ...ticket,
+              uri: walletImageUri,
+            };
+
+            setTickets((current) =>
+              current.map((item) =>
+                item.id === ticket.id
+                  ? { ...item, uri: walletImageUri }
+                  : item,
+              ),
+            );
+
+            console.log(
+              `[wallet-ticket-image]
+source: ${evidence.embeddedImage.fileName}
+saved: ${walletImageUri}`,
+            );
+          }
+        } catch (imageError) {
+          console.log(
+            "[wallet-ticket-image] extraction failed",
+            imageError,
+          );
+        }
+      }
+
+      let structuredRecognition: RecognizedTicket | null = null;
+      let imageRecognition: RecognizedTicket | null = null;
+
+      if (recognitionText.trim()) {
+        structuredRecognition = await recogniseFromText(
+          recognitionText,
+          favouriteClub.name,
+          ticket.seasonKey || activeSeason,
+          { league: favouriteClub.league },
+        );
+      }
+
+      if (walletImageUri) {
+        try {
+          imageRecognition = await recogniseTicketImage(
+            walletImageUri,
+            favouriteClub.name,
+            ticket.seasonKey || activeSeason,
+            { league: favouriteClub.league },
+          );
+        } catch (ocrError) {
+          console.log(
+            "[wallet-ticket-ocr] embedded image OCR failed",
+            ocrError,
+          );
+        }
+      }
+
+      if (!structuredRecognition && !imageRecognition) {
+        throw new Error(
+          "Wallet pass produced no usable recognition evidence.",
+        );
+      }
+
+      const recognition: RecognizedTicket =
+        structuredRecognition && imageRecognition
+          ? {
+              ...imageRecognition,
+              ...structuredRecognition,
+
+              // Wallet/pass.json is structured evidence, so keep it
+              // authoritative. OCR only fills values that Wallet recognition
+              // could not determine.
+              homeTeam:
+                structuredRecognition.homeTeam ??
+                imageRecognition.homeTeam,
+
+              awayTeam:
+                structuredRecognition.awayTeam ??
+                imageRecognition.awayTeam,
+
+              date:
+                structuredRecognition.date ??
+                imageRecognition.date,
+
+              kickoff:
+                structuredRecognition.kickoff ??
+                imageRecognition.kickoff,
+
+              competition:
+                structuredRecognition.competition ??
+                imageRecognition.competition,
+
+              ground:
+                structuredRecognition.ground ??
+                imageRecognition.ground,
+
+              seatDetails:
+                structuredRecognition.seatDetails ??
+                imageRecognition.seatDetails,
+
+              ticketType:
+                structuredRecognition.ticketType ??
+                imageRecognition.ticketType,
+
+              seasonKey:
+                structuredRecognition.seasonKey ??
+                imageRecognition.seasonKey,
+
+              fixtureBacked:
+                Boolean(
+                  structuredRecognition.fixtureBacked ||
+                  imageRecognition.fixtureBacked,
+                ),
+
+              confidence: Math.max(
+                structuredRecognition.confidence ?? 0,
+                imageRecognition.confidence ?? 0,
+              ),
+            }
+          : (structuredRecognition ?? imageRecognition)!;
 
       console.log(
         `[wallet-ticket-final-match]
@@ -2924,19 +3112,91 @@ season: ${recognition.seasonKey || ticket.seasonKey || activeSeason}
 confidence: ${recognition.confidence}%`,
       );
 
-      setConfirmQueue((current) =>
-        current.some((entry) => entry.ticket.id === ticket.id)
-          ? current
-          : [...current, { ticket, recognition }],
+      const recognisedName =
+        recognition.homeTeam && recognition.awayTeam
+          ? `${recognition.homeTeam} v ${recognition.awayTeam}`
+          : walletTicket.name;
+
+      const completeWalletTicket: SeasonTicket = {
+        ...walletTicket,
+        name: recognisedName,
+        homeTeam:
+          recognition.homeTeam ?? walletTicket.homeTeam,
+        awayTeam:
+          recognition.awayTeam ?? walletTicket.awayTeam,
+        seasonKey:
+          recognition.seasonKey ||
+          walletTicket.seasonKey ||
+          activeSeason,
+        matchDate:
+          recognition.date ?? walletTicket.matchDate,
+        kickoffTime:
+          recognition.kickoff ?? walletTicket.kickoffTime,
+        competition:
+          recognition.competition ?? walletTicket.competition,
+        ground:
+          recognition.ground ?? walletTicket.ground,
+        ticketType:
+          recognition.ticketType ?? walletTicket.ticketType,
+        details:
+          recognition.seatDetails ?? walletTicket.details,
+      };
+
+      const renderedWalletUri =
+        await captureWalletTicketCard(
+          completeWalletTicket,
+          evidence,
+          walletImageUri,
+        );
+
+      const finalWalletTicket: SeasonTicket = renderedWalletUri
+        ? {
+            ...completeWalletTicket,
+            uri: renderedWalletUri,
+          }
+        : completeWalletTicket;
+
+      // Replace the temporary Wallet strip/artwork on Home with the
+      // completed Ticket Frame ticket before presenting confirmation.
+      // OCR evidence remains the original Wallet image via
+      // recognitionImageUrisRef.
+      setTickets((current) =>
+        current.map((item) =>
+          item.id === ticket.id
+            ? { ...item, ...finalWalletTicket }
+            : item,
+        ),
       );
+
+      // IMPORTANT:
+      // recognitionImageUrisRef deliberately still points at the original
+      // Wallet embedded artwork. The generated Ticket Frame card is for
+      // display/storage only and must not become OCR evidence.
+      setConfirmQueue((current) => {
+        const existingIndex = current.findIndex(
+          (entry) => entry.ticket.id === ticket.id,
+        );
+
+        if (existingIndex === -1) {
+          return [...current, { ticket: finalWalletTicket, recognition }];
+        }
+
+        return current.map((entry, index) =>
+          index === existingIndex
+            ? { ticket: finalWalletTicket, recognition }
+            : entry,
+        );
+      });
 
       return true;
     } catch (error) {
       console.log("[wallet-ticket-recognition] failed", error);
+
       Alert.alert(
         "Wallet ticket needs attention",
         "Could not recognise this Wallet ticket.",
       );
+
       return false;
     } finally {
       recognitionDoneRef.current = true;
@@ -3758,6 +4018,484 @@ confidence: ${recognition.confidence}%`,
   const seasonFrame = createSeasonFrame(favouriteClub.name, activeSeason);
   const frameCaptureRef = useRef<View>(null);
 
+  const screenshotInboxProcessingRef = useRef(false);
+  const screenshotInboxProcessedRef = useRef<Set<string>>(new Set());
+
+  // Wallet screenshots are QUEUED first.
+  // Nothing is cropped/recognised/added until the user chooses Finish Import.
+  const walletScreenshotImportRequestedRef = useRef(false);
+  const walletScreenshotImportShareOnlyRef = useRef(false);
+
+  const [walletImportOpen, setWalletImportOpen] = useState(false);
+  const [walletHideInstructions, setWalletHideInstructions] =
+    useState(false);
+  const [walletImportSetupComplete, setWalletImportSetupComplete] =
+    useState(false);
+  const [walletImportUnderstood, setWalletImportUnderstood] =
+    useState(false);
+  const [walletSaveCrops, setWalletSaveCrops] = useState(true);
+  const [walletCaptureStartedAt, setWalletCaptureStartedAt] =
+    useState<number | null>(null);
+  const [walletFinishing, setWalletFinishing] = useState(false);
+
+  const chooseWalletPhotosAlbum = useCallback(
+    async (): Promise<MediaLibrary.Album | null> => {
+      const albums = await MediaLibrary.getAlbumsAsync({
+        includeSmartAlbums: false,
+      });
+
+      return new Promise((resolve) => {
+        const options = [
+          "Create New Album",
+          ...albums.map((album) => album.title),
+          "Cancel",
+        ];
+
+        ActionSheetIOS.showActionSheetWithOptions(
+          {
+            title: "Save Wallet Tickets To",
+            message:
+              "Choose the Photos album for cropped Ticket Frame tickets.",
+            options,
+            cancelButtonIndex: options.length - 1,
+          },
+          (index) => {
+            if (index === options.length - 1) {
+              resolve(null);
+              return;
+            }
+
+            if (index === 0) {
+              Alert.prompt(
+                "New Photos Album",
+                "Enter the album name.",
+                async (title) => {
+                  const cleanTitle = title?.trim();
+
+                  if (!cleanTitle) {
+                    resolve(null);
+                    return;
+                  }
+
+                  await AsyncStorage.setItem(
+                    WALLET_PHOTOS_ALBUM_TITLE_KEY,
+                    cleanTitle,
+                  );
+
+                  resolve({
+                    id: "",
+                    title: cleanTitle,
+                  } as unknown as MediaLibrary.Album);
+                },
+                "plain-text",
+                "Ticket Frame",
+              );
+
+              return;
+            }
+
+            resolve(albums[index - 1] ?? null);
+          },
+        );
+      });
+    },
+    [],
+  );
+
+  const configureWalletPhotoSaving =
+    useCallback(async (): Promise<boolean> => {
+      const remembered = await AsyncStorage.getItem(
+        WALLET_PHOTOS_MODE_KEY,
+      );
+
+      if (remembered === "album") return true;
+      if (remembered === "never") return false;
+
+      return new Promise((resolve) => {
+        Alert.alert(
+          "Keep Cropped Tickets In Photos?",
+          "Ticket Frame can automatically keep a clean cropped copy of every Wallet ticket in a Photos album. You will only be asked this once.",
+          [
+            {
+              text: "Don't Save",
+              style: "cancel",
+              onPress: async () => {
+                await AsyncStorage.setItem(
+                  WALLET_PHOTOS_MODE_KEY,
+                  "never",
+                );
+                resolve(false);
+              },
+            },
+            {
+              text: "Choose Album",
+              onPress: async () => {
+                const permission =
+                  await MediaLibrary.requestPermissionsAsync();
+
+                if (!permission.granted) {
+                  resolve(false);
+                  return;
+                }
+
+                const album = await chooseWalletPhotosAlbum();
+
+                if (!album) {
+                  resolve(false);
+                  return;
+                }
+
+                if (album.id) {
+                  await AsyncStorage.setItem(
+                    WALLET_PHOTOS_ALBUM_ID_KEY,
+                    album.id,
+                  );
+                }
+
+                await AsyncStorage.setItem(
+                  WALLET_PHOTOS_ALBUM_TITLE_KEY,
+                  album.title,
+                );
+
+                await AsyncStorage.setItem(
+                  WALLET_PHOTOS_MODE_KEY,
+                  "album",
+                );
+
+                resolve(true);
+              },
+            },
+          ],
+        );
+      });
+    }, [chooseWalletPhotosAlbum]);
+
+  const saveWalletCropToPhotos = useCallback(
+    async (
+      uri: string,
+      fingerprint: string,
+    ): Promise<void> => {
+      const enabled = await configureWalletPhotoSaving();
+      if (!enabled) return;
+
+      try {
+        const savedRaw = await AsyncStorage.getItem(
+          WALLET_PHOTOS_SAVED_FINGERPRINTS_KEY,
+        );
+
+        let savedFingerprints: string[] = [];
+
+        if (savedRaw) {
+          try {
+            const parsed = JSON.parse(savedRaw);
+            if (Array.isArray(parsed)) {
+              savedFingerprints = parsed.filter(
+                (value): value is string =>
+                  typeof value === "string",
+              );
+            }
+          } catch {
+            savedFingerprints = [];
+          }
+        }
+
+        // Never create a second Photos asset for the same imported ticket.
+        if (savedFingerprints.includes(fingerprint)) {
+          return;
+        }
+
+        const permission =
+          await MediaLibrary.requestPermissionsAsync();
+
+        if (!permission.granted) return;
+
+        const asset = await MediaLibrary.createAssetAsync(uri);
+
+        const storedAlbumId = await AsyncStorage.getItem(
+          WALLET_PHOTOS_ALBUM_ID_KEY,
+        );
+
+        const storedTitle =
+          (await AsyncStorage.getItem(
+            WALLET_PHOTOS_ALBUM_TITLE_KEY,
+          )) || "Ticket Frame";
+
+        const albums = await MediaLibrary.getAlbumsAsync({
+          includeSmartAlbums: false,
+        });
+
+        let album =
+          (storedAlbumId
+            ? albums.find((item) => item.id === storedAlbumId)
+            : null) ??
+          albums.find((item) => item.title === storedTitle) ??
+          null;
+
+        if (album) {
+          await MediaLibrary.addAssetsToAlbumAsync(
+            [asset],
+            album,
+            false,
+          );
+
+          await AsyncStorage.setItem(
+            WALLET_PHOTOS_ALBUM_ID_KEY,
+            album.id,
+          );
+        } else {
+          album = await MediaLibrary.createAlbumAsync(
+            storedTitle,
+            asset,
+            false,
+          );
+
+          await AsyncStorage.setItem(
+            WALLET_PHOTOS_ALBUM_ID_KEY,
+            album.id,
+          );
+        }
+
+        const nextFingerprints = [
+          ...new Set([
+            ...savedFingerprints,
+            fingerprint,
+          ]),
+        ].slice(-2000);
+
+        await AsyncStorage.setItem(
+          WALLET_PHOTOS_SAVED_FINGERPRINTS_KEY,
+          JSON.stringify(nextFingerprints),
+        );
+      } catch (error) {
+        console.warn(
+          "[wallet-photos] unable to save cropped ticket",
+          error,
+        );
+      }
+    },
+    [configureWalletPhotoSaving],
+  );
+
+  const importPendingSharedScreenshots = useCallback(async () => {
+    if (
+      screenshotInboxProcessingRef.current ||
+      photoImportActiveRef.current ||
+      !storageReady ||
+      !favouriteClub?.name
+    ) {
+      return;
+    }
+
+    const allPending = await listPendingTicketScreenshots();
+    if (!allPending.length) return;
+
+    // Current Wallet Shortcut screenshots are queued as single-* files.
+    // Older legacy screenshot-* files are deliberately ignored so a
+    // previously deleted/skipped ticket can never resurrect.
+    const shareOnly =
+      walletScreenshotImportShareOnlyRef.current;
+
+    const pending = allPending.filter((item) =>
+      shareOnly
+        ? item.name.startsWith("single-share-")
+        : item.name.startsWith("single-") ||
+          item.name.startsWith("batch-"),
+    );
+
+    if (!pending.length) {
+      return;
+    }
+
+    // Critical: receiving a screenshot NEVER imports it automatically.
+    // Finish Import is the only thing allowed to start this processor.
+    if (!walletScreenshotImportRequestedRef.current) {
+      return;
+    }
+
+    walletScreenshotImportRequestedRef.current = false;
+    walletScreenshotImportShareOnlyRef.current = false;
+    screenshotInboxProcessingRef.current = true;
+    photoImportActiveRef.current = true;
+    setPhotoImportActive(true);
+
+    try {
+      for (const pendingScreenshot of pending) {
+        if (screenshotInboxProcessedRef.current.has(pendingScreenshot.name)) {
+          continue;
+        }
+
+        screenshotInboxProcessedRef.current.add(pendingScreenshot.name);
+
+        try {
+          // The Share Extension copied the supplied screenshot file directly
+          // into the App Group. Crop from that high-quality source.
+          await new Promise((resolve) => setTimeout(resolve, 250));
+
+          const visionCrop = await detectWalletTicketBounds(
+            pendingScreenshot.uri,
+          );
+
+          const fallbackCrop = visionCrop
+            ? null
+            : await autoCropTicketScreenshot(
+                pendingScreenshot.uri,
+              );
+
+          const edited = await openNativeCropper(
+            pendingScreenshot.uri,
+            visionCrop
+              ? {
+                  x: visionCrop.x,
+                  y: visionCrop.y,
+                  w: visionCrop.width,
+                  h: visionCrop.height,
+                }
+              : fallbackCrop!.cropRect,
+          );
+
+          if (!edited) {
+            // Cancelling/rejecting a shared Wallet screenshot is final.
+            // Remove it from the App Group inbox so it can never be
+            // offered again when Ticket Frame becomes active.
+            await removePendingTicketScreenshot(
+              pendingScreenshot.name,
+            );
+            continue;
+          }
+
+          // Share Extension filenames contain the SHA-256 of the prepared
+          // screenshot. Use that stable name for Share imports so sharing
+          // the exact same screenshot again cannot create another ticket
+          // merely because the file modification time changed.
+          const fingerprint = await Crypto.digestStringAsync(
+            Crypto.CryptoDigestAlgorithm.SHA256,
+            pendingScreenshot.name.startsWith("single-share-")
+              ? `wallet-share|${pendingScreenshot.name}`
+              : [
+                  "wallet-screenshot",
+                  pendingScreenshot.name,
+                  pendingScreenshot.size ?? "",
+                  pendingScreenshot.modifiedAt ?? "",
+                ].join("|"),
+          );
+
+          await saveWalletCropToPhotos(
+            edited.uri,
+            fingerprint,
+          );
+
+          const alreadyExists = tickets.some(
+            (ticket) => ticket.fingerprint === fingerprint,
+          );
+
+          if (alreadyExists) {
+            await removePendingTicketScreenshot(pendingScreenshot.name);
+            continue;
+          }
+
+          const savedUri = await permanentTicketUri(
+            edited.uri,
+            fingerprint,
+            "image/jpeg",
+          );
+
+          const ticketId = `${fingerprint}-wallet-screenshot`;
+
+          recognitionImageUrisRef.current.set(ticketId, savedUri);
+
+          const ticket: SeasonTicket = {
+            id: ticketId,
+            fingerprint,
+            name: "",
+            uri: savedUri,
+            aspectRatio:
+              edited.width && edited.height
+                ? edited.width / edited.height
+                : undefined,
+            cropWidth: edited.width,
+            cropHeight: edited.height,
+            matchDate: null,
+            kickoffTime: null,
+            competition: null,
+            details: undefined,
+            seasonKey: "",
+            scale: 1,
+            boxScale: 1,
+            offsetX: 0,
+            offsetY: 0,
+          };
+
+          setTickets((current) =>
+            current.some((item) => item.fingerprint === fingerprint)
+              ? current
+              : [...current, ticket].sort(byMatchDateOldestFirst),
+          );
+
+          const reviewFinished = new Promise<"saved" | "skipped">(
+            (resolve) => {
+              ticketReviewResolversRef.current.set(ticket.id, resolve);
+            },
+          );
+
+          const queued = await recogniseAndQueue(ticket);
+
+          if (!queued) {
+            ticketReviewResolversRef.current.delete(ticket.id);
+            screenshotInboxProcessedRef.current.delete(
+              pendingScreenshot.name,
+            );
+
+            Alert.alert(
+              "Ticket needs attention",
+              "Recognition did not finish. The screenshot has been kept so it can be tried again.",
+            );
+            continue;
+          }
+
+          // Bring the existing recognition/Edit/Confirm UI back to Home.
+          setEnlargedTicketId(undefined);
+          setHomeFrameFocused(false);
+          setFinished(false);
+          setHomeViewMode("frame");
+          setActiveTab("frames");
+
+          const result = await reviewFinished;
+
+          if (result === "skipped") {
+            setTickets((current) =>
+              current.filter((item) => item.id !== ticket.id),
+            );
+
+            recognitionImageUrisRef.current.delete(ticket.id);
+
+            await FileSystem.deleteAsync(savedUri, {
+              idempotent: true,
+            }).catch(() => {});
+          }
+
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          await savedFrameWriteChainRef.current.catch(() => {});
+
+          // Only clear the shared screenshot after review is complete.
+          await removePendingTicketScreenshot(pendingScreenshot.name);
+        } catch (error) {
+          screenshotInboxProcessedRef.current.delete(
+            pendingScreenshot.name,
+          );
+          console.log("[wallet-screenshot-import] failed", error);
+        }
+      }
+    } finally {
+      screenshotInboxProcessingRef.current = false;
+      photoImportActiveRef.current = false;
+      setPhotoImportActive(false);
+    }
+  }, [
+    favouriteClub?.name,
+    storageReady,
+    tickets,
+  ]);
+
   const walletInboxProcessingRef = useRef(false);
   const walletInboxProcessedRef = useRef<Set<string>>(new Set());
 
@@ -3787,8 +4525,14 @@ confidence: ${recognition.confidence}%`,
           const stableEvidence = JSON.stringify({
             description: evidence.description,
             organizationName: evidence.organizationName,
+            logoText: evidence.logoText,
             relevantDate: evidence.relevantDate,
+            expirationDate: evidence.expirationDate,
+            serialNumber: evidence.serialNumber,
+            passTypeIdentifier: evidence.passTypeIdentifier,
+            teamIdentifier: evidence.teamIdentifier,
             fieldText: evidence.fieldText,
+            barcodeText: evidence.barcodeText,
             locations: evidence.locations,
           });
 
@@ -3842,6 +4586,15 @@ confidence: ${recognition.confidence}%`,
             continue;
           }
 
+          // Wallet import is ready for review.
+          // Return to Ticket Frame Home and leave the recognised ticket
+          // waiting in the existing confirmation/edit flow.
+          setEnlargedTicketId(undefined);
+          setHomeFrameFocused(false);
+          setFinished(false);
+          setHomeViewMode("frame");
+          setActiveTab("frames");
+
           const result = await reviewFinished;
 
           if (result === "skipped") {
@@ -3877,19 +4630,108 @@ confidence: ${recognition.confidence}%`,
   ]);
 
   useEffect(() => {
+    if (!storageReady) return;
+
+    let cancelled = false;
+
+    const clearPreFixWalletScreenshotQueue = async () => {
+      try {
+        const alreadyCleaned = await AsyncStorage.getItem(
+          WALLET_STALE_SCREENSHOT_CLEANUP_KEY,
+        );
+
+        if (alreadyCleaned === "1" || cancelled) return;
+
+        const pendingScreenshots =
+          await listPendingTicketScreenshots();
+
+        const staleScreenshots = pendingScreenshots.filter(
+          (item) =>
+            item.name.startsWith("single-share-") ||
+            item.name.startsWith("single-") ||
+            item.name.startsWith("batch-"),
+        );
+
+        for (const item of staleScreenshots) {
+          await removePendingTicketScreenshot(item.name);
+          screenshotInboxProcessedRef.current.delete(item.name);
+        }
+
+        await AsyncStorage.setItem(
+          WALLET_STALE_SCREENSHOT_CLEANUP_KEY,
+          "1",
+        );
+
+        console.log(
+          `[wallet-share] cleared ${staleScreenshots.length} stale pre-fix screenshot(s)`,
+        );
+      } catch (error) {
+        console.log(
+          "[wallet-share] stale screenshot cleanup failed",
+          error,
+        );
+      }
+    };
+
+    void clearPreFixWalletScreenshotQueue();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [storageReady]);
+
+  useEffect(() => {
     if (!storageReady || !favouriteClub?.name) return;
 
+    // Screenshot imports are intentionally NOT started here.
+    // Screenshots remain queued until Finish Import is chosen.
     void importPendingWalletPasses();
+
+    const importSharedWalletScreenshotsIfPresent = async () => {
+      try {
+        // Do not start Share imports until the one-time stale queue
+        // migration has completely finished. This prevents old screenshots
+        // racing the cleanup and flashing the cropper on startup.
+        const staleCleanupDone = await AsyncStorage.getItem(
+          WALLET_STALE_SCREENSHOT_CLEANUP_KEY,
+        );
+
+        if (staleCleanupDone !== "1") return;
+
+        const pendingScreenshots =
+          await listPendingTicketScreenshots();
+
+        const hasSharedWalletScreenshots =
+          pendingScreenshots.some((item) =>
+            item.name.startsWith("single-share-"),
+          );
+
+        if (!hasSharedWalletScreenshots) return;
+
+        walletScreenshotImportShareOnlyRef.current = true;
+        walletScreenshotImportRequestedRef.current = true;
+        await importPendingSharedScreenshots();
+      } catch (error) {
+        console.log(
+          "[wallet-share] unable to check shared screenshots",
+          error,
+        );
+      }
+    };
+
+    void importSharedWalletScreenshotsIfPresent();
 
     const subscription = AppState.addEventListener("change", (state) => {
       if (state === "active") {
         void importPendingWalletPasses();
+        void importSharedWalletScreenshotsIfPresent();
       }
     });
 
     return () => subscription.remove();
   }, [
     favouriteClub?.name,
+    importPendingSharedScreenshots,
     importPendingWalletPasses,
     storageReady,
   ]);
@@ -5049,8 +5891,54 @@ confidence: ${recognition.confidence}%`,
       // caused an entire season's question to be lost permanently.
       if (promptedDiscoveredSeasonTicketsRef.current.has(key)) return;
       promptedDiscoveredSeasonTicketsRef.current.add(key);
-      void askSeasonTicketQuestion(club, season, records.length).then((confirmed) => {
-        if (!confirmed) return;
+
+      void (async () => {
+        const declinedStorageKey =
+          "ticket-frame.declined-discovered-season-tickets.v1";
+
+        let declined = new Set<string>();
+
+        try {
+          const raw =
+            await AsyncStorage.getItem(declinedStorageKey);
+
+          const parsed = raw ? JSON.parse(raw) : [];
+
+          if (Array.isArray(parsed)) {
+            declined = new Set(
+              parsed.filter(
+                (value): value is string =>
+                  typeof value === "string",
+              ),
+            );
+          }
+        } catch {
+          // Never let preference storage break History.
+        }
+
+        if (declined.has(key)) return;
+
+        const confirmed =
+          await askSeasonTicketQuestion(
+            club,
+            season,
+            records.length,
+          );
+
+        if (!confirmed) {
+          declined.add(key);
+
+          try {
+            await AsyncStorage.setItem(
+              declinedStorageKey,
+              JSON.stringify([...declined]),
+            );
+          } catch {
+            // The current session remains suppressed by the prompted ref.
+          }
+
+          return;
+        }
         setSeasonTicketProfiles((current) =>
           addSeasonTicketProfile(current, {
             id: newProfileId(),
@@ -5072,7 +5960,7 @@ confidence: ${recognition.confidence}%`,
               : record,
           ),
         );
-      });
+      })();
     }, 500);
     return () => clearTimeout(timer);
   }, [
@@ -5430,31 +6318,156 @@ confidence: ${recognition.confidence}%`,
     });
   }
 
-  function importTicket() {
-    void (async () => {
-      if (!(await ensureFavouriteClubConfirmed())) return;
+  async function openWalletImport() {
+    if (!(await ensureFavouriteClubConfirmed())) return;
+
+    const setup = await AsyncStorage.getItem(
+      WALLET_IMPORT_SETUP_KEY,
+    );
+
+    const photoMode = await AsyncStorage.getItem(
+      WALLET_PHOTOS_MODE_KEY,
+    );
+
+    const hideInstructions = await AsyncStorage.getItem(
+      WALLET_HIDE_INSTRUCTIONS_KEY,
+    );
+
+    const setupComplete = setup === "enabled";
+    const instructionsHidden = hideInstructions === "1";
+
+    setWalletImportSetupComplete(setupComplete);
+    setWalletImportUnderstood(setupComplete);
+    setWalletSaveCrops(photoMode !== "never");
+    setWalletHideInstructions(instructionsHidden);
+    setWalletCaptureStartedAt(null);
+    setWalletFinishing(false);
+
+    if (instructionsHidden) return;
+
+    setWalletImportOpen(true);
+  }
+
+  async function enableWalletImport() {
+    if (!walletImportUnderstood) return;
+
+    await AsyncStorage.setItem(
+      WALLET_IMPORT_SETUP_KEY,
+      "enabled",
+    );
+
+    if (walletSaveCrops) {
+      await AsyncStorage.setItem(
+        WALLET_PHOTOS_MODE_KEY,
+        "album",
+      );
+
+      await AsyncStorage.setItem(
+        WALLET_PHOTOS_ALBUM_TITLE_KEY,
+        "Ticket Frame",
+      );
+
+      // Resolve/create the Ticket Frame album afresh.
+      await AsyncStorage.removeItem(
+        WALLET_PHOTOS_ALBUM_ID_KEY,
+      );
+    } else {
+      await AsyncStorage.setItem(
+        WALLET_PHOTOS_MODE_KEY,
+        "never",
+      );
+    }
+
+    setWalletImportSetupComplete(true);
+  }
+
+  async function startWalletCapture() {
+    const permission =
+      await MediaLibrary.requestPermissionsAsync();
+
+    if (!permission.granted) {
+      Alert.alert(
+        "Photos Access Required",
+        "Ticket Frame needs Photos access so it can find the screenshots you take during this Wallet import session.",
+      );
+      return;
+    }
+
+    // Capture the exact beginning of this import session.
+    setWalletCaptureStartedAt(Date.now());
+  }
+
+  async function finishWalletCapture() {
+    if (
+      walletCaptureStartedAt == null ||
+      walletFinishing
+    ) {
+      return;
+    }
+
+    setWalletFinishing(true);
+
+    try {
+      const result = await queueWalletScreenshotsSince(
+        walletCaptureStartedAt,
+      );
+
+      if (
+        result.queued === 0 &&
+        result.skipped === 0
+      ) {
+        Alert.alert(
+          "No Screenshots Found",
+          "No new screenshots were found for this Wallet import session. Keep the session open, take the Wallet screenshots, then press Finish Import again.",
+        );
+        return;
+      }
+
+      // This is the ONLY point at which screenshot processing starts.
+      walletScreenshotImportRequestedRef.current = true;
+
+      setWalletCaptureStartedAt(null);
+      setWalletImportOpen(false);
+
+      await importPendingSharedScreenshots();
+    } catch (error) {
+      console.warn(
+        "[wallet-import] unable to finish screenshot session",
+        error,
+      );
 
       Alert.alert(
-        "Add a Ticket",
-        "iOS doesn't let apps read Apple Wallet directly, so:\n\n1. Open the expired ticket in Wallet\n2. Take a screenshot of it\n3. Choose an option below and select the screenshots\n\nEach photo is cropped by you, then recognised — you confirm the match before it's saved.",
-        [
-          {
-            text: "Cancel",
-            style: "cancel",
-          },
-          {
-            text: "Files",
-            onPress: () =>
-              setTimeout(() => void chooseTicket(), 350),
-          },
-          {
-            text: "Add Photo",
-            onPress: () =>
-              setTimeout(() => void choosePhoto(), 350),
-          },
-        ],
+        "Wallet Import",
+        "Ticket Frame could not collect the Wallet screenshots. Your screenshots remain safely in Photos.",
       );
-    })();
+    } finally {
+      setWalletFinishing(false);
+    }
+  }
+
+  function importTicket() {
+    Alert.alert(
+      "Add New Ticket",
+      "Choose how you want to add your ticket.",
+      [
+        {
+          text: "Add Photo",
+          onPress: () => void choosePhoto(),
+        },
+        {
+          text: "Add File or PDF",
+          onPress: () => void chooseTicket(),
+        },
+        {
+          text: "Add from Apple Wallet",
+          onPress: () => void openWalletImport(),
+        },
+        {
+          text: "Cancel",
+          style: "cancel",
+        },
+      ],
+    );
   }
 
   function askSeasonTicketQuestion(
@@ -6886,7 +7899,11 @@ Accept only if these photos are from this match. Choose Another Match for anothe
 
   async function chooseTicket() {
     const result = await DocumentPicker.getDocumentAsync({
-      type: ["application/vnd.apple.pkpass", "image/*"],
+      type: [
+        "application/pdf",
+        "application/vnd.apple.pkpass",
+        "image/*",
+      ],
       copyToCacheDirectory: true,
       multiple: true,
     });
@@ -6941,10 +7958,86 @@ Accept only if these photos are from this match. Choose Another Match for anothe
   const osQueueRef = useRef<string[]>([]);
   const osQueueTicketsRef = useRef<Map<string, SeasonTicket>>(new Map());
   const osCaptureRef = useRef<View>(null);
+  const walletCaptureRef = useRef<View>(null);
   const osBusyRef = useRef(false);
+
   const [osCaptureTicket, setOsCaptureTicket] = useState<SeasonTicket | null>(
     null,
   );
+
+  const [walletCaptureEvidence, setWalletCaptureEvidence] =
+    useState<WalletPassEvidence | null>(null);
+
+  const [walletCaptureArtworkUri, setWalletCaptureArtworkUri] =
+    useState<string | null>(null);
+
+  async function captureWalletTicketCard(
+    ticket: SeasonTicket,
+    evidence: WalletPassEvidence,
+    artworkUri?: string,
+  ): Promise<string | null> {
+    // The Wallet source image remains the OCR/evidence image.
+    // This capture is only the complete visible Ticket Frame ticket.
+    //
+    // Wallet review is interactive and must take priority over the
+    // background old-school render queue. Cancel queued background
+    // captures; any currently-running capture is allowed to finish.
+    osQueueRef.current = [];
+    osQueueTicketsRef.current.clear();
+
+    console.log("[wallet-ticket-render] priority capture requested");
+
+    while (osBusyRef.current) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    osBusyRef.current = true;
+
+    try {
+      setWalletCaptureEvidence(evidence);
+      setWalletCaptureArtworkUri(artworkUri ?? null);
+
+      // Allow WalletPassCaptureHost to render.
+      await new Promise((resolve) => setTimeout(resolve, 650));
+
+      if (!walletCaptureRef.current) {
+        console.log("[wallet-ticket-render] capture ref unavailable");
+        return null;
+      }
+
+      const tmpUri = await captureRef(walletCaptureRef.current, {
+        format: "png",
+        quality: 1,
+        result: "tmpfile",
+      });
+
+      const permanentUri = await permanentTicketUri(
+        tmpUri,
+        `${ticket.fingerprint}-wallet-card`,
+        "image/png",
+      );
+
+      console.log(
+        `[wallet-ticket-render]
+saved: ${permanentUri}
+match: ${ticket.name ?? "-"}
+date: ${ticket.matchDate ?? "-"}
+kickoff: ${ticket.kickoffTime ?? "-"}
+block: ${ticket.details?.block ?? "-"}
+row: ${ticket.details?.row ?? "-"}
+seat: ${ticket.details?.seat ?? "-"}`,
+      );
+
+      return permanentUri;
+    } catch (error) {
+      console.log("[wallet-ticket-render] failed", error);
+      return null;
+    } finally {
+      setWalletCaptureEvidence(null);
+      setWalletCaptureArtworkUri(null);
+      osBusyRef.current = false;
+    }
+  }
 
   const processOldSchoolQueue = useCallback(async () => {
     if (osBusyRef.current) return;
@@ -11527,6 +12620,9 @@ Choose one team. Its colours automatically control the Club Colours frame style.
             style={{ backgroundColor: "#f5f1e8" }}
             contentContainerStyle={[s.page, { paddingBottom: 120 }]}
             onScroll={(event) => {
+              mediaDragScrollOffsetRef.current =
+                event.nativeEvent.contentOffset.y;
+
               if (
                 (historyView === "matches" || historyView === "home") &&
                 !selectedHistoryRecordId
@@ -11534,6 +12630,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                 historyScrollOffsetRef.current =
                   event.nativeEvent.contentOffset.y;
               }
+
             }}
             scrollEventThrottle={16}
             onScrollBeginDrag={() => {
@@ -12780,6 +13877,84 @@ Choose one team. Its colours automatically control the Club Colours frame style.
         );
       };
 
+      const renameMediaLocation = (
+        assignment: MatchdayMediaAssignment,
+        keys: string[],
+      ) => {
+        if (
+          assignment.placeName === "Unassigned media" ||
+          !keys.length
+        ) {
+          return;
+        }
+
+        Alert.prompt(
+          "Rename media location",
+          "Enter the name you want shown for this Match Memory location.",
+          [
+            { text: "Cancel", style: "cancel" },
+            {
+              text: "Save",
+              onPress: (value?: string) => {
+                const newName = value?.trim();
+                if (!newName || newName === assignment.placeName) return;
+
+                const oldName = assignment.placeName;
+
+                setMatchdayMediaAssignments((current) => {
+                  const next = { ...current };
+
+                  keys.forEach((key) => {
+                    const existing = next[key];
+
+                    next[key] = {
+                      ...(existing ?? assignment),
+                      placeName: newName,
+                      source: "manual",
+                    };
+                  });
+
+                  return next;
+                });
+
+                setMatchdayCustomLocations((current) => ({
+                  ...current,
+                  [selectedHistoryRecord.id]: (
+                    current[selectedHistoryRecord.id] ?? []
+                  ).map((location) =>
+                    location.name === oldName &&
+                    location.kind === assignment.placeKind
+                      ? { ...location, name: newName }
+                      : location,
+                  ),
+                }));
+
+                if (assignment.venueVisitId) {
+                  setMatchdayExperiences((current) =>
+                    current.map((experience) => ({
+                      ...experience,
+                      venues: experience.venues.map((visit) =>
+                        visit.id === assignment.venueVisitId
+                          ? {
+                              ...visit,
+                              venueName: newName,
+                              visitedAt:
+                                visit.visitedAt,
+                            }
+                          : visit,
+                      ),
+                      updatedAt: new Date().toISOString(),
+                    })),
+                  );
+                }
+              },
+            },
+          ],
+          "plain-text",
+          assignment.placeName,
+        );
+      };
+
       const moveMediaGroup = (keys: string[]) => {
         const apply = (assignment: MatchdayMediaAssignment) =>
           setMatchdayMediaAssignments((current) => {
@@ -12869,6 +14044,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
       };
 
       const closeMatchMemory = () => {
+        stopHistoryMediaAutoScroll();
         setMediaEditMode(false);
         setMediaMoveArmedKey(null);
         setSelectedMatchVideoUri(null);
@@ -13020,8 +14196,76 @@ Choose one team. Its colours automatically control the Club Colours frame style.
         });
       };
 
-      const beginHistoryPhotoDrag = () => {
+      const stopHistoryMediaAutoScroll = () => {
+        mediaDragAutoScrollDirectionRef.current = 0;
+
+        if (mediaDragAutoScrollTimerRef.current !== null) {
+          clearInterval(mediaDragAutoScrollTimerRef.current);
+          mediaDragAutoScrollTimerRef.current = null;
+        }
+      };
+
+      const updateHistoryMediaAutoScroll = (
+        absoluteY: number,
+      ) => {
+        const windowHeight = Dimensions.get("window").height;
+        const edgeSize = 135;
+
+        const direction: -1 | 0 | 1 =
+          absoluteY <= edgeSize
+            ? -1
+            : absoluteY >= windowHeight - edgeSize
+              ? 1
+              : 0;
+
+        if (
+          direction ===
+          mediaDragAutoScrollDirectionRef.current
+        ) {
+          return;
+        }
+
+        stopHistoryMediaAutoScroll();
+
+        if (direction === 0) return;
+
+        mediaDragAutoScrollDirectionRef.current = direction;
+
+        mediaDragAutoScrollTimerRef.current = setInterval(() => {
+          const nextOffset = Math.max(
+            0,
+            mediaDragScrollOffsetRef.current +
+              direction * 22,
+          );
+
+          mediaDragScrollOffsetRef.current = nextOffset;
+
+          historyScrollRef.current?.scrollTo({
+            y: nextOffset,
+            animated: false,
+          });
+
+          requestAnimationFrame(refreshMediaDropZones);
+        }, 32);
+      };
+
+      const toggleMediaPhotoSelection = (mediaKey: string) => {
         if (!mediaEditMode) return;
+
+        setMediaSelectedKeys((current) =>
+          current.includes(mediaKey)
+            ? current.filter((key) => key !== mediaKey)
+            : [...current, mediaKey],
+        );
+      };
+
+      const beginHistoryPhotoDrag = (mediaKey: string) => {
+        if (!mediaEditMode) return;
+
+        setMediaSelectedKeys((current) =>
+          current.includes(mediaKey) ? current : [...current, mediaKey],
+        );
+
         refreshMediaDropZones();
       };
 
@@ -13030,7 +14274,11 @@ Choose one team. Its colours automatically control the Club Colours frame style.
         absoluteX: number,
         absoluteY: number,
       ) => {
+        stopHistoryMediaAutoScroll();
+
         if (!mediaEditMode) return;
+
+        refreshMediaDropZones();
 
         const target = Object.values(mediaDropZonesRef.current).find(
           (zone) =>
@@ -13042,22 +14290,124 @@ Choose one team. Its colours automatically control the Club Colours frame style.
 
         if (!target) return;
 
-        setMatchdayMediaAssignments((current) => ({
-          ...current,
-          [mediaKey]: target.assignment,
-        }));
+        const movingKeys = mediaSelectedKeys.includes(mediaKey)
+          ? mediaSelectedKeys
+          : [mediaKey];
+
+        setMatchdayMediaAssignments((current) => {
+          const next = { ...current };
+
+          for (const key of movingKeys) {
+            next[key] = target.assignment;
+          }
+
+          return next;
+        });
+
+        // Successful drop completes the move and clears the blue/highlighted
+        // selection. An invalid drop returns earlier above and keeps selection.
+        setMediaSelectedKeys([]);
         setMediaMoveArmedKey(null);
       };
+
+      const deleteSelectedHistoryPhotos = () => {
+        if (!selectedHistoryRecord || mediaSelectedKeys.length === 0) return;
+
+        const recordId = selectedHistoryRecord.id;
+        const savedPrefix = `${recordId}|uri:`;
+        const assetPrefix = `${recordId}|asset:`;
+
+        const savedUris = mediaSelectedKeys
+          .filter((key) => key.startsWith(savedPrefix))
+          .map((key) => key.slice(savedPrefix.length));
+
+        const selectedAssetIds = new Set(
+          mediaSelectedKeys
+            .filter((key) => key.startsWith(assetPrefix))
+            .map((key) => key.slice(assetPrefix.length)),
+        );
+
+        const selectedCount = savedUris.length + selectedAssetIds.size;
+
+        if (!selectedCount) return;
+
+        Alert.alert(
+          `Delete ${selectedCount} selected photo${selectedCount === 1 ? "" : "s"}?`,
+          "The selected Match Memory copies will be removed. Originals in Apple Photos will not be deleted.",
+          [
+            { text: "Cancel", style: "cancel" },
+            {
+              text: "Delete",
+              style: "destructive",
+              onPress: () => {
+                if (savedUris.length) {
+                  const removeUris = new Set(savedUris);
+
+                  setMatchPhotos((current) => {
+                    const next = {
+                      ...current,
+                      [recordId]: (current[recordId] ?? []).filter(
+                        (uri) => !removeUris.has(uri),
+                      ),
+                    };
+
+                    persistMatchPhotos(next);
+                    return next;
+                  });
+
+                  for (const uri of savedUris) {
+                    if (
+                      uri.startsWith(
+                        FileSystem.documentDirectory ?? "__never__",
+                      )
+                    ) {
+                      void FileSystem.deleteAsync(uri, {
+                        idempotent: true,
+                      });
+                    }
+                  }
+                }
+
+                if (selectedAssetIds.size) {
+                  const selectedReferences = (
+                    resolvedMatchMedia[recordId] ?? []
+                  ).filter((reference) =>
+                    selectedAssetIds.has(reference.assetId),
+                  );
+
+                  for (const reference of selectedReferences) {
+                    removeMatchMediaReference(recordId, reference);
+                  }
+                }
+
+                setMatchdayMediaAssignments((current) => {
+                  const next = { ...current };
+
+                  for (const key of mediaSelectedKeys) {
+                    delete next[key];
+                  }
+
+                  return next;
+                });
+
+                setMediaSelectedKeys([]);
+                setMediaMoveArmedKey(null);
+              },
+            },
+          ],
+        );
+      };
+
       return hxShell(
         <>
           {hxBackButton(closeMatchMemory, "Back to matches")}
           <Text style={[s.title, { color: "#17221c", fontSize: 26 }]}>Match Memory</Text>
-          <Text style={[s.clubName, { marginBottom: 4 }]}> 
+          <Text style={[s.clubName, { marginBottom: 4 }]}>
             {(selectedFixture?.homeAway ?? selectedHistoryRecord.homeAway) === "home"
               ? `${selectedHistoryRecord.club} v ${selectedHistoryRecord.opponent}`
               : `${selectedHistoryRecord.opponent} v ${selectedHistoryRecord.club}`}
           </Text>
-          <Text style={[s.helpText, { marginBottom: 14 }]}> 
+          <Text style={[s.helpText, { marginBottom: 14 }]}>
             {formatHistoryDate(selectedHistoryRecord.matchDate)} · {selectedHistoryRecord.ground ?? "Stadium not set"}
           </Text>
           {(() => {
@@ -13078,7 +14428,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
           selectedFixture.homeShootoutScore != null &&
           selectedFixture.awayShootoutScore != null ? (
             <>
-              <Text style={[s.helpText, { marginTop: 0, marginBottom: 4, fontWeight: "900" }]}> 
+              <Text style={[s.helpText, { marginTop: 0, marginBottom: 4, fontWeight: "900" }]}>
                 {selectedFixture.shootoutWinner === "home"
                   ? (selectedFixture.homeAway === "home" ? selectedHistoryRecord.club : selectedHistoryRecord.opponent)
                   : (selectedFixture.homeAway === "away" ? selectedHistoryRecord.club : selectedHistoryRecord.opponent)} won {selectedFixture.homeShootoutScore}–{selectedFixture.awayShootoutScore} on penalties
@@ -13152,9 +14502,33 @@ Choose one team. Its colours automatically control the Club Colours frame style.
             <View style={[s.collectionCard, { marginBottom: 14, flexDirection: "column", alignItems: "stretch", backgroundColor: "#fffdf8" }]}> 
               <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 4 }}>
                 <Text style={[s.hxSectionTitle, { marginTop: 0, marginBottom: 0, flex: 1 }]}>MEDIA LOCATIONS</Text>
-                <Pressable onPress={() => { setMediaEditMode((current) => !current); setMediaMoveArmedKey(null); }} style={{ padding: 7 }} accessibilityLabel="Edit photo and video locations">
+                <Pressable
+                  onPress={() => {
+                    setMediaEditMode((current) => {
+                      const next = !current;
+                      if (!next) setMediaSelectedKeys([]);
+                      return next;
+                    });
+                    setMediaMoveArmedKey(null);
+                  }}
+                  style={{ padding: 7 }}
+                  accessibilityLabel="Edit photo and video locations"
+                >
                   <Text style={{ fontWeight: "900", color: visibleInkOnCream(favouriteClub.primary) }}>{mediaEditMode ? "DONE" : "EDIT"}</Text>
                 </Pressable>
+                {mediaEditMode && mediaSelectedKeys.length > 0 ? (
+                  <Pressable
+                    onPress={deleteSelectedHistoryPhotos}
+                    style={{ padding: 7 }}
+                    accessibilityLabel="Delete selected photos"
+                  >
+                    <Ionicons
+                      name="trash-outline"
+                      size={24}
+                      color={favouriteClub.primary}
+                    />
+                  </Pressable>
+                ) : null}
                 <Pressable onPress={createMediaLocation} style={{ padding: 7 }} accessibilityLabel="Add a media location">
                   <Ionicons name="add-circle-outline" size={25} color={favouriteClub.primary} />
                 </Pressable>
@@ -13172,7 +14546,9 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                       },
                     ]}
                   >
-                    LONG PRESS A PHOTO TO ASSIGN A LOCATION OR MOVE IT
+                    {mediaSelectedKeys.length
+                      ? `${mediaSelectedKeys.length} PHOTO${mediaSelectedKeys.length === 1 ? "" : "S"} SELECTED · DRAG ANY SELECTED PHOTO TO MOVE THEM TOGETHER`
+                      : "TAP PHOTOS TO SELECT · THEN DRAG OR DELETE"}
                   </Text>
                 </>
               ) : null}
@@ -13252,35 +14628,115 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                         marginBottom: 8,
                       }}
                     >
-                      {clusterPhotos.slice(0, 6).map((media) => (
-                        <Pressable
-                          key={media.assetId}
-                          onPress={() => {
-                            setEnlargedMatchPhotoItems(
-                              clusterPhotos.map((item) => ({
-                                key: `asset:${item.assetId}`,
-                                uri: item.uri,
-                              })),
-                            );
-                            const targetIndex = clusterPhotos.findIndex(
-                              (item) => item.assetId === media.assetId,
-                            );
-                            setEnlargedMatchPhotoIndex(Math.max(0, targetIndex));
-                            setEnlargedMatchPhotoUri(media.uri);
-                            void openReferencedMatchPhoto(
-                              selectedHistoryRecord.id,
-                              media,
-                            );
-                          }}
-                          style={{ width: "32.5%" }}
-                        >
-                          <Image
-                            alt="Unassigned matchday photo"
-                            source={{ uri: media.uri }}
-                            style={{ width: "100%", aspectRatio: 1, borderRadius: 6 }}
-                          />
-                        </Pressable>
-                      ))}
+                      {clusterPhotos.slice(0, 6).map((media) => {
+                        const mediaKey =
+                          `${selectedHistoryRecord.id}|asset:${media.assetId}`;
+
+                        return (
+                          <DraggableHistoryPhoto
+                            key={media.assetId}
+                            mediaKey={mediaKey}
+                            editMode={mediaEditMode}
+                            moveArmed={mediaSelectedKeys.includes(
+                              mediaKey,
+                            )}
+                            onDragStart={beginHistoryPhotoDrag}
+                            onDragMove={
+                              updateHistoryMediaAutoScroll
+                            }
+                            onDragFinish={
+                              stopHistoryMediaAutoScroll
+                            }
+                            onDrop={dropHistoryPhoto}
+                          >
+                            <Pressable
+                              onPress={() => {
+                                if (mediaEditMode) {
+                                  toggleMediaPhotoSelection(
+                                    mediaKey,
+                                  );
+                                  return;
+                                }
+
+                                setEnlargedMatchPhotoItems(
+                                  clusterPhotos.map((item) => ({
+                                    key: `asset:${item.assetId}`,
+                                    uri: item.uri,
+                                  })),
+                                );
+
+                                const targetIndex =
+                                  clusterPhotos.findIndex(
+                                    (item) =>
+                                      item.assetId ===
+                                      media.assetId,
+                                  );
+
+                                setEnlargedMatchPhotoIndex(
+                                  Math.max(0, targetIndex),
+                                );
+                                setEnlargedMatchPhotoUri(media.uri);
+
+                                void openReferencedMatchPhoto(
+                                  selectedHistoryRecord.id,
+                                  media,
+                                );
+                              }}
+                              style={{
+                                width: "100%",
+                                position: "relative",
+                              }}
+                            >
+                              <Image
+                                alt="Unassigned matchday photo"
+                                source={{ uri: media.uri }}
+                                style={{
+                                  width: "100%",
+                                  aspectRatio: 1,
+                                  borderRadius: 6,
+                                  borderWidth:
+                                    mediaSelectedKeys.includes(
+                                      mediaKey,
+                                    )
+                                      ? 4
+                                      : 0,
+                                  borderColor:
+                                    favouriteClub.primary,
+                                }}
+                              />
+
+                              {mediaEditMode &&
+                              mediaSelectedKeys.includes(
+                                mediaKey,
+                              ) ? (
+                                <View
+                                  pointerEvents="none"
+                                  style={{
+                                    position: "absolute",
+                                    top: 5,
+                                    right: 5,
+                                    width: 24,
+                                    height: 24,
+                                    borderRadius: 12,
+                                    backgroundColor:
+                                      favouriteClub.primary,
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                  }}
+                                >
+                                  <Ionicons
+                                    name="checkmark"
+                                    size={17}
+                                    color={readableTextColour(
+                                      favouriteClub.primary,
+                                    )}
+                                  />
+                                </View>
+                              ) : null}
+                            </Pressable>
+                          </DraggableHistoryPhoto>
+                        );
+                      })}
                     </View>
 
                     <Text style={[s.helpText, { marginBottom: 8 }]}>
@@ -13492,15 +14948,48 @@ Choose one team. Its colours automatically control the Club Colours frame style.
 
 
 
+                  {mediaEditMode &&
+                  group.assignment.placeName !== "Unassigned media" ? (
+                    <Pressable
+                      onPress={() =>
+                        renameMediaLocation(
+                          group.assignment,
+                          group.keys,
+                        )
+                      }
+                      style={{
+                        paddingVertical: 6,
+                        paddingLeft: 10,
+                      }}
+                      accessibilityLabel={`Rename location ${group.assignment.placeName}`}
+                    >
+                      <Text
+                        style={{
+                          fontWeight: "700",
+                          color: visibleInkOnCream(
+                            favouriteClub.primary,
+                          ),
+                        }}
+                      >
+                        RENAME
+                      </Text>
+                    </Pressable>
+                  ) : null}
+
                   <Pressable
                     onPress={() => moveMediaGroup(group.keys)}
-                    style={{ paddingVertical: 6, paddingLeft: 10 }}
+                    style={{
+                      paddingVertical: 6,
+                      paddingLeft: 10,
+                    }}
                     accessibilityLabel={`Change location for ${group.assignment.placeName}`}
                   >
                     <Text
                       style={{
                         fontWeight: "900",
-                        color: visibleInkOnCream(favouriteClub.primary),
+                        color: visibleInkOnCream(
+                          favouriteClub.primary,
+                        ),
                       }}
                     >
                       CHANGE
@@ -13539,14 +15028,16 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                           key={`${uri}-${index}`}
                           mediaKey={mediaKey}
                           editMode={mediaEditMode}
-                          moveArmed={mediaMoveArmedKey === mediaKey}
+                          moveArmed={mediaSelectedKeys.includes(mediaKey)}
                           onDragStart={beginHistoryPhotoDrag}
+                          onDragMove={updateHistoryMediaAutoScroll}
+                          onDragFinish={stopHistoryMediaAutoScroll}
                           onDrop={dropHistoryPhoto}
                         >
                           <Pressable
                           onPress={() =>
                             mediaEditMode
-                              ? undefined
+                              ? toggleMediaPhotoSelection(mediaKey)
                               : openSavedMatchPhoto(uri)
                           }
                           onLongPress={() => {
@@ -13593,7 +15084,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                           style={({ pressed }) => ({
                             width: "100%",
                             opacity: pressed ? 0.6 : 1,
-                            borderWidth: mediaMoveArmedKey === mediaKey ? 4 : 0,
+                            borderWidth: mediaSelectedKeys.includes(mediaKey) ? 4 : 0,
                             borderColor: favouriteClub.primary,
                           })}
                         >
@@ -13615,14 +15106,16 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                           key={media.assetId}
                           mediaKey={mediaKey}
                           editMode={mediaEditMode}
-                          moveArmed={mediaMoveArmedKey === mediaKey}
+                          moveArmed={mediaSelectedKeys.includes(mediaKey)}
                           onDragStart={beginHistoryPhotoDrag}
+                          onDragMove={updateHistoryMediaAutoScroll}
+                          onDragFinish={stopHistoryMediaAutoScroll}
                           onDrop={dropHistoryPhoto}
                         >
                           <Pressable
                           onPress={() =>
                             mediaEditMode
-                              ? undefined
+                              ? toggleMediaPhotoSelection(mediaKey)
                               : (() => {
                                   const galleryItems: MatchPhotoViewerItem[] = [
                                     ...groupSavedPhotos.map((uri) => ({
@@ -13682,7 +15175,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                           style={({ pressed }) => ({
                             width: "100%",
                             opacity: pressed ? 0.6 : 1,
-                            borderWidth: mediaMoveArmedKey === mediaKey ? 4 : 0,
+                            borderWidth: mediaSelectedKeys.includes(mediaKey) ? 4 : 0,
                             borderColor: favouriteClub.primary,
                           })}
                         >
@@ -17050,10 +18543,19 @@ const manualCompetitionFixtures = draftMatch.competition
     />
   );
 
+  const walletPassHost = (
+    <WalletPassCaptureHost
+      captureRef={walletCaptureRef}
+      evidence={walletCaptureEvidence}
+      artworkUri={walletCaptureArtworkUri}
+    />
+  );
+
   if (finished && !homeFrameFocused)
     return (
       <>
       {oldSchoolHost}
+      {walletPassHost}
       {exportJob ? (
         <SeasonFrameExport
           captureRef={exportFrameRef}
@@ -17693,7 +19195,418 @@ const manualCompetitionFixtures = draftMatch.competition
     );
   return (
     <SafeAreaView style={[s.safe, { backgroundColor: "#f5f1e8" }]} {...mainTabSwipeProps}>
+
+      <Modal
+        visible={walletImportOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          if (!walletFinishing) {
+            setWalletImportOpen(false);
+          }
+        }}
+      >
+        <View
+          style={{
+            flex: 1,
+            backgroundColor: "rgba(0,0,0,0.55)",
+            justifyContent: "center",
+            padding: 22,
+          }}
+        >
+          <View
+            style={{
+              backgroundColor: "#f5f1e8",
+              borderRadius: 22,
+              padding: 22,
+              gap: 16,
+              maxWidth: 520,
+              width: "100%",
+              alignSelf: "center",
+            }}
+          >
+            {!walletImportSetupComplete ? (
+              <>
+                <Text
+                  style={{
+                    fontSize: 24,
+                    fontWeight: "800",
+                  }}
+                >
+                  Set Up Wallet Import
+                </Text>
+
+                <Text
+                  style={{
+                    fontSize: 16,
+                    lineHeight: 23,
+                  }}
+                >
+                  Ticket Frame can collect the Apple Wallet screenshots
+                  you take during an import session. Nothing is imported
+                  until you return here and press Finish Import.
+                </Text>
+
+                <Pressable
+                  onPress={() =>
+                    setWalletImportUnderstood(
+                      (value) => !value,
+                    )
+                  }
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "flex-start",
+                    gap: 12,
+                  }}
+                >
+                  <View
+                    style={{
+                      width: 25,
+                      height: 25,
+                      borderWidth: 2,
+                      borderColor: "#111",
+                      borderRadius: 5,
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    {walletImportUnderstood ? (
+                      <Ionicons
+                        name="checkmark"
+                        size={20}
+                        color="#111"
+                      />
+                    ) : null}
+                  </View>
+
+                  <Text
+                    style={{
+                      flex: 1,
+                      fontSize: 16,
+                      lineHeight: 22,
+                    }}
+                  >
+                    I understand and I’m happy to enable Wallet Import
+                  </Text>
+                </Pressable>
+
+                <Pressable
+                  onPress={() =>
+                    setWalletSaveCrops(
+                      (value) => !value,
+                    )
+                  }
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "flex-start",
+                    gap: 12,
+                  }}
+                >
+                  <View
+                    style={{
+                      width: 25,
+                      height: 25,
+                      borderWidth: 2,
+                      borderColor: "#111",
+                      borderRadius: 5,
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    {walletSaveCrops ? (
+                      <Ionicons
+                        name="checkmark"
+                        size={20}
+                        color="#111"
+                      />
+                    ) : null}
+                  </View>
+
+                  <Text
+                    style={{
+                      flex: 1,
+                      fontSize: 16,
+                      lineHeight: 22,
+                    }}
+                  >
+                    Save clean cropped tickets to a “Ticket Frame”
+                    album in Photos
+                  </Text>
+                </Pressable>
+
+                <Pressable
+                  disabled={!walletImportUnderstood}
+                  onPress={() =>
+                    void enableWalletImport()
+                  }
+                  style={{
+                    paddingVertical: 15,
+                    borderRadius: 12,
+                    alignItems: "center",
+                    backgroundColor:
+                      walletImportUnderstood
+                        ? "#111"
+                        : "#aaa",
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: "#fff",
+                      fontSize: 17,
+                      fontWeight: "800",
+                    }}
+                  >
+                    Enable Wallet Import
+                  </Text>
+                </Pressable>
+
+                <Pressable
+                  onPress={() =>
+                    setWalletImportOpen(false)
+                  }
+                  style={{
+                    paddingVertical: 10,
+                    alignItems: "center",
+                  }}
+                >
+                  <Text
+                    style={{
+                      fontSize: 16,
+                      fontWeight: "600",
+                    }}
+                  >
+                    Cancel
+                  </Text>
+                </Pressable>
+              </>
+            ) : walletCaptureStartedAt == null ? (
+              <>
+                <Text
+                  style={{
+                    fontSize: 18,
+                    fontWeight: "600",
+                  }}
+                >
+                  Add from Apple Wallet
+                </Text>
+
+                <Text
+                  style={{
+                    fontSize: 15,
+                    lineHeight: 21,
+                    fontWeight: "400",
+                  }}
+                >
+                  Open Wallet on your phone and open the ticket.
+                  {"\n\n"}
+                  Take a screenshot, tap Share, then choose Football Ticket Frame.
+                  {"\n\n"}
+                  Choose Use this ticket, then Add More for another ticket
+                  or Finished when you’re done.
+                  {"\n\n"}
+                  After Ticket Frame closes, tap Done on Apple’s screenshot
+                  screen to return to Wallet.
+                </Text>
+
+                <Pressable
+                  onPress={() =>
+                    setWalletHideInstructions((current) => !current)
+                  }
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 10,
+                    paddingVertical: 10,
+                  }}
+                >
+                  <Text
+                    style={{
+                      fontSize: 22,
+                      lineHeight: 24,
+                    }}
+                  >
+                    {walletHideInstructions ? "☑" : "☐"}
+                  </Text>
+
+                  <Text
+                    style={{
+                      fontSize: 15,
+                      fontWeight: "500",
+                    }}
+                  >
+                    Don’t show this again
+                  </Text>
+                </Pressable>
+
+                <Pressable
+                  onPress={() => {
+                    void (async () => {
+                      if (walletHideInstructions) {
+                        await AsyncStorage.setItem(
+                          WALLET_HIDE_INSTRUCTIONS_KEY,
+                          "1",
+                        );
+                      } else {
+                        await AsyncStorage.removeItem(
+                          WALLET_HIDE_INSTRUCTIONS_KEY,
+                        );
+                      }
+
+                      setWalletImportOpen(false);
+                    })();
+                  }}
+                  style={{
+                    paddingVertical: 13,
+                    borderRadius: 12,
+                    alignItems: "center",
+                    backgroundColor: "#111",
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: "#fff",
+                      fontSize: 16,
+                      fontWeight: "600",
+                    }}
+                  >
+                    Got It
+                  </Text>
+                </Pressable>
+
+                <Pressable
+                  onPress={() => setWalletImportOpen(false)}
+                  style={{
+                    paddingVertical: 8,
+                    alignItems: "center",
+                  }}
+                >
+                  <Text
+                    style={{
+                      fontSize: 15,
+                      fontWeight: "400",
+                    }}
+                  >
+                    Cancel
+                  </Text>
+                </Pressable>
+              </>
+            ) : (
+              <>
+                <Text
+                  style={{
+                    fontSize: 24,
+                    fontWeight: "800",
+                  }}
+                >
+                  Wallet Import Running
+                </Text>
+
+                <Text
+                  style={{
+                    fontSize: 16,
+                    lineHeight: 23,
+                  }}
+                >
+                  Open Apple Wallet and take a screenshot of one ticket.
+                  Then return to Ticket Frame.
+                </Text>
+
+                <Text
+                  style={{
+                    fontSize: 16,
+                    lineHeight: 23,
+                    fontWeight: "700",
+                  }}
+                >
+                  Choose More if you have another ticket to capture.
+                  Choose Finished when you have captured them all.
+                </Text>
+
+                <Pressable
+                  disabled={walletFinishing}
+                  onPress={() => {
+                    Alert.alert(
+                      "Capture Another Ticket",
+                      "Return to Apple Wallet, show the next ticket and take another screenshot. Then come back to Ticket Frame and choose More or Finished.",
+                    );
+                  }}
+                  style={{
+                    paddingVertical: 15,
+                    borderRadius: 12,
+                    alignItems: "center",
+                    borderWidth: 2,
+                    borderColor: "#111",
+                    backgroundColor: "#f5f1e8",
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: "#111",
+                      fontSize: 17,
+                      fontWeight: "800",
+                    }}
+                  >
+                    More
+                  </Text>
+                </Pressable>
+
+                <Pressable
+                  disabled={walletFinishing}
+                  onPress={() =>
+                    void finishWalletCapture()
+                  }
+                  style={{
+                    paddingVertical: 15,
+                    borderRadius: 12,
+                    alignItems: "center",
+                    backgroundColor:
+                      walletFinishing
+                        ? "#777"
+                        : "#111",
+                  }}
+                >
+                  {walletFinishing ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text
+                      style={{
+                        color: "#fff",
+                        fontSize: 17,
+                        fontWeight: "800",
+                      }}
+                    >
+                      Finished
+                    </Text>
+                  )}
+                </Pressable>
+
+                <Pressable
+                  disabled={walletFinishing}
+                  onPress={() => {
+                    setWalletCaptureStartedAt(null);
+                    setWalletImportOpen(false);
+                  }}
+                  style={{
+                    paddingVertical: 10,
+                    alignItems: "center",
+                  }}
+                >
+                  <Text
+                    style={{
+                      fontSize: 16,
+                      fontWeight: "600",
+                    }}
+                  >
+                    Cancel Import
+                  </Text>
+                </Pressable>
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
       {oldSchoolHost}
+      {walletPassHost}
       <ScrollView
         directionalLockEnabled
       ref={homeScrollRef}

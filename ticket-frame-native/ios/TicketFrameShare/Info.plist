@@ -7,7 +7,7 @@
 		<key>NSExtensionAttributes</key>
 		<dict>
 			<key>NSExtensionActivationRule</key>
-			<string>com.apple.pkpass</string>
+			<string>SUBQUERY(extensionItems, $item, SUBQUERY($item.attachments, $attachment, ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.apple.pkpass" OR ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.image").@count &gt; 0).@count &gt; 0</string>
 		</dict>
 		<key>NSExtensionMainStoryboard</key>
 		<string>MainInterface</string>

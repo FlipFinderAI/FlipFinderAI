@@ -77,6 +77,9 @@ export default function OldSchoolCard({
   }, [ticket.fingerprint, ticket.details]);
 
   const details = ticket.details;
+  const displayGround = ticket.ground?.trim() || club.stadium;
+  const displayTicketType =
+    details?.ticketType?.trim() || ticket.ticketType?.trim() || null;
   const fixture = splitFixtureName(ticket.name ?? "", club.name);
   const clubNorm = normaliseFixtureText(club.name);
   const homeNorm = normaliseFixtureText(fixture.home);
@@ -111,8 +114,8 @@ export default function OldSchoolCard({
     infoEntries.push({ label: "BLOCK", value: details.block });
   if (dateLabel) infoEntries.push({ label: "DATE", value: dateLabel });
   if (kickoff12) infoEntries.push({ label: "KICK-OFF", value: kickoff12 });
-  if (details?.ticketType)
-    infoEntries.push({ label: "TICKET TYPE", value: details.ticketType });
+  if (displayTicketType)
+    infoEntries.push({ label: "TICKET TYPE", value: displayTicketType });
   if (details?.fanId) infoEntries.push({ label: "FAN ID", value: details.fanId });
 
   const seatCells: InfoEntry[] = [];
@@ -152,7 +155,7 @@ export default function OldSchoolCard({
             ) : null}
           </View>
           <View style={styles.metaStrip}>
-            {[club.stadium, ticket.competition]
+            {[displayGround, ticket.competition]
               .filter(Boolean)
               .map((value, index) => (
                 <Fragment key={`${value}`}>
@@ -204,7 +207,7 @@ export default function OldSchoolCard({
           )}
           <View style={[styles.footerBand, { backgroundColor: palette.secondary }]}>
             <Text numberOfLines={1} style={styles.footerText}>
-              {(club.stadium || club.name || "").toUpperCase()}
+              {(displayGround || club.name || "").toUpperCase()}
               {dateLabel || kickoff12
                 ? `  ·  ${[dateLabel, kickoff12].filter(Boolean).join(" · ")}`
                 : ""}

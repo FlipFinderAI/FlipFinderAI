@@ -148,6 +148,7 @@ export function buildOldSchoolStyles(scale: number) {
     infoArea: {
       flexDirection: "row",
       flexWrap: "wrap",
+      backgroundColor: "#f4efdf",
       paddingHorizontal: m(7),
       paddingTop: m(4),
       paddingBottom: m(5),

@@ -292,7 +292,7 @@ struct NavigateTicketFrameStadiumIntent: AppIntent {
 @available(iOS 16.0, *)
 struct TicketFrameAppShortcuts: AppShortcutsProvider {
   static var appShortcuts: [AppShortcut] {
-    AppShortcut(
+            AppShortcut(
       intent: OpenTicketFrameSectionIntent(),
       phrases: ["Open \(.applicationName)"],
       shortTitle: "Open Ticket Frame",
