@@ -62,6 +62,7 @@ import {
   type MatchPhotoViewerItem,
 } from "@/components/history/HistoryControls";
 import HistoryCompetitionSelector from "@/components/history/HistoryCompetitionSelector";
+import HistoryStadiumNativeMap from "@/components/history/HistoryStadiumNativeMap";
 import {
   HomeTicketImage,
   WalletTicketImage,
@@ -144,6 +145,7 @@ import {
   refreshMatchAssetInfo,
   matchGeotaggedMatchdayMedia,
   matchPhotoAssets,
+  attendanceMatchAssets,
   matchdayExperienceAssets,
   prioritizeMediaIndexFixture,
   removeDuplicateMatchPhotoReferences,
@@ -322,12 +324,14 @@ import {
 } from "@/lib/carParkPasses";
 import { APP_NAME, APP_VERSION } from "@/lib/appVersion";
 import {
-  acknowledgeMatchCheckIn,
+  acknowledgeAndCancelMatchCheckIn,
   configureMatchGeofences,
   isInCheckInWindow,
   isMatchCheckInAcknowledged,
   isMatchCheckInEnabled,
+  recordMatchCheckInPresence,
   setMatchCheckInEnabled,
+  unresolvedMatchCheckInPresence,
   type MatchCheckInFixture,
 } from "@/lib/matchCheckIn";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
@@ -694,6 +698,12 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
   const [groundVisits, setGroundVisits] = useState<Record<string, number>>({});
   // V3.9 — Football History: separate attendance namespace (never tickets).
   const [attendanceHistory, setAttendanceHistory] = useState<AttendanceRecord[]>([]);
+  const attendanceHistoryRef = useRef<AttendanceRecord[]>([]);
+
+  useEffect(() => {
+    attendanceHistoryRef.current = attendanceHistory;
+  }, [attendanceHistory]);
+
   // Never persist the initial empty state before the stored history has
   // finished loading. On a fast startup that race could erase a manual match.
   const [attendanceHistoryReady, setAttendanceHistoryReady] = useState(false);
@@ -2157,6 +2167,8 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
   const [matchCheckInEnabled, setMatchCheckInEnabledState] = useState(false);
   const [pendingMatchCheckIn, setPendingMatchCheckIn] =
     useState<MatchCheckInFixture | null>(null);
+  const [acceptedMatchCheckIn, setAcceptedMatchCheckIn] =
+    useState<MatchCheckInFixture | null>(null);
   const [favouriteClub, setFavouriteClub] =
     useState<ClubOption>(PLACEHOLDER_CLUB);
 
@@ -2224,10 +2236,6 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
   const [historyStadiumMapFullscreen, setHistoryStadiumMapFullscreen] =
     useState(false);
 
-  const HistoryStadiumNativeMap = useMemo(
-    () => requireNativeComponent<any>("HistoryStadiumMapView"),
-    [],
-  );
   const [matchdaySearchOrigin, setMatchdaySearchOrigin] = useState<{
     latitude: number;
     longitude: number;
@@ -3117,14 +3125,50 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
       return;
     const clubName = favouriteClub.name;
     const clubNorm = normaliseFixtureText(clubName);
-    const next = seasonFixtures.find(
+    const favouriteFixtures = seasonFixtures.filter(
       (fixture) =>
         fixture.date &&
-        !isFixturePlayed(fixture) &&
         [fixture.homeName, fixture.awayName].some(
           (name) => normaliseFixtureText(name) === clubNorm,
         ),
     );
+
+    const now = Date.now();
+
+    const next =
+      favouriteFixtures.find((fixture) => {
+        if (!fixture.date) return false;
+
+        let kickoff = fixture.kickoff;
+        if (kickoff?.includes("T")) {
+          const parsed = new Date(kickoff);
+          if (!Number.isNaN(parsed.getTime()))
+            kickoff = `${String(parsed.getHours()).padStart(2, "0")}:${String(
+              parsed.getMinutes(),
+            ).padStart(2, "0")}`;
+        }
+
+        const time = /^\d{1,2}:\d{2}$/.test(kickoff ?? "")
+          ? kickoff
+          : "15:00";
+        const kickoffMs = Date.parse(`${fixture.date}T${time}:00`);
+
+        return (
+          Number.isFinite(kickoffMs) &&
+          now >= kickoffMs - 60 * 60 * 1000 &&
+          now <= kickoffMs + 3 * 60 * 60 * 1000
+        );
+      }) ??
+      favouriteFixtures.find((fixture) => {
+        if (!fixture.date || isFixturePlayed(fixture)) return false;
+
+        const time = /^\d{1,2}:\d{2}$/.test(fixture.kickoff ?? "")
+          ? fixture.kickoff
+          : "15:00";
+        const kickoffMs = Date.parse(`${fixture.date}T${time}:00`);
+
+        return Number.isFinite(kickoffMs) && kickoffMs > now;
+      });
     if (!next?.date) {
       void configureMatchGeofences([]);
       return;
@@ -3168,10 +3212,10 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
             current.coords.longitude,
             candidate.latitude,
             candidate.longitude,
-          ) <= 0.35 &&
+          ) <= 0.6 &&
           !(await isMatchCheckInAcknowledged(candidate.key))
         ) {
-          await acknowledgeMatchCheckIn(candidate.key);
+          await recordMatchCheckInPresence(candidate);
           setPendingMatchCheckIn(candidate);
         }
       });
@@ -3184,13 +3228,27 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
   ]);
 
   useEffect(() => {
+    if (!storageReady || !matchCheckInEnabled || pendingMatchCheckIn) return;
+
+    void unresolvedMatchCheckInPresence().then((fixtures) => {
+      if (fixtures.length)
+        setPendingMatchCheckIn(fixtures[0]);
+    });
+  }, [storageReady, matchCheckInEnabled, pendingMatchCheckIn]);
+
+  useEffect(() => {
     const processResponse = (response: Notifications.NotificationResponse | null) => {
       if (!response) return;
       const fixture = response.notification.request.content.data
         ?.matchCheckIn as MatchCheckInFixture | undefined;
       if (!fixture) return;
       if (response.actionIdentifier === "ATTENDED_NO") {
-        void acknowledgeMatchCheckIn(fixture.key);
+        void acknowledgeAndCancelMatchCheckIn(fixture.key);
+        setPendingMatchCheckIn(null);
+        return;
+      }
+      if (response.actionIdentifier === "ATTENDED_YES") {
+        setAcceptedMatchCheckIn(fixture);
         return;
       }
       setPendingMatchCheckIn(fixture);
@@ -3211,35 +3269,76 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
           clubNamesMatch(item.club, fixture.club) &&
           item.seasonKey === season,
       );
-      setAttendanceHistory((current) =>
-        addManualAttendance(
-          current,
-          {
-            club: fixture.club,
-            opponent: fixture.opponent,
-            matchDate: fixture.date,
-            season,
-            competition: fixture.competition,
-            ground: fixture.ground,
-            homeAway: fixture.homeAway,
-            result: null,
-            homeScore: null,
-            awayScore: null,
-            notes:
-              asSeasonTicket && profile
-                ? composeSeatNotes({
-                    stand: profile.stand ?? "",
-                    block: profile.block ?? "",
-                    row: profile.row ?? "",
-                    seat: profile.seat ?? "",
-                  }) ?? undefined
-                : undefined,
-          },
-          { source: asSeasonTicket ? "season-ticket" : "manual" },
-        ).records,
+
+      const result = addManualAttendance(
+        attendanceHistoryRef.current,
+        {
+          club: fixture.club,
+          opponent: fixture.opponent,
+          matchDate: fixture.date,
+          season,
+          competition: fixture.competition,
+          ground: fixture.ground,
+          homeAway: fixture.homeAway,
+          result: null,
+          homeScore: null,
+          awayScore: null,
+          notes:
+            asSeasonTicket && profile
+              ? composeSeatNotes({
+                  stand: profile.stand ?? "",
+                  block: profile.block ?? "",
+                  row: profile.row ?? "",
+                  seat: profile.seat ?? "",
+                }) ?? undefined
+              : undefined,
+        },
+        { source: asSeasonTicket ? "season-ticket" : "manual" },
       );
-      void acknowledgeMatchCheckIn(fixture.key);
+
+      attendanceHistoryRef.current = result.records;
+      setAttendanceHistory(result.records);
+
+      void acknowledgeAndCancelMatchCheckIn(fixture.key);
       setPendingMatchCheckIn(null);
+
+      const record = result.record;
+
+      if (record && photoMemoriesEnabled) {
+        void (async () => {
+          try {
+            const permission = await MediaLibrary.requestPermissionsAsync();
+            if (!permission.granted) return;
+
+            const ground =
+              footballGroundForName(fixture.ground) ?? {
+                stadium: fixture.ground,
+                latitude: fixture.latitude,
+                longitude: fixture.longitude,
+              };
+
+            const assets = await attendanceMatchAssets(
+              fixture.date,
+              fixture.kickoff,
+            );
+
+            const references = await matchGeotaggedMatchdayMedia(
+              assets,
+              ground,
+              0.5,
+            );
+
+            if (references.length)
+              await persistMediaReferencesRef.current(record.id, references);
+          } catch (error) {
+            console.warn(
+              "Could not attach detected attendance media",
+              error,
+            );
+          }
+        })();
+      }
+
       if (!asSeasonTicket)
         setTimeout(
           () =>
@@ -3255,7 +3354,7 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
         );
     };
     const cancel = () => {
-      void acknowledgeMatchCheckIn(fixture.key);
+      void acknowledgeAndCancelMatchCheckIn(fixture.key);
       setPendingMatchCheckIn(null);
     };
     const title = "Did you attend this game?";
@@ -3273,6 +3372,76 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
       ]);
     }
   }, [pendingMatchCheckIn, seasonTicketProfiles]);
+
+  useEffect(() => {
+    if (!acceptedMatchCheckIn) return;
+
+    const fixture = acceptedMatchCheckIn;
+    setAcceptedMatchCheckIn(null);
+
+    const season =
+      canonicalSeason(fixture.date) ||
+      CURRENT_SEASON.replace("-", "/").slice(0, 7);
+
+    const result = addManualAttendance(
+      attendanceHistoryRef.current,
+      {
+        club: fixture.club,
+        opponent: fixture.opponent,
+        matchDate: fixture.date,
+        season,
+        competition: fixture.competition,
+        ground: fixture.ground,
+        homeAway: fixture.homeAway,
+        result: null,
+        homeScore: null,
+        awayScore: null,
+      },
+      { source: "manual" },
+    );
+
+    attendanceHistoryRef.current = result.records;
+    setAttendanceHistory(result.records);
+
+    void acknowledgeAndCancelMatchCheckIn(fixture.key);
+
+    const record = result.record;
+
+    if (record && photoMemoriesEnabled) {
+      void (async () => {
+        try {
+          const permission = await MediaLibrary.requestPermissionsAsync();
+          if (!permission.granted) return;
+
+          const ground =
+            footballGroundForName(fixture.ground) ?? {
+              stadium: fixture.ground,
+              latitude: fixture.latitude,
+              longitude: fixture.longitude,
+            };
+
+          const assets = await attendanceMatchAssets(
+            fixture.date,
+            fixture.kickoff,
+          );
+
+          const references = await matchGeotaggedMatchdayMedia(
+            assets,
+            ground,
+            0.5,
+          );
+
+          if (references.length)
+            await persistMediaReferencesRef.current(record.id, references);
+        } catch (error) {
+          console.warn(
+            "Could not attach accepted attendance media",
+            error,
+          );
+        }
+      })();
+    }
+  }, [acceptedMatchCheckIn, photoMemoriesEnabled]);
 
 
 
@@ -11658,6 +11827,35 @@ useEffect(() => {
     if (tab === "history") {
       setHistoryContentReady(true);
       setActiveTab(tab);
+
+      void AsyncStorage.getItem(
+        "ticket-frame-history-auto-add-intro-seen.v1",
+      ).then(async (seen) => {
+        if (seen === "true") return;
+
+        await AsyncStorage.setItem(
+          "ticket-frame-history-auto-add-intro-seen.v1",
+          "true",
+        );
+
+        setTimeout(() => {
+          Alert.alert(
+            "Add your match history",
+            "Press Auto Add to find and add your previous matches from your Photos. This could take a few minutes, depending on how many photos and matches you have. You can continue using Ticket Frame while Auto Add works.",
+            [
+              {
+                text: "LATER",
+                style: "cancel",
+              },
+              {
+                text: "AUTO ADD NOW",
+                onPress: runHistoryAutoAdd,
+              },
+            ],
+          );
+        }, 300);
+      }).catch(() => {});
+
       return;
     }
     setHistoryContentReady(true);
@@ -13372,7 +13570,17 @@ Choose one team. Its colours automatically control the Club Colours frame style.
             normaliseFixtureText(item.stadium) === stadiumName,
         );
 
-        if (!ground) return null;
+        if (!ground) {
+          console.log(
+            "[History Stadium Map] MISSING COORDINATE:",
+            stadium.name,
+            "| club:",
+            stadium.club,
+            "| visits:",
+            stadium.visits,
+          );
+          return null;
+        }
 
         return {
           name: stadium.name,
@@ -19219,13 +19427,44 @@ const manualCompetitionFixtures = draftMatch.competition
   }
   if (showSeasonManager) {
     return (
-      <SafeAreaView style={s.safe}>
+      <SafeAreaView
+        style={[s.safe, { backgroundColor: "#f5f1e8" }]}
+      >
         <ScrollView
-          contentContainerStyle={s.page}
+          style={{ flex: 1, backgroundColor: "#f5f1e8" }}
+          contentContainerStyle={[
+            s.page,
+            { flexGrow: 1, backgroundColor: "#f5f1e8" },
+          ]}
           keyboardShouldPersistTaps="handled"
+          onScrollBeginDrag={hideMainNavigation}
+          onMomentumScrollBegin={hideMainNavigation}
+          onScrollEndDrag={scheduleMainNavigationReturn}
+          onMomentumScrollEnd={showMainNavigation}
         >
-          <Text style={s.kicker}>SETTINGS</Text>
-          <Text style={s.title}>Ticket Frame</Text>
+          <View style={{ flexDirection: "row", alignItems: "center" }}>
+            <Text style={[s.kicker, { flex: 1 }]}>SETTINGS</Text>
+            <Pressable
+              onPress={() => setShowSeasonManager(false)}
+              accessibilityRole="button"
+              style={({ pressed }) => ({
+                paddingHorizontal: 14,
+                paddingVertical: 8,
+                borderRadius: 10,
+                backgroundColor: favouriteClub.primary,
+                opacity: pressed ? 0.6 : 1,
+              })}
+            >
+              <Text
+                style={{
+                  fontWeight: "900",
+                  color: readableTextColour(favouriteClub.primary),
+                }}
+              >
+                DONE
+              </Text>
+            </Pressable>
+          </View>
           <Text style={s.helpText}>Latest build: {APP_VERSION}</Text>
           <Text style={s.helpText}>
             Seasons are created automatically from saved ticket dates. No manual
@@ -19435,25 +19674,42 @@ const manualCompetitionFixtures = draftMatch.competition
             }}
           >
             <View
-            style={{
-              borderWidth: 1,
-              borderColor: favouriteClub.primary,
-              borderRadius: 12,
-              padding: 9,
-              marginBottom: 7,
-              backgroundColor: "#ffffff",
-            }}
-          >
-            <Text
               style={{
-                fontWeight: "900",
-                fontSize: 14,
-                marginBottom: 4,
+                flexDirection: "row",
+                alignItems: "center",
+                marginBottom: settingsDetailsExpanded.ticketSaving ? 4 : 0,
               }}
             >
-              TICKET SAVING
-            </Text>
+              <Text style={{ flex: 1, fontWeight: "900", fontSize: 14 }}>
+                TICKET SAVING
+              </Text>
+              <Pressable
+                onPress={() =>
+                  setSettingsDetailsExpanded((current) => ({
+                    ...current,
+                    ticketSaving: !current.ticketSaving,
+                  }))
+                }
+                accessibilityRole="button"
+                accessibilityState={{
+                  expanded: Boolean(settingsDetailsExpanded.ticketSaving),
+                }}
+                style={{ paddingVertical: 3, paddingLeft: 8 }}
+              >
+                <Text
+                  style={{
+                    fontSize: 12,
+                    fontWeight: "900",
+                    color: visibleInkOnCream(favouriteClub.primary),
+                  }}
+                >
+                  {settingsDetailsExpanded.ticketSaving ? "SEE LESS" : "SEE MORE"}
+                </Text>
+              </Pressable>
+            </View>
 
+            {settingsDetailsExpanded.ticketSaving ? (
+              <>
             <Text style={[s.helpText, { marginBottom: 8 }]}>
               Save cropped ticket images to Apple Photos after the ticket has
               been reviewed and saved in Ticket Frame.
@@ -19612,7 +19868,8 @@ const manualCompetitionFixtures = draftMatch.competition
               Tickets are copied to Photos only after you crop them and press
               Save. Cancelled, skipped and duplicate imports are not copied.
             </Text>
-          </View>
+              </>
+            ) : null}
           <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 4 }}>
               <Text style={{ flex: 1, fontWeight: "900", fontSize: 14 }}>
                 USE PHOTOS FOR MATCH MEMORIES
@@ -19837,8 +20094,25 @@ const manualCompetitionFixtures = draftMatch.competition
               </Text>
             </Pressable>
           </View>
+          </View>
 
-            <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 4 }}>
+          <View
+            style={{
+              borderWidth: 1,
+              borderColor: favouriteClub.primary,
+              borderRadius: 12,
+              padding: 9,
+              marginBottom: 7,
+              backgroundColor: "#ffffff",
+            }}
+          >
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                marginBottom: settingsDetailsExpanded.backup ? 4 : 0,
+              }}
+            >
               <Text style={{ flex: 1, fontWeight: "900", fontSize: 14 }}>
                 BACKUP & RESTORE
               </Text>
@@ -19867,12 +20141,12 @@ const manualCompetitionFixtures = draftMatch.competition
               </Pressable>
             </View>
             {settingsDetailsExpanded.backup ? (
-              <Text style={[s.helpText, { marginBottom: 6 }]}>
-                Save a private snapshot of tickets, history, settings and Match
-                Memory copies on this iPhone. An on-device backup is removed if
-                Ticket Frame itself is deleted.
-              </Text>
-            ) : null}
+              <>
+                <Text style={[s.helpText, { marginBottom: 6 }]}>
+                  Save a private snapshot of tickets, history, settings and Match
+                  Memory copies on this iPhone. An on-device backup is removed if
+                  Ticket Frame itself is deleted.
+                </Text>
             <Text style={{ color: "#68736d", fontWeight: "700", marginBottom: 10 }}>
               {localBackupCreatedAt
                 ? `Latest backup: ${new Date(localBackupCreatedAt).toLocaleString("en-GB")}`
@@ -19927,6 +20201,8 @@ const manualCompetitionFixtures = draftMatch.competition
                   <Text style={{ fontWeight: "900", color: "#b52d2d" }}>DELETE BACKUP</Text>
                 </Pressable>
               </View>
+            ) : null}
+              </>
             ) : null}
           </View>
           <View
@@ -20097,7 +20373,14 @@ const manualCompetitionFixtures = draftMatch.competition
           </Pressable>
           <Pressable
             onPress={() => setShowSeasonManager(false)}
-            style={[s.primary, { backgroundColor: favouriteClub.primary }]}
+            style={[
+              s.primary,
+              {
+                backgroundColor: favouriteClub.primary,
+                marginTop: 14,
+                marginBottom: 24,
+              },
+            ]}
           >
             <Text
               style={[
@@ -20108,8 +20391,8 @@ const manualCompetitionFixtures = draftMatch.competition
               DONE
             </Text>
           </Pressable>
-          {bottomNav()}
         </ScrollView>
+        {bottomNav()}
       </SafeAreaView>
     );
   }

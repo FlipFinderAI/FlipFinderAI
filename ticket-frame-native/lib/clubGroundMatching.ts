@@ -108,6 +108,7 @@ export function footballGroundForName(name: string) {
     "the american express community stadium": "american express stadium",
     "aesseal new york stadium": "new york stadium",
     "the coventry building society arena": "coventry building society arena",
+    "the mkm stadium": "mkm stadium",
   };
   const resolvedWanted = aliases[wanted] ?? wanted;
   return FOOTBALL_GROUNDS.find((item) => {

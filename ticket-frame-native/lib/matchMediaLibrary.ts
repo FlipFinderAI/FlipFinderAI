@@ -107,6 +107,20 @@ export function matchPhotoAssets(matchDate: string, albumId?: string) {
   return query;
 }
 
+export async function attendanceMatchAssets(
+  matchDate: string,
+  kickoff: string | null,
+) {
+  const time = /^\d{1,2}:\d{2}$/.test(kickoff ?? "") ? kickoff! : "15:00";
+  const kickoffMs = new Date(`${matchDate}T${time}:00`).getTime();
+  if (!Number.isFinite(kickoffMs)) return [];
+
+  return matchdayExperienceAssets(
+    kickoffMs - 60 * 60 * 1000,
+    kickoffMs + 3 * 60 * 60 * 1000,
+  );
+}
+
 export async function matchdayExperienceAssets(
   createdAfter: number,
   createdBefore: number,
@@ -941,6 +955,7 @@ export function stopMediaIndex() {
 async function matchMediaAssetsAtGround(
   assets: MediaLibrary.Asset[],
   ground: Pick<FootballGround, "latitude" | "longitude">,
+  radiusMiles = STADIUM_PHOTO_RADIUS_MILES,
 ) {
   const inspected: {
     asset: MediaLibrary.Asset;
@@ -968,7 +983,7 @@ async function matchMediaAssetsAtGround(
           info.location.longitude,
           ground.latitude,
           ground.longitude,
-        ) <= STADIUM_PHOTO_RADIUS_MILES,
+        ) <= radiusMiles,
     ),
   );
   // Match Memory stadium discovery is deliberately strict.
@@ -998,11 +1013,12 @@ async function matchMediaAssetsAtGround(
 export async function matchGeotaggedMatchdayMedia(
   assets: MediaLibrary.Asset[],
   ground: Pick<FootballGround, "latitude" | "longitude">,
+  radiusMiles = STADIUM_PHOTO_RADIUS_MILES,
 ) {
   // Distant pubs, restaurants and stations are intentionally excluded here.
   // They are attached only after the user creates/confirms a Matchday
   // Experience location.
-  return matchMediaAssetsAtGround(assets, ground);
+  return matchMediaAssetsAtGround(assets, ground, radiusMiles);
 }
 
 export async function removeDuplicateMatchPhotoReferences(
