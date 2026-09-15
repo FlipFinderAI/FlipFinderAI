@@ -33,6 +33,15 @@ import * as FileSystem from "expo-file-system/legacy";
 import { File as ExpoFile } from "expo-file-system";
 import { captureRef } from "react-native-view-shot";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import {
+  cacheHistoryHighResPhoto,
+  clearHistoryHighResPhotoCache,
+  DEFAULT_HISTORY_HIGH_RES_CACHE_MB,
+  getCachedHistoryHighResPhoto,
+  getHistoryHighResPhotoCacheUsage,
+  HISTORY_HIGH_RES_CACHE_OPTIONS_MB,
+  setHistoryHighResCacheLimitMb,
+} from "@/lib/historyHighResPhotoCache";
 import OnboardingFlow, {
   type OnboardingClub,
 } from "@/components/onboarding/OnboardingFlow";
@@ -837,6 +846,9 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
   const historyPhotoResolutionPromisesRef = useRef<
     Map<string, Promise<MediaLibrary.AssetInfo | null>>
   >(new Map());
+  const historyHighResPhotoUrisRef = useRef<Map<string, string>>(
+    new Map(),
+  );
   const [selectedMatchVideoUri, setSelectedMatchVideoUri] =
     useState<string | null>(null);
   const resolvingMatchVideoAssetIdsRef = useRef<Set<string>>(new Set());
@@ -885,6 +897,24 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
   const [autoDiscoveryCompleted, setAutoDiscoveryCompleted] = useState(false);
   const [photoMemoriesEnabled, setPhotoMemoriesEnabled] = useState(true);
   const [photoWifiOnly, setPhotoWifiOnly] = useState(true);
+  const [historyHighResCacheMb, setHistoryHighResCacheMb] =
+    useState(DEFAULT_HISTORY_HIGH_RES_CACHE_MB);
+  const [historyHighResCacheUsedBytes, setHistoryHighResCacheUsedBytes] =
+    useState(0);
+  const [historyHighResCachedPhotos, setHistoryHighResCachedPhotos] =
+    useState(0);
+
+  const refreshHistoryHighResCacheUsage = useCallback(() => {
+    void getHistoryHighResPhotoCacheUsage()
+      .then(({ usedBytes, cachedPhotos }) => {
+        setHistoryHighResCacheUsedBytes(usedBytes);
+        setHistoryHighResCachedPhotos(cachedPhotos);
+      })
+      .catch(() => {
+        setHistoryHighResCacheUsedBytes(0);
+        setHistoryHighResCachedPhotos(0);
+      });
+  }, []);
   const [siriEnabled, setSiriEnabled] = useState(false);
   const [localBackupCreatedAt, setLocalBackupCreatedAt] = useState<string | null>(null);
   const [localBackupBusy, setLocalBackupBusy] = useState(false);
@@ -1231,6 +1261,57 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
     });
 
     try {
+      const rememberedHighResUri =
+        historyHighResPhotoUrisRef.current.get(media.assetId);
+
+      if (rememberedHighResUri) {
+        const rememberedInfo = await FileSystem.getInfoAsync(
+          rememberedHighResUri,
+        ).catch(() => null);
+
+        if (rememberedInfo?.exists && (rememberedInfo.size ?? 0) > 0) {
+          updateGalleryItem({
+            uri: rememberedHighResUri,
+            loading: false,
+            error: null,
+            fullQuality: true,
+          });
+
+          if (enlargedMatchPhotoRequestRef.current === requestId) {
+            setEnlargedMatchPhotoUri(rememberedHighResUri);
+            setEnlargedMatchPhotoError(null);
+          }
+
+          return;
+        }
+
+        historyHighResPhotoUrisRef.current.delete(media.assetId);
+      }
+
+      const cachedHighResUri =
+        await getCachedHistoryHighResPhoto(media.assetId);
+
+      if (cachedHighResUri) {
+        historyHighResPhotoUrisRef.current.set(
+          media.assetId,
+          cachedHighResUri,
+        );
+
+        updateGalleryItem({
+          uri: cachedHighResUri,
+          loading: false,
+          error: null,
+          fullQuality: true,
+        });
+
+        if (enlargedMatchPhotoRequestRef.current === requestId) {
+          setEnlargedMatchPhotoUri(cachedHighResUri);
+          setEnlargedMatchPhotoError(null);
+        }
+
+        return;
+      }
+
       if (media.localUri) {
         const localInfo = await FileSystem.getInfoAsync(media.localUri);
         if (localInfo.exists && (localInfo.size ?? 0) > 0) {
@@ -1291,14 +1372,23 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
       // Apple Photos remains the source of truth for normal Match Memory
       // photos. Use the resolved Photos/iCloud file for this viewing session
       // instead of creating another permanent full-resolution app copy.
+      const cachedSourceUri =
+        await cacheHistoryHighResPhoto(media.assetId, sourceUri);
+
+      historyHighResPhotoUrisRef.current.set(
+        media.assetId,
+        cachedSourceUri,
+      );
+      refreshHistoryHighResCacheUsage();
+
       updateGalleryItem({
-        uri: sourceUri,
+        uri: cachedSourceUri,
         loading: false,
         error: null,
         fullQuality: true,
       });
       if (enlargedMatchPhotoRequestRef.current === requestId) {
-        setEnlargedMatchPhotoUri(sourceUri);
+        setEnlargedMatchPhotoUri(cachedSourceUri);
         setEnlargedMatchPhotoError(null);
       }
     } catch (error) {
@@ -6253,7 +6343,7 @@ confidence: ${recognition.confidence}%`,
                 : undefined;
 
             const needsResolvedPhoto =
-              reference.type === "photo" && !durableUri && !previewUri;
+              reference.type === "photo";
 
             let thumbnailUri: string | undefined;
 
@@ -6296,9 +6386,9 @@ confidence: ${recognition.confidence}%`,
             }
 
             photosUri =
-              durableUri ??
-              previewUri ??
-              thumbnailUri;
+              reference.type === "photo"
+                ? thumbnailUri ?? previewUri ?? durableUri
+                : durableUri ?? previewUri ?? thumbnailUri;
             // Apple Photos/iCloud remains the source of truth for normal
             // discovered photos. Do not promote the resolved original into
             // Ticket Frame Documents; the lightweight reference/thumbnail is
@@ -6523,6 +6613,18 @@ confidence: ${recognition.confidence}%`,
     void AsyncStorage.getItem(HISTORY_PHOTO_SETUP_KEY).then((raw) => {
       if (!raw) return;
       try { setPhotoWifiOnly(Boolean((JSON.parse(raw) as { wifiOnly?: boolean }).wifiOnly)); } catch {}
+    });
+    void AsyncStorage.getItem(
+      "ticket-frame.history-high-res-photo-cache-limit.v1",
+    ).then((raw) => {
+      const parsed = raw ? Number(raw) : DEFAULT_HISTORY_HIGH_RES_CACHE_MB;
+      if (
+        HISTORY_HIGH_RES_CACHE_OPTIONS_MB.includes(
+          parsed as (typeof HISTORY_HIGH_RES_CACHE_OPTIONS_MB)[number],
+        )
+      ) {
+        setHistoryHighResCacheMb(parsed);
+      }
     });
   }, []);
   useEffect(() => {
@@ -16206,10 +16308,18 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                                 }
 
                                 setEnlargedMatchPhotoItems(
-                                  clusterPhotos.map((item) => ({
-                                    key: `asset:${item.assetId}`,
-                                    uri: item.uri,
-                                  })),
+                                  clusterPhotos.map((item) => {
+                                    const highResUri =
+                                      historyHighResPhotoUrisRef.current.get(
+                                        item.assetId,
+                                      );
+
+                                    return {
+                                      key: `asset:${item.assetId}`,
+                                      uri: highResUri ?? item.uri,
+                                      fullQuality: Boolean(highResUri),
+                                    };
+                                  }),
                                 );
 
                                 const targetIndex =
@@ -16222,7 +16332,11 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                                 setEnlargedMatchPhotoIndex(
                                   Math.max(0, targetIndex),
                                 );
-                                setEnlargedMatchPhotoUri(media.uri);
+                                setEnlargedMatchPhotoUri(
+                                  historyHighResPhotoUrisRef.current.get(
+                                    media.assetId,
+                                  ) ?? media.uri,
+                                );
 
                                 void openReferencedMatchPhoto(
                                   selectedHistoryRecord.id,
@@ -16715,10 +16829,18 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                                       key: `saved:${uri}`,
                                       uri,
                                     })),
-                                    ...groupReferencedPhotos.map((item) => ({
-                                      key: `asset:${item.assetId}`,
-                                      uri: item.uri,
-                                    })),
+                                    ...groupReferencedPhotos.map((item) => {
+                                      const highResUri =
+                                        historyHighResPhotoUrisRef.current.get(
+                                          item.assetId,
+                                        );
+
+                                      return {
+                                        key: `asset:${item.assetId}`,
+                                        uri: highResUri ?? item.uri,
+                                        fullQuality: Boolean(highResUri),
+                                      };
+                                    }),
                                   ];
                                   const targetIndex = galleryItems.findIndex(
                                     (item) =>
@@ -16734,7 +16856,11 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                                     ),
                                   );
                                   setEnlargedMatchPhotoIndex(safeIndex);
-                                  setEnlargedMatchPhotoUri(media.uri);
+                                  setEnlargedMatchPhotoUri(
+                                    historyHighResPhotoUrisRef.current.get(
+                                      media.assetId,
+                                    ) ?? media.uri,
+                                  );
                                   void openReferencedMatchPhoto(
                                     selectedHistoryRecord.id,
                                     media,
@@ -19987,11 +20113,287 @@ const manualCompetitionFixtures = draftMatch.competition
                   <Text style={{ fontWeight: "900", color: "#17221c" }}>PHOTOS: {photoWifiOnly ? "WI-FI ONLY" : "WI-FI OR MOBILE DATA"}</Text>
                   <Ionicons name="wifi-outline" size={22} color={favouriteClub.primary} />
                 </Pressable>
+                <View
+                  style={{
+                    marginTop: 12,
+                    paddingTop: 10,
+                    borderTopWidth: StyleSheet.hairlineWidth,
+                    borderTopColor: "#d4cfc5",
+                  }}
+                >
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                    }}
+                  >
+                    <Text
+                      style={{
+                        flex: 1,
+                        fontWeight: "900",
+                        color: "#17221c",
+                      }}
+                    >
+                      HIGH-RES PHOTO CACHE
+                    </Text>
+                    <Pressable
+                      onPress={() => {
+                        const opening =
+                          !settingsDetailsExpanded.highResPhotoCache;
+
+                        setSettingsDetailsExpanded((current) => ({
+                          ...current,
+                          highResPhotoCache:
+                            !current.highResPhotoCache,
+                        }));
+
+                        if (opening) {
+                          refreshHistoryHighResCacheUsage();
+                        }
+                      }}
+                      accessibilityRole="button"
+                      accessibilityState={{
+                        expanded: Boolean(
+                          settingsDetailsExpanded.highResPhotoCache,
+                        ),
+                      }}
+                      style={{
+                        paddingVertical: 3,
+                        paddingLeft: 8,
+                      }}
+                    >
+                      <Text
+                        style={{
+                          fontSize: 12,
+                          fontWeight: "900",
+                          color: visibleInkOnCream(
+                            favouriteClub.primary,
+                          ),
+                        }}
+                      >
+                        {settingsDetailsExpanded.highResPhotoCache
+                          ? "SEE LESS"
+                          : "SEE MORE"}
+                      </Text>
+                    </Pressable>
+                  </View>
+
+                  {settingsDetailsExpanded.highResPhotoCache ? (
+                    <>
+                      <Text
+                        style={[
+                          s.helpText,
+                          {
+                            marginTop: 7,
+                            marginBottom: 8,
+                          },
+                        ]}
+                      >
+                        Keeps viewed full-quality Match Memory photos ready
+                        for faster reopening. Most-viewed photos are kept
+                        first.
+                      </Text>
+
+                      {(() => {
+                        const limitBytes =
+                          historyHighResCacheMb * 1024 * 1024;
+                        const usedMb =
+                          historyHighResCacheUsedBytes /
+                          (1024 * 1024);
+                        const usedPercent =
+                          limitBytes > 0
+                            ? Math.min(
+                                100,
+                                (historyHighResCacheUsedBytes /
+                                  limitBytes) *
+                                  100,
+                              )
+                            : 0;
+                        const limitLabel =
+                          historyHighResCacheMb >= 1024
+                            ? `${historyHighResCacheMb / 1024} GB`
+                            : `${historyHighResCacheMb} MB`;
+                        const usedLabel =
+                          usedMb >= 100
+                            ? `${Math.round(usedMb)} MB`
+                            : `${usedMb.toFixed(1)} MB`;
+
+                        return (
+                          <>
+                            <View
+                              style={{
+                                height: 10,
+                                borderRadius: 999,
+                                overflow: "hidden",
+                                backgroundColor: "#e4e1da",
+                                marginBottom: 5,
+                              }}
+                            >
+                              <View
+                                style={{
+                                  height: "100%",
+                                  width: `${usedPercent}%`,
+                                  backgroundColor:
+                                    favouriteClub.primary,
+                                }}
+                              />
+                            </View>
+                            <Text
+                              style={[
+                                s.helpText,
+                                {
+                                  marginBottom: 9,
+                                  fontWeight: "800",
+                                },
+                              ]}
+                            >
+                              {usedLabel} of {limitLabel} used ·{" "}
+                              {historyHighResCachedPhotos} cached{" "}
+                              {historyHighResCachedPhotos === 1
+                                ? "photo"
+                                : "photos"}
+                            </Text>
+                          </>
+                        );
+                      })()}
+
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          flexWrap: "wrap",
+                          gap: 6,
+                        }}
+                      >
+                        {HISTORY_HIGH_RES_CACHE_OPTIONS_MB.map(
+                          (optionMb) => {
+                            const selected =
+                              historyHighResCacheMb === optionMb;
+                            const label =
+                              optionMb >= 1024
+                                ? `${optionMb / 1024} GB`
+                                : `${optionMb} MB`;
+
+                            return (
+                              <Pressable
+                                key={optionMb}
+                                onPress={() => {
+                                  setHistoryHighResCacheMb(
+                                    optionMb,
+                                  );
+                                  void setHistoryHighResCacheLimitMb(
+                                    optionMb,
+                                  ).then(() => {
+                                    refreshHistoryHighResCacheUsage();
+                                  });
+                                }}
+                                style={({ pressed }) => ({
+                                  borderRadius: 9,
+                                  paddingHorizontal: 11,
+                                  paddingVertical: 8,
+                                  backgroundColor: selected
+                                    ? favouriteClub.secondary
+                                    : "#eae6dd",
+                                  opacity: pressed ? 0.6 : 1,
+                                })}
+                              >
+                                <Text
+                                  style={{
+                                    fontWeight: "900",
+                                    color: selected
+                                      ? readableTextColour(
+                                          favouriteClub.secondary,
+                                        )
+                                      : "#17221c",
+                                  }}
+                                >
+                                  {label}
+                                </Text>
+                              </Pressable>
+                            );
+                          },
+                        )}
+                      </View>
+
+                      <Pressable
+                        onPress={() => {
+                          Alert.alert(
+                            "Clear high-res photo cache?",
+                            "This removes only Ticket Frame's disposable full-quality photo cache. Your thumbnails, Match Memories and Apple Photos originals stay untouched.",
+                            [
+                              {
+                                text: "Cancel",
+                                style: "cancel",
+                              },
+                              {
+                                text: "Clear Cache",
+                                style: "destructive",
+                                onPress: () => {
+                                  historyHighResPhotoUrisRef.current.clear();
+
+                                  void clearHistoryHighResPhotoCache()
+                                    .then(() => {
+                                      refreshHistoryHighResCacheUsage();
+                                      Alert.alert(
+                                        "High-res cache cleared",
+                                        "Full-quality cached copies were cleared. Match Memory thumbnails and Apple Photos originals were not changed.",
+                                      );
+                                    })
+                                    .catch(() => {
+                                      Alert.alert(
+                                        "Could not clear cache",
+                                        "Ticket Frame could not clear the high-res cache. Please try again.",
+                                      );
+                                    });
+                                },
+                              },
+                            ],
+                          );
+                        }}
+                        style={({ pressed }) => ({
+                          marginTop: 9,
+                          paddingVertical: 9,
+                          opacity: pressed ? 0.55 : 1,
+                        })}
+                      >
+                        <Text
+                          style={{
+                            fontWeight: "800",
+                            color: favouriteClub.primary,
+                            textAlign: "center",
+                          }}
+                        >
+                          CLEAR HIGH-RES CACHE
+                        </Text>
+                      </Pressable>
+                    </>
+                  ) : null}
+                </View>
                 <Pressable
                   onPress={() => {
-                    autoPhotoScannedRecordsRef.current.clear();
-                    void AsyncStorage.removeItem(HISTORY_PHOTO_SETUP_KEY);
-                    Alert.alert("Photo scan reset", "Restart the app to confirm the All Photos and mobile-data preference again.");
+                    Alert.alert(
+                      "Reset all photos scan?",
+                      "Ticket Frame will forget the completed photo-scan state and will need to scan your Photos again.",
+                      [
+                        {
+                          text: "Cancel",
+                          style: "cancel",
+                        },
+                        {
+                          text: "Reset Scan",
+                          style: "destructive",
+                          onPress: () => {
+                            autoPhotoScannedRecordsRef.current.clear();
+                            void AsyncStorage.removeItem(
+                              HISTORY_PHOTO_SETUP_KEY,
+                            );
+                            Alert.alert(
+                              "Photo scan reset",
+                              "Restart the app to confirm the All Photos and mobile-data preference again.",
+                            );
+                          },
+                        },
+                      ],
+                    );
                   }}
                   style={({ pressed }) => ({ marginTop: 8, paddingVertical: 10, opacity: pressed ? 0.55 : 1 })}
                 >
