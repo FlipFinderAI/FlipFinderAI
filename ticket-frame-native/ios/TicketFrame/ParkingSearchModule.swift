@@ -56,6 +56,43 @@ final class ParkingSearchModule: NSObject {
     }
   }
 
+  @objc(pickCoordinate:longitude:resolver:rejecter:)
+  func pickCoordinate(
+    _ latitude: NSNumber,
+    longitude: NSNumber,
+    resolver resolve: @escaping RCTPromiseResolveBlock,
+    rejecter reject: @escaping RCTPromiseRejectBlock
+  ) {
+    DispatchQueue.main.async {
+      guard let presenter = HistoryPlaceSearchViewController.topViewController()
+      else {
+        reject(
+          "coordinate_picker_unavailable",
+          "Ticket Frame could not open the car park map.",
+          nil
+        )
+        return
+      }
+
+      let picker = HistoryCoordinatePickerViewController(
+        latitude: latitude.doubleValue,
+        longitude: longitude.doubleValue
+      )
+
+      picker.onComplete = { result in
+        if let result {
+          resolve(result)
+        } else {
+          resolve(NSNull())
+        }
+      }
+
+      let navigation = UINavigationController(rootViewController: picker)
+      navigation.modalPresentationStyle = .pageSheet
+      presenter.present(navigation, animated: true)
+    }
+  }
+
   @objc(pickPlace:longitude:resolver:rejecter:)
   func pickPlace(
     _ latitude: NSNumber,
@@ -643,6 +680,163 @@ private final class HistoryStadiumAnnotation:
     self.clubName = clubName
     self.visits = visits
     super.init()
+  }
+}
+
+final class HistoryCoordinatePickerViewController: UIViewController {
+  var onComplete: (([String: Any]?) -> Void)?
+
+  private let mapView = MKMapView(frame: .zero)
+  private var completed = false
+
+  private let initialCoordinate: CLLocationCoordinate2D
+
+  init(latitude: Double, longitude: Double) {
+    self.initialCoordinate = CLLocationCoordinate2D(
+      latitude: latitude,
+      longitude: longitude
+    )
+    super.init(nibName: nil, bundle: nil)
+  }
+
+  required init?(coder: NSCoder) {
+    fatalError("init(coder:) has not been implemented")
+  }
+
+  override func viewDidLoad() {
+    super.viewDidLoad()
+
+    title = "Drop Car Park Pin"
+    view.backgroundColor = .systemBackground
+
+    navigationItem.leftBarButtonItem = UIBarButtonItem(
+      barButtonSystemItem: .cancel,
+      target: self,
+      action: #selector(cancelPicker)
+    )
+
+    navigationItem.rightBarButtonItem = UIBarButtonItem(
+      title: "Confirm",
+      style: .done,
+      target: self,
+      action: #selector(confirmPicker)
+    )
+
+    let mapTypeControl = UISegmentedControl(
+      items: ["Standard", "Satellite", "Hybrid"]
+    )
+    mapTypeControl.selectedSegmentIndex = 2
+    mapTypeControl.translatesAutoresizingMaskIntoConstraints = false
+    mapTypeControl.addTarget(
+      self,
+      action: #selector(mapTypeChanged(_:)),
+      for: .valueChanged
+    )
+    view.addSubview(mapTypeControl)
+
+    mapView.mapType = .hybrid
+    mapView.translatesAutoresizingMaskIntoConstraints = false
+    mapView.showsUserLocation = true
+    view.addSubview(mapView)
+
+    NSLayoutConstraint.activate([
+      mapTypeControl.topAnchor.constraint(
+        equalTo: view.safeAreaLayoutGuide.topAnchor,
+        constant: 8
+      ),
+      mapTypeControl.leadingAnchor.constraint(
+        equalTo: view.leadingAnchor,
+        constant: 16
+      ),
+      mapTypeControl.trailingAnchor.constraint(
+        equalTo: view.trailingAnchor,
+        constant: -16
+      ),
+
+      mapView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+      mapView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+      mapView.topAnchor.constraint(
+        equalTo: mapTypeControl.bottomAnchor,
+        constant: 8
+      ),
+      mapView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+    ])
+
+    let region = MKCoordinateRegion(
+      center: initialCoordinate,
+      latitudinalMeters: 1200,
+      longitudinalMeters: 1200
+    )
+    mapView.setRegion(region, animated: false)
+
+    let pin = UIImageView(image: UIImage(systemName: "mappin.circle.fill"))
+    pin.tintColor = .systemRed
+    pin.contentMode = .scaleAspectFit
+    pin.translatesAutoresizingMaskIntoConstraints = false
+    view.addSubview(pin)
+
+    NSLayoutConstraint.activate([
+      pin.centerXAnchor.constraint(equalTo: mapView.centerXAnchor),
+      pin.centerYAnchor.constraint(
+        equalTo: mapView.centerYAnchor,
+        constant: -16
+      ),
+      pin.widthAnchor.constraint(equalToConstant: 38),
+      pin.heightAnchor.constraint(equalToConstant: 38),
+    ])
+
+    let instruction = UILabel()
+    instruction.text = "Move the map so the pin marks where you parked"
+    instruction.font = .systemFont(ofSize: 14, weight: .semibold)
+    instruction.textAlignment = .center
+    instruction.numberOfLines = 0
+    instruction.backgroundColor = UIColor.systemBackground.withAlphaComponent(0.9)
+    instruction.layer.cornerRadius = 10
+    instruction.layer.masksToBounds = true
+    instruction.translatesAutoresizingMaskIntoConstraints = false
+    view.addSubview(instruction)
+
+    NSLayoutConstraint.activate([
+      instruction.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
+      instruction.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
+      instruction.bottomAnchor.constraint(
+        equalTo: view.safeAreaLayoutGuide.bottomAnchor,
+        constant: -18
+      ),
+      instruction.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
+    ])
+  }
+
+  @objc private func mapTypeChanged(_ sender: UISegmentedControl) {
+    switch sender.selectedSegmentIndex {
+    case 0:
+      mapView.mapType = .standard
+    case 1:
+      mapView.mapType = .satellite
+    default:
+      mapView.mapType = .hybrid
+    }
+  }
+
+  @objc private func cancelPicker() {
+    finish(nil)
+  }
+
+  @objc private func confirmPicker() {
+    let coordinate = mapView.centerCoordinate
+
+    finish([
+      "latitude": coordinate.latitude,
+      "longitude": coordinate.longitude,
+    ])
+  }
+
+  private func finish(_ result: [String: Any]?) {
+    guard !completed else { return }
+    completed = true
+    dismiss(animated: true) { [weak self] in
+      self?.onComplete?(result)
+    }
   }
 }
 

@@ -14445,7 +14445,14 @@ Choose one team. Its colours automatically control the Club Colours frame style.
       const createMediaLocation = () => {
         const addFolder = (kind: MatchdayCustomLocation["kind"]) => {
           const existing = matchdayCustomLocations[selectedHistoryRecord.id] ?? [];
-          const baseName = kind === "pub" ? "New pub" : kind === "restaurant" ? "New restaurant" : "New train station";
+          const baseName =
+            kind === "pub"
+              ? "New pub"
+              : kind === "restaurant"
+                ? "New restaurant"
+                : kind === "carPark"
+                  ? "New car park"
+                  : "New train station";
           const sameTypeCount = existing.filter((item) => item.kind === kind).length;
           const name = sameTypeCount ? `${baseName} ${sameTypeCount + 1}` : baseName;
           const location: MatchdayCustomLocation = {
@@ -14465,6 +14472,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
         Alert.alert("New media location", "What type of place is it?", [
           { text: "Pub", onPress: () => addFolder("pub") },
           { text: "Restaurant", onPress: () => addFolder("restaurant") },
+          { text: "Car Park", onPress: () => addFolder("carPark") },
           { text: "Train station", onPress: () => addFolder("station") },
           { text: "Cancel", style: "cancel" },
         ]);
@@ -14900,7 +14908,10 @@ Choose one team. Its colours automatically control the Club Colours frame style.
           );
         }
       };
-      const searchOtherHistoryLocation = async (keys: string[]) => {
+      const searchHistoryLocation = async (
+        keys: string[],
+        placeKind: "location" | "carPark" = "location",
+      ) => {
         let latitude: number | null = null;
         let longitude: number | null = null;
 
@@ -14970,7 +14981,10 @@ Choose one team. Its colours automatically control the Club Colours frame style.
           return;
         }
 
-        const picker = (ParkingSearchModule as any)?.pickPlace;
+        const picker =
+          placeKind === "carPark"
+            ? (ParkingSearchModule as any)?.pickCoordinate
+            : (ParkingSearchModule as any)?.pickPlace;
 
         if (!picker) {
           Alert.alert(
@@ -14981,14 +14995,14 @@ Choose one team. Its colours automatically control the Club Colours frame style.
         }
 
         try {
-          const result = await (ParkingSearchModule as any).pickPlace(
+          const result = await picker(
             latitude,
             longitude,
           );
 
           if (
             !result ||
-            typeof result.name !== "string" ||
+            (placeKind !== "carPark" && typeof result.name !== "string") ||
             typeof result.latitude !== "number" ||
             typeof result.longitude !== "number"
           ) {
@@ -15000,8 +15014,11 @@ Choose one team. Its colours automatically control the Club Colours frame style.
 
             keys.forEach((key) => {
               next[key] = {
-                placeName: result.name,
-                placeKind: "location",
+                placeName:
+                  placeKind === "carPark"
+                    ? "Car Park"
+                    : result.name,
+                placeKind,
                 latitude: result.latitude,
                 longitude: result.longitude,
                 source: "manual",
@@ -15074,9 +15091,14 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                         void findHistoryVenueNearMedia(selectedKeys, "location"),
                     },
                     {
+                      text: "Car Park",
+                      onPress: () =>
+                        void searchHistoryLocation(selectedKeys, "carPark"),
+                    },
+                    {
                       text: "Other",
                       onPress: () =>
-                        void searchOtherHistoryLocation(selectedKeys),
+                        void searchHistoryLocation(selectedKeys, "location"),
                     },
                     {
                       text: "Close",
@@ -15186,6 +15208,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
           { text: "Other nearby", onPress: () => void findHistoryVenueNearMedia(keys, "location") },
           { text: "Pub or bar", onPress: () => void findHistoryVenueNearMedia(keys, "pub") },
           { text: "Restaurant", onPress: () => void findHistoryVenueNearMedia(keys, "restaurant") },
+          { text: "Car Park", onPress: () => void searchHistoryLocation(keys, "carPark") },
           { text: "Station", onPress: () => void findHistoryVenueNearMedia(keys, "station") },
           { text: "Close", style: "cancel" },
         ]);

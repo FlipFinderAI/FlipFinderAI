@@ -14,6 +14,11 @@ RCT_EXTERN_METHOD(pickPlace:(nonnull NSNumber *)latitude
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(pickCoordinate:(nonnull NSNumber *)latitude
+                  longitude:(nonnull NSNumber *)longitude
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(searchPlaces:(nonnull NSNumber *)latitude
                   longitude:(nonnull NSNumber *)longitude
                   kind:(NSString *)kind

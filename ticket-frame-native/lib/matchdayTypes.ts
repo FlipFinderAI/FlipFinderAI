@@ -71,6 +71,6 @@ export type MatchdayMediaAssignment = {
 export type MatchdayCustomLocation = {
   id: string;
   name: string;
-  kind: "stadium" | "pub" | "restaurant" | "station" | "metro" | "location";
+  kind: "stadium" | "pub" | "restaurant" | "carPark" | "station" | "metro" | "location";
   createdAt: string;
 };
