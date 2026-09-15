@@ -12,6 +12,7 @@ export const MEDIA_METADATA_CACHE_KEY = "ticket-frame.media-metadata-cache.v1";
 export const MEDIA_INDEX_STATE_KEY = "ticket-frame.media-index-state.v1";
 export const HISTORY_PHOTO_SETUP_KEY = "ticket-frame.history-photo-setup.v2";
 export const DELETED_HISTORY_MATCHES_KEY = "ticket-frame.deleted-history-matches.v1";
+export const HISTORY_AUTO_ADD_SCANNED_DATES_KEY = "ticket-frame.history-auto-add-scanned-dates.v1";
 export const PHOTO_FEATURE_KEY = "ticket-frame.photo-memories-enabled.v1";
 export const SIRI_FEATURE_KEY = "ticket-frame.siri-enabled.v1";
 export const SIRI_ASKED_KEY = "ticket-frame.siri-asked.v1";

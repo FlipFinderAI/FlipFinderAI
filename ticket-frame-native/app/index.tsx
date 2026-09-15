@@ -121,6 +121,7 @@ import {
   AUTO_PHOTO_MATCHED_KEY,
   COMPLETED_TICKETS_SINCE_BACKUP_KEY,
   DELETED_HISTORY_MATCHES_KEY,
+  HISTORY_AUTO_ADD_SCANNED_DATES_KEY,
   GROUND_VISITS_KEY,
   HISTORY_PHOTO_SETUP_KEY,
   MATCHDAY_CUSTOM_LOCATIONS_KEY,
@@ -7673,6 +7674,26 @@ confidence: ${recognition.confidence}%`,
       const oldestMediaTime = oldestMedia?.creationTime ?? 0;
       const nowTime = Date.now();
 
+      const storedScannedDatesRaw =
+        mode === "new"
+          ? await AsyncStorage.getItem(
+              HISTORY_AUTO_ADD_SCANNED_DATES_KEY,
+            ).catch(() => null)
+          : null;
+
+      const storedScannedDates = new Set<string>();
+
+      if (storedScannedDatesRaw) {
+        try {
+          const parsed = JSON.parse(storedScannedDatesRaw);
+          if (Array.isArray(parsed)) {
+            for (const item of parsed) {
+              if (typeof item === "string") storedScannedDates.add(item);
+            }
+          }
+        } catch {}
+      }
+
       const fixtureDatesToScan = [...fixturesByDate.keys()]
         .filter((date) => {
           const startOfDay = new Date(`${date}T00:00:00`);
@@ -7681,7 +7702,8 @@ confidence: ${recognition.confidence}%`,
           return (
             !Number.isNaN(startOfDay.getTime()) &&
             endOfDay.getTime() >= oldestMediaTime &&
-            startOfDay.getTime() <= nowTime
+            startOfDay.getTime() <= nowTime &&
+            (mode === "all" || !storedScannedDates.has(date))
           );
         })
         .sort();
@@ -7931,6 +7953,12 @@ confidence: ${recognition.confidence}%`,
 
           after = page.hasNextPage ? page.endCursor : undefined;
         } while (after);
+
+        storedScannedDates.add(fixtureDate);
+        await AsyncStorage.setItem(
+          HISTORY_AUTO_ADD_SCANNED_DATES_KEY,
+          JSON.stringify([...storedScannedDates]),
+        );
       }
 
       console.warn("[history-auto-add] AFTER fixture-date scan", {
