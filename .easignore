@@ -21,7 +21,6 @@ android
 ../fressculator-native
 
 # Data backups
-data/history-packs
 data/history-packs-*
 data/*pre*
 data/*.backup*
