@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 70;
+	objectVersion = 63;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -69,7 +69,7 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		CA57F9DE3037A311004B591A /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+		CA57F9DE3037A311004B591A /* Exceptions for "TicketFrameShare" folder in "TicketFrameShare" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
@@ -79,7 +79,18 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		CA57F9D13037A311004B591A /* TicketFrameShare */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (CA57F9DE3037A311004B591A /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = TicketFrameShare; sourceTree = "<group>"; };
+		CA57F9D13037A311004B591A /* TicketFrameShare */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				CA57F9DE3037A311004B591A /* Exceptions for "TicketFrameShare" folder in "TicketFrameShare" target */,
+			);
+			explicitFileTypes = {
+			};
+			explicitFolders = (
+			);
+			path = TicketFrameShare;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
