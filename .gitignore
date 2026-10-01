@@ -39,3 +39,4 @@ data/*Cache.json
 data/matchDatabase.json
 
 .DS_Store
+inspect
