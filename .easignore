@@ -1,0 +1,33 @@
+.git
+node_modules
+
+# Native build leftovers
+ios/Pods
+ios/build
+ios-backup-before-native-fix
+
+# Android build not needed for iOS
+android
+
+# Development folders accidentally inside project tree
+../ticket-frame-tfd-runner
+../ticket-frame-recovery
+../ticket-frame-v4064-test
+../ticket-frame-android
+../tfd-source-cache
+../TicketFrame-RECOVERED-20260917
+../TicketFrame-SAFETY-20260917-010300
+../TicketFrame-BEFORE-SDK57-20260917-062234
+../fressculator-native
+
+# Data backups
+data/history-packs
+data/history-packs-*
+data/*pre*
+data/*.backup*
+data/*.bak
+
+# Logs/caches
+.expo
+.cache
+*.log

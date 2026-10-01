@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ticket-frame-private-demo",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-31",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ticket-frame-private-demo",
+      "database_id": "REPLACE_AFTER_D1_CREATE"
+    }
+  ]
+}
