@@ -1,4 +1,8 @@
-import { eligible, type VerifiedFixture } from "../../lib/community/eligibility";
+import {
+  eligible,
+  validCoordinates,
+  type VerifiedFixture,
+} from "../../lib/community/eligibility";
 import { AVATARS } from "../../lib/community/model";
 import { verifyCommunitySession } from "./auth";
 
@@ -36,6 +40,95 @@ function publicProfile(m: Member) {
  };
 }
 function fail(message: string, status = 400): never { throw Object.assign(new Error(message), { status }); }
+function experienceExpiry(
+  fixture: VerifiedFixture,
+  clubId: string,
+  now: number,
+) {
+  if (
+    !fixture ||
+    !Array.isArray(fixture.clubIds) ||
+    !fixture.clubIds.includes(clubId) ||
+    typeof fixture.kickoff !== "string" ||
+    !fixture.stadium ||
+    !validCoordinates(fixture.latitude, fixture.longitude)
+  ) {
+    return null;
+  }
+
+  const match = fixture.kickoff.match(
+    /^(\d{4})-(\d{2})-(\d{2})T.*(Z|([+-])(\d{2}):(\d{2}))$/,
+  );
+
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+
+  let offsetMinutes = 0;
+
+  if (match[4] !== "Z") {
+    const sign = match[5] === "-" ? -1 : 1;
+    const hours = Number(match[6]);
+    const minutes = Number(match[7]);
+
+    if (
+      !Number.isInteger(hours) ||
+      !Number.isInteger(minutes) ||
+      hours > 23 ||
+      minutes > 59
+    ) {
+      return null;
+    }
+
+    offsetMinutes = sign * (hours * 60 + minutes);
+  }
+
+  const localNow = new Date(now + offsetMinutes * 60000);
+
+  if (
+    localNow.getUTCFullYear() !== year ||
+    localNow.getUTCMonth() + 1 !== month ||
+    localNow.getUTCDate() !== day
+  ) {
+    return null;
+  }
+
+  const localMidnightUtc = Date.UTC(
+    year,
+    month - 1,
+    day + 1,
+    0,
+    0,
+    0,
+    0,
+  );
+
+  const expiresAt =
+    localMidnightUtc - offsetMinutes * 60000;
+
+  return Number.isFinite(expiresAt) && expiresAt > now
+    ? expiresAt
+    : null;
+}
+
+function validExperienceLocation(data: {
+  latitude?: unknown;
+  longitude?: unknown;
+  accuracy?: unknown;
+}) {
+  return (
+    typeof data.latitude === "number" &&
+    typeof data.longitude === "number" &&
+    typeof data.accuracy === "number" &&
+    validCoordinates(data.latitude, data.longitude) &&
+    Number.isFinite(data.accuracy) &&
+    data.accuracy >= 0 &&
+    data.accuracy <= 500
+  );
+}
+
 export async function communityFetch(request: Request, env: CommunityEnv): Promise<Response> {
  try {
   const authorization = request.headers.get("authorization");
@@ -133,6 +226,7 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
       id, identity.subject, safetyId, friendId, data.displayName.trim(), data.avatar,
       data.clubId, data.gamesAttended, JSON.stringify([...new Set(data.groundsVisited)])),
       sql("DELETE FROM community_presence WHERE member_id = ?", id),
+      sql("DELETE FROM community_matchday_experiences WHERE member_id = ?", id),
     ]);
     me = await sql("SELECT * FROM community_members WHERE id = ?", id).first<Member>();
     return json(state());
@@ -162,6 +256,7 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
        WHERE id=?`,
        +enabled, +locationVisible, +shareGames, +shareGrounds, +photoSharing, me.id),
       sql("DELETE FROM community_presence WHERE member_id=?", me.id),
+      sql("DELETE FROM community_matchday_experiences WHERE member_id=?", me.id),
     ]);
 
     me = await sql("SELECT * FROM community_members WHERE id=?", me.id).first<Member>();
@@ -199,6 +294,259 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
     return json({ presence: { fixtureId: fixture.id, stadium: fixture.stadium, latitude: fixture.latitude,
       longitude: fixture.longitude, expiresAt, onMap: false }, serverNow: now });
   }
+  if (path === "/experience" && request.method === "GET") {
+    const experience = await sql(
+      `SELECT fixture_id,stadium,latitude,longitude,accuracy,
+              started_at,updated_at,expires_at
+       FROM community_matchday_experiences
+       WHERE member_id=? AND expires_at>?`,
+      me.id,
+      now,
+    ).first<{
+      fixture_id: string;
+      stadium: string;
+      latitude: number;
+      longitude: number;
+      accuracy: number;
+      started_at: number;
+      updated_at: number;
+      expires_at: number;
+    }>();
+
+    return json({
+      experience: experience
+        ? {
+            fixtureId: experience.fixture_id,
+            stadium: experience.stadium,
+            latitude: experience.latitude,
+            longitude: experience.longitude,
+            accuracy: experience.accuracy,
+            startedAt: experience.started_at,
+            updatedAt: experience.updated_at,
+            expiresAt: experience.expires_at,
+          }
+        : null,
+      serverNow: now,
+    });
+  }
+
+  if (path === "/experience" && request.method === "POST") {
+    if (!me.location_visible) {
+      fail("Enable matchday visibility first.", 403);
+    }
+
+    if (
+      typeof data.fixtureId !== "string" ||
+      !data.fixtureId ||
+      !validExperienceLocation(data)
+    ) {
+      fail("Choose a verified fixture and share a valid location.");
+    }
+
+    const fixture = (await fixtures()).find(
+      f => f.id === data.fixtureId,
+    );
+
+    const expiresAt = fixture
+      ? experienceExpiry(fixture, me.club_id, now)
+      : null;
+
+    if (!fixture || !expiresAt) {
+      await sql(
+        "DELETE FROM community_matchday_experiences WHERE member_id=?",
+        me.id,
+      ).run();
+
+      fail(
+        "Matchday Experience is only available on the verified fixture calendar day.",
+        403,
+      );
+    }
+
+    await sql(
+      `INSERT INTO community_matchday_experiences(
+         member_id,fixture_id,stadium,latitude,longitude,accuracy,
+         started_at,updated_at,expires_at
+       )
+       VALUES(?,?,?,?,?,?,?,?,?)
+       ON CONFLICT(member_id) DO UPDATE SET
+         fixture_id=excluded.fixture_id,
+         stadium=excluded.stadium,
+         latitude=excluded.latitude,
+         longitude=excluded.longitude,
+         accuracy=excluded.accuracy,
+         started_at=excluded.started_at,
+         updated_at=excluded.updated_at,
+         expires_at=excluded.expires_at`,
+      me.id,
+      fixture.id,
+      fixture.stadium,
+      data.latitude,
+      data.longitude,
+      data.accuracy,
+      now,
+      now,
+      expiresAt,
+    ).run();
+
+    return json({
+      experience: {
+        fixtureId: fixture.id,
+        stadium: fixture.stadium,
+        latitude: data.latitude,
+        longitude: data.longitude,
+        accuracy: data.accuracy,
+        startedAt: now,
+        updatedAt: now,
+        expiresAt,
+      },
+      serverNow: now,
+    });
+  }
+
+  if (
+    path === "/experience/location" &&
+    request.method === "POST"
+  ) {
+    if (!me.location_visible) {
+      fail("Enable matchday visibility first.", 403);
+    }
+
+    if (!validExperienceLocation(data)) {
+      fail("Share a valid location.");
+    }
+
+    const current = await sql(
+      `SELECT fixture_id
+       FROM community_matchday_experiences
+       WHERE member_id=? AND expires_at>?`,
+      me.id,
+      now,
+    ).first<{ fixture_id: string }>();
+
+    if (!current) {
+      fail("Start Matchday Experience first.", 409);
+    }
+
+    const fixture = (await fixtures()).find(
+      f => f.id === current.fixture_id,
+    );
+
+    const expiresAt = fixture
+      ? experienceExpiry(fixture, me.club_id, now)
+      : null;
+
+    if (!fixture || !expiresAt) {
+      await sql(
+        "DELETE FROM community_matchday_experiences WHERE member_id=?",
+        me.id,
+      ).run();
+
+      fail("This Matchday Experience has expired.", 403);
+    }
+
+    await sql(
+      `UPDATE community_matchday_experiences
+       SET latitude=?,longitude=?,accuracy=?,updated_at=?,expires_at=?
+       WHERE member_id=? AND fixture_id=?`,
+      data.latitude,
+      data.longitude,
+      data.accuracy,
+      now,
+      expiresAt,
+      me.id,
+      fixture.id,
+    ).run();
+
+    return json({
+      experience: {
+        fixtureId: fixture.id,
+        stadium: fixture.stadium,
+        latitude: data.latitude,
+        longitude: data.longitude,
+        accuracy: data.accuracy,
+        updatedAt: now,
+        expiresAt,
+      },
+      serverNow: now,
+    });
+  }
+
+  if (path === "/experience" && request.method === "DELETE") {
+    await sql(
+      "DELETE FROM community_matchday_experiences WHERE member_id=?",
+      me.id,
+    ).run();
+
+    return json({ ok: true });
+  }
+
+  if (
+    path === "/experience/discover" &&
+    request.method === "GET"
+  ) {
+    if (!me.location_visible) {
+      fail("Enable matchday visibility first.", 403);
+    }
+
+    const rows = (
+      await sql(
+        `SELECT m.*, peer.fixture_id,peer.stadium,
+                peer.latitude,peer.longitude,
+                peer.updated_at,peer.expires_at
+         FROM community_matchday_experiences own
+         JOIN community_matchday_experiences peer
+           ON peer.fixture_id=own.fixture_id
+         JOIN community_members m
+           ON m.id=peer.member_id
+         WHERE own.member_id=?
+         AND own.expires_at>?
+         AND peer.expires_at>?
+         AND peer.member_id<>?
+         AND m.club_id=?
+         AND m.enabled=1
+         AND m.location_visible=1
+         AND NOT EXISTS (
+           SELECT 1 FROM community_blocks b
+           WHERE
+             (b.blocker=? AND b.blocked=m.id)
+             OR
+             (b.blocked=? AND b.blocker=m.id)
+         )
+         LIMIT 100`,
+        me.id,
+        now,
+        now,
+        me.id,
+        me.club_id,
+        me.id,
+        me.id,
+      ).all<
+        Member & {
+          fixture_id: string;
+          stadium: string;
+          latitude: number;
+          longitude: number;
+          updated_at: number;
+          expires_at: number;
+        }
+      >()
+    ).results;
+
+    return json({
+      people: rows.map(row => ({
+        profile: publicProfile(row),
+        fixtureId: row.fixture_id,
+        stadium: row.stadium,
+        latitude: row.latitude,
+        longitude: row.longitude,
+        updatedAt: row.updated_at,
+        expiresAt: row.expires_at,
+      })),
+      serverNow: now,
+    });
+  }
+
   if (path === "/map" && request.method === "DELETE") {
     await sql("UPDATE community_presence SET on_map=0 WHERE member_id=?", me.id).run();
     return json({ ok: true });
@@ -319,7 +667,7 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
 
     // Normal Matchday route. Both supporters must still have live presence
     // for the same verified fixture when the request is created.
-    const result = await sql(`INSERT OR IGNORE INTO community_relationships
+    let result = await sql(`INSERT OR IGNORE INTO community_relationships
       (id,sender,recipient,status,friend_type)
       SELECT ?,?,m.id,'pending',? FROM community_members m
       JOIN community_presence p ON p.member_id=m.id
@@ -345,6 +693,38 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
       now,
       now
     ).run();
+
+    if (!result.meta.changes) {
+      result = await sql(
+        `INSERT OR IGNORE INTO community_relationships
+           (id,sender,recipient,status,friend_type)
+         SELECT ?,?,m.id,'pending',?
+         FROM community_members m
+         WHERE m.id=?
+         AND ${peerGuard}
+         AND m.location_visible=1
+         AND EXISTS (
+           SELECT 1
+           FROM community_matchday_experiences own
+           JOIN community_matchday_experiences peer
+             ON peer.fixture_id=own.fixture_id
+           WHERE own.member_id=?
+           AND peer.member_id=m.id
+           AND own.expires_at>?
+           AND peer.expires_at>?
+         )`,
+        relationshipId,
+        me.id,
+        data.friendType,
+        data.target,
+        me.club_id,
+        me.id,
+        me.id,
+        me.id,
+        now,
+        now,
+      ).run();
+    }
 
     if (!result.meta.changes) {
       fail("This supporter is unavailable or a request already exists.", 409);
@@ -466,7 +846,25 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
        now
      ).first();
 
-     return Boolean(live);
+     if (live) return true;
+
+    const experience = await sql(
+      `SELECT 1 ok
+       FROM community_matchday_experiences own
+       JOIN community_matchday_experiences peer
+         ON peer.fixture_id=own.fixture_id
+       WHERE own.member_id=?
+       AND peer.member_id=?
+       AND own.expires_at>?
+       AND peer.expires_at>?
+       LIMIT 1`,
+      me!.id,
+      friend.id,
+      now,
+      now,
+    ).first();
+
+    return Boolean(experience);
    }
 
    function containsPhoneNumber(value: string) {

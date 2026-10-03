@@ -1008,6 +1008,10 @@ export async function communityAuthFetch(
              WHERE member_id=?`,
           ).bind(memberId),
           env.DB.prepare(
+            `DELETE FROM community_matchday_experiences
+             WHERE member_id=?`,
+          ).bind(memberId),
+          env.DB.prepare(
             `DELETE FROM community_members
              WHERE id=?`,
           ).bind(memberId),

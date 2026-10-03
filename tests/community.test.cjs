@@ -785,3 +785,286 @@ test('existing relationship rows default safely to Matchday Friend', async () =>
 
  assert.equal(relationship.friend_type, 'matchday');
 });
+
+test('Matchday Experience is explicit, any-distance, snapshot-based and separate from normal presence', async () => {
+  const { member, call, db } = setup();
+
+  const a = await member('experience-a');
+  const b = await member('experience-b');
+
+  const farA = {
+    latitude: 51.5074,
+    longitude: -0.1278,
+    accuracy: 12
+  };
+
+  const farB = {
+    latitude: 55.9533,
+    longitude: -3.1883,
+    accuracy: 18
+  };
+
+  // These locations are deliberately nowhere near the test stadium.
+  // Experience is calendar-day based, not the normal two-mile rule.
+  let result = await call('experience-a', '/experience', {
+    fixtureId: fixture.id,
+    ...farA
+  });
+
+  assert.equal(result.status, 200);
+  assert.equal(result.body.experience.fixtureId, fixture.id);
+  assert.equal(result.body.experience.latitude, farA.latitude);
+  assert.equal(result.body.experience.longitude, farA.longitude);
+
+  result = await call('experience-b', '/experience', {
+    fixtureId: fixture.id,
+    ...farB
+  });
+
+  assert.equal(result.status, 200);
+
+  let discover = await call(
+    'experience-a',
+    '/experience/discover'
+  );
+
+  assert.equal(discover.status, 200);
+  assert.equal(discover.body.people.length, 1);
+  assert.equal(discover.body.people[0].profile.id, b);
+  assert.equal(
+    discover.body.people[0].latitude,
+    farB.latitude
+  );
+  assert.equal(
+    discover.body.people[0].longitude,
+    farB.longitude
+  );
+
+  // Normal Matchday cleanup must NOT finish an Experience.
+  await call('experience-a', '/presence', undefined, 'DELETE');
+
+  assert.equal(
+    db.prepare(
+      'SELECT count(*) n FROM community_matchday_experiences WHERE member_id=?'
+    ).get(a).n,
+    1
+  );
+
+  // Location changes only when explicitly requested.
+  const updated = {
+    latitude: 52.4862,
+    longitude: -1.8904,
+    accuracy: 10
+  };
+
+  result = await call(
+    'experience-a',
+    '/experience/location',
+    updated
+  );
+
+  assert.equal(result.status, 200);
+
+  const stored = db.prepare(
+    `SELECT latitude,longitude
+     FROM community_matchday_experiences
+     WHERE member_id=?`
+  ).get(a);
+
+  assert.equal(stored.latitude, updated.latitude);
+  assert.equal(stored.longitude, updated.longitude);
+
+  // Explicit Finish removes the snapshot.
+  assert.equal(
+    (await call(
+      'experience-a',
+      '/experience',
+      undefined,
+      'DELETE'
+    )).status,
+    200
+  );
+
+  assert.equal(
+    db.prepare(
+      'SELECT count(*) n FROM community_matchday_experiences WHERE member_id=?'
+    ).get(a).n,
+    0
+  );
+
+  discover = await call(
+    'experience-b',
+    '/experience/discover'
+  );
+
+  assert.equal(discover.body.people.length, 0);
+});
+
+test('Matchday Friend messaging works during a shared active Matchday Experience', async () => {
+  const { member, call, db } = setup();
+
+  const a = await member('experience-friend-a');
+  const b = await member('experience-friend-b');
+
+  const bFriendId = db.prepare(
+    'SELECT friend_id FROM community_members WHERE id=?'
+  ).get(b).friend_id;
+
+  assert.equal(
+    (await call(
+      'experience-friend-a',
+      '/friend-request',
+      {
+        target: b,
+        friendType: 'matchday',
+        lookup: bFriendId
+      }
+    )).status,
+    200
+  );
+
+  const incoming = (
+    await call('experience-friend-b', '/friends')
+  ).body.relationships[0];
+
+  assert.equal(
+    (await call(
+      'experience-friend-b',
+      '/relationship',
+      {
+        id: incoming.id,
+        action: 'accept'
+      }
+    )).status,
+    200
+  );
+
+  // No normal presence and no Experience: locked.
+  assert.equal(
+    (await call(
+      'experience-friend-a',
+      '/message',
+      {
+        target: b,
+        body: 'Before Experience'
+      }
+    )).status,
+    403
+  );
+
+  assert.equal(
+    (await call(
+      'experience-friend-a',
+      '/experience',
+      {
+        fixtureId: fixture.id,
+        latitude: 51.5,
+        longitude: -0.12,
+        accuracy: 10
+      }
+    )).status,
+    200
+  );
+
+  assert.equal(
+    (await call(
+      'experience-friend-b',
+      '/experience',
+      {
+        fixtureId: fixture.id,
+        latitude: 55.95,
+        longitude: -3.18,
+        accuracy: 10
+      }
+    )).status,
+    200
+  );
+
+  // Same verified fixture, any distance.
+  assert.equal(
+    (await call(
+      'experience-friend-a',
+      '/message',
+      {
+        target: b,
+        body: 'Experience is active'
+      }
+    )).status,
+    200
+  );
+
+  await call(
+    'experience-friend-b',
+    '/experience',
+    undefined,
+    'DELETE'
+  );
+
+  assert.equal(
+    (await call(
+      'experience-friend-a',
+      '/message',
+      {
+        target: b,
+        body: 'Experience finished'
+      }
+    )).status,
+    403
+  );
+});
+
+test('Matchday Experience fails closed for invalid location and privacy withdrawal', async () => {
+  const { member, call, db } = setup();
+
+  const a = await member('experience-private');
+
+  assert.equal(
+    (await call(
+      'experience-private',
+      '/experience',
+      {
+        fixtureId: fixture.id,
+        latitude: 999,
+        longitude: -1,
+        accuracy: 5
+      }
+    )).status,
+    400
+  );
+
+  assert.equal(
+    (await call(
+      'experience-private',
+      '/experience',
+      {
+        fixtureId: fixture.id,
+        latitude: 52,
+        longitude: -1,
+        accuracy: 10
+      }
+    )).status,
+    200
+  );
+
+  assert.equal(
+    db.prepare(
+      'SELECT count(*) n FROM community_matchday_experiences WHERE member_id=?'
+    ).get(a).n,
+    1
+  );
+
+  await call('experience-private', '/preferences', {
+    enabled: false,
+    locationVisible: false,
+    shareGames: false,
+    shareGrounds: false,
+    photoSharing: false
+  });
+
+  assert.equal(
+    db.prepare(
+      'SELECT count(*) n FROM community_matchday_experiences WHERE member_id=?'
+    ).get(a).n,
+    0
+  );
+});
