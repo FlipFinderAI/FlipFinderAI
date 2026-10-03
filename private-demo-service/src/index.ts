@@ -1,3 +1,4 @@
+import { communityFetch, type CommunityEnv } from "./community";
 type D1Result = { meta: { changes: number } };
 type D1PreparedStatement = {
   bind: (...values: unknown[]) => D1PreparedStatement;
@@ -8,7 +9,7 @@ type D1Database = {
   prepare: (query: string) => D1PreparedStatement;
 };
 
-type Env = {
+type Env = CommunityEnv & {
   DB: D1Database;
   OWNER_CODE: string;
   PUBLIC_ORIGIN: string;
@@ -144,6 +145,7 @@ function demoPage(payload: string) {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    if (url.pathname.startsWith("/api/community/")) return communityFetch(request, env);
     if (request.method === "POST" && url.pathname === "/api/demos") return createDemo(request, env);
     const match = request.method === "GET" ? url.pathname.match(/^\/d\/([^/]+)$/) : null;
     if (match) return viewDemo(request, env, match[1]);
