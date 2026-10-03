@@ -408,6 +408,7 @@ import {
 import { APP_NAME, APP_VERSION } from "@/lib/appVersion";
 import {
   acknowledgeAndCancelMatchCheckIn,
+  resolveMatchCheckInAttendance,
   configureMatchGeofences,
   buildMatchCheckInFixtures,
   checkMatchCheckInPermissions,
@@ -3431,8 +3432,14 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
           checkInPromptedRef.current.add(fixture.key);
           setPendingMatchCheckIn(current => current ?? fixture);
         };
-        const unresolved = (await unresolvedMatchCheckInPresence()).filter(item => candidates.some(candidate => candidate.key === item.key));
-        if (unresolved.length) { await offer(unresolved[0]); return; }
+        // Persisted unresolved presence is already verified stadium
+        // evidence. It may belong to a fixture whose +3h live window has
+        // ended, so do not filter it through current upcoming candidates.
+        const unresolved = await unresolvedMatchCheckInPresence();
+        if (unresolved.length) {
+          await offer(unresolved[0]);
+          return;
+        }
         const active = candidates.filter(fixture => isInCheckInWindow(fixture));
         if (!active.length) return;
         const current = await Location.getCurrentPositionAsync({accuracy: Location.Accuracy.Balanced});
@@ -3468,7 +3475,10 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
         ?.matchCheckIn as MatchCheckInFixture | undefined;
       if (!fixture) return;
       if (response.actionIdentifier === "ATTENDED_NO") {
-        void acknowledgeAndCancelMatchCheckIn(fixture.key);
+        void resolveMatchCheckInAttendance(
+          fixture.key,
+          "rejected",
+        );
         setPendingMatchCheckIn(null);
         return;
       }
@@ -3524,7 +3534,10 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
       attendanceHistoryRef.current = result.records;
       setAttendanceHistory(result.records);
 
-      void acknowledgeAndCancelMatchCheckIn(fixture.key);
+      void resolveMatchCheckInAttendance(
+        fixture.key,
+        "confirmed",
+      );
       setPendingMatchCheckIn(null);
 
       const record = result.record;
@@ -3579,7 +3592,10 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
         );
     };
     const cancel = () => {
-      void acknowledgeAndCancelMatchCheckIn(fixture.key);
+      void resolveMatchCheckInAttendance(
+        fixture.key,
+        "rejected",
+      );
       setPendingMatchCheckIn(null);
     };
     const title = "Did you attend this game?";
@@ -3628,7 +3644,10 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
     attendanceHistoryRef.current = result.records;
     setAttendanceHistory(result.records);
 
-    void acknowledgeAndCancelMatchCheckIn(fixture.key);
+    void resolveMatchCheckInAttendance(
+        fixture.key,
+        "confirmed",
+      );
 
     const record = result.record;
 

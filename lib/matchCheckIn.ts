@@ -12,6 +12,15 @@ export const MATCH_CHECKIN_FIXTURES_KEY = "ticket-frame.match-checkin-fixtures.v
 export const MATCH_CHECKIN_ACK_KEY = "ticket-frame.match-checkin-ack.v1";
 export const MATCH_CHECKIN_PRESENCE_KEY = "ticket-frame.match-checkin-presence.v1";
 export const MATCH_CHECKIN_REMINDERS_KEY = "ticket-frame.match-checkin-reminders.v1";
+export const MATCH_CHECKIN_ATTENDANCE_DECISIONS_KEY =
+  "ticket-frame.match-check-in-attendance-decisions.v1";
+
+export type MatchCheckInAttendanceOutcome = "confirmed" | "rejected";
+
+export type MatchCheckInAttendanceDecision = {
+  outcome: MatchCheckInAttendanceOutcome;
+  decidedAt: string;
+};
 
 const MATCH_CHECKIN_DETECTION_RADIUS_METRES = 500;
 const MATCH_CHECKIN_WINDOW_BEFORE_MS = 60 * 60 * 1000;
@@ -202,6 +211,49 @@ export async function checkMatchCheckInPermissions(): Promise<void> {
 let configurationQueue: Promise<void> = Promise.resolve();
 let registeredSignature = "";
 
+export async function matchCheckInAttendanceDecision(
+  key: string,
+): Promise<MatchCheckInAttendanceDecision | null> {
+  const raw = await AsyncStorage.getItem(
+    MATCH_CHECKIN_ATTENDANCE_DECISIONS_KEY,
+  );
+  if (!raw) return null;
+
+  const decisions: Record<string, MatchCheckInAttendanceDecision> =
+    JSON.parse(raw);
+
+  return decisions[key] ?? null;
+}
+
+export async function recordMatchCheckInAttendanceDecision(
+  key: string,
+  outcome: MatchCheckInAttendanceOutcome,
+): Promise<void> {
+  const raw = await AsyncStorage.getItem(
+    MATCH_CHECKIN_ATTENDANCE_DECISIONS_KEY,
+  );
+
+  const decisions: Record<string, MatchCheckInAttendanceDecision> =
+    raw ? JSON.parse(raw) : {};
+
+  // Re-answering must never silently reverse an already final decision.
+  if (decisions[key]) return;
+
+  decisions[key] = {
+    outcome,
+    decidedAt: new Date().toISOString(),
+  };
+
+  const trimmed = Object.fromEntries(
+    Object.entries(decisions).slice(-200),
+  );
+
+  await AsyncStorage.setItem(
+    MATCH_CHECKIN_ATTENDANCE_DECISIONS_KEY,
+    JSON.stringify(trimmed),
+  );
+}
+
 export async function acknowledgeMatchCheckIn(key: string): Promise<void> {
   if (iosCheckIn) {
     await migrateNativeCheckIn();
@@ -214,6 +266,8 @@ export async function acknowledgeMatchCheckIn(key: string): Promise<void> {
 }
 
 export async function isMatchCheckInAcknowledged(key: string): Promise<boolean> {
+  if (await matchCheckInAttendanceDecision(key)) return true;
+
   const raw = await AsyncStorage.getItem(MATCH_CHECKIN_ACK_KEY);
   const keys: string[] = raw ? JSON.parse(raw) : [];
   return keys.includes(key);
@@ -278,6 +332,16 @@ export async function acknowledgeAndCancelMatchCheckIn(
   }
 }
 
+export async function resolveMatchCheckInAttendance(
+  key: string,
+  outcome: MatchCheckInAttendanceOutcome,
+): Promise<void> {
+  // Persist the final Yes/No first. If cleanup is interrupted, the
+  // decision still prevents the supporter being asked repeatedly.
+  await recordMatchCheckInAttendanceDecision(key, outcome);
+  await acknowledgeAndCancelMatchCheckIn(key);
+}
+
 export async function recordMatchCheckInPresence(
   fixture: MatchCheckInFixture,
 ): Promise<void> {
@@ -321,7 +385,11 @@ export async function unresolvedMatchCheckInPresence(): Promise<
 
   const presence: Record<
     string,
-    { fixture?: MatchCheckInFixture; detectedAt?: string }
+    {
+      fixture?: MatchCheckInFixture;
+      detectedAt?: string;
+      tentative?: boolean;
+    }
   > = JSON.parse(presenceRaw);
 
   const acknowledgedRaw = await AsyncStorage.getItem(MATCH_CHECKIN_ACK_KEY);
@@ -330,19 +398,26 @@ export async function unresolvedMatchCheckInPresence(): Promise<
     : [];
   const acknowledgedSet = new Set(acknowledged);
 
-  const now = Date.now();
+  const decisionsRaw = await AsyncStorage.getItem(
+    MATCH_CHECKIN_ATTENDANCE_DECISIONS_KEY,
+  );
+  const decisions: Record<string, MatchCheckInAttendanceDecision> =
+    decisionsRaw ? JSON.parse(decisionsRaw) : {};
 
   return Object.entries(presence)
     .filter(([key, item]) => {
-      if (acknowledgedSet.has(key) || !item?.fixture) return false;
+      if (
+        acknowledgedSet.has(key) ||
+        decisions[key] ||
+        !item?.fixture
+      ) {
+        return false;
+      }
 
-      const kickoff = matchKickoffMs(item.fixture);
-      if (kickoff == null) return false;
-
-      return (
-        now >= kickoff - MATCH_CHECKIN_WINDOW_BEFORE_MS &&
-        now <= kickoff + MATCH_CHECKIN_WINDOW_AFTER_MS
-      );
+      // Genuine stadium evidence remains unresolved until the supporter
+      // explicitly answers Yes or No, even after the normal check-in
+      // window and after leaving the stadium.
+      return item.tentative === false;
     })
     .map(([, item]) => item.fixture!);
 }
