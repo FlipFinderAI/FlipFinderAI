@@ -11427,6 +11427,53 @@ useEffect(() => {
         );
         return;
       }
+
+      // Matchday Experience belongs to the fixture day. It becomes available
+      // at 00:00 local time and keeps the original lifecycle thereafter.
+      const experienceDatePart = String(match.date ?? "").slice(0, 10);
+      const experienceKickoffText = String(match.kickoff ?? "15:00");
+      const experienceTimeMatch = experienceKickoffText.match(
+        /(?:T|^)(\d{2}):(\d{2})/,
+      );
+      const experienceDayStart = new Date(
+        `${experienceDatePart}T00:00:00`,
+      );
+      const experienceKickoffAt = new Date(
+        `${experienceDatePart}T${experienceTimeMatch?.[1] ?? "15"}:${experienceTimeMatch?.[2] ?? "00"}:00`,
+      );
+      const experienceInitialAutoOffAt = new Date(
+        experienceKickoffAt.getTime() + 11 * 60 * 60 * 1000,
+      );
+      const experienceNow = Date.now();
+
+      if (
+        !experienceDatePart ||
+        !Number.isFinite(experienceDayStart.getTime()) ||
+        !Number.isFinite(experienceKickoffAt.getTime())
+      ) {
+        Alert.alert(
+          "Matchday Experience unavailable",
+          "This match does not have a reliable date and kick-off time.",
+        );
+        return;
+      }
+
+      if (experienceNow < experienceDayStart.getTime()) {
+        Alert.alert(
+          "Matchday Experience opens on matchday",
+          "Matchday Experience becomes available from 00:00 on the day of this match.",
+        );
+        return;
+      }
+
+      if (experienceNow >= experienceInitialAutoOffAt.getTime()) {
+        Alert.alert(
+          "Matchday Experience has ended",
+          "The initial Matchday Experience window for this match has finished.",
+        );
+        return;
+      }
+
       const chooseStart = (supporter: MatchdaySupporterType) =>
         Alert.alert(
           "Start Matchday Experience?",
