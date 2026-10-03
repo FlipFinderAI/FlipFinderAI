@@ -1,3 +1,4 @@
+import Friends from "@/components/community/Friends";
 import Matchday from "@/components/community/Matchday";
 import { useEffect, useState } from "react";
 import { router, useLocalSearchParams } from "expo-router";
@@ -81,6 +82,7 @@ export default function CommunityScreen() {
         onValueChange={visible => void run(() => privacy(true, visible))} />
       <Text style={styles.copy}>Location is checked only when you ask, while the app is open. Joining Community does not add you to the Matchday Map.</Text>
       <Matchday enabled={active && state.preferences.locationVisible} clubId={clubId} busy={busy} run={run} />
+      <Friends enabled={active} busy={busy} run={run} />
       {/* COMMUNITY_FEATURES */}
       {!!status && <Text accessibilityLiveRegion="polite">{status}</Text>}
     </ScrollView>

@@ -88,3 +88,22 @@ test('map is separate opt-in and discovery respects club, expiry and blocks', as
  assert.equal((await call('a','/discover')).body.people.length,0);
  assert.equal((await call('b','/map',{})).status,403);
 });
+test('friend lifecycle rejects forged accept, other clubs, expired visibility and blocks', async () => {
+ const { member, call, db } = setup();
+ const a = await member('a'), b = await member('b'), c = await member('c','club-c');
+ await call('a','/presence',{ fixtureId:fixture.id,...coords });
+ await call('b','/presence',{ fixtureId:fixture.id,...coords });
+ assert.equal((await call('a','/friend-request',{ target:c })).status,409);
+ assert.equal((await call('a','/friend-request',{ target:b })).status,200);
+ const incoming = (await call('b','/friends')).body.relationships[0];
+ assert.equal(incoming.incoming,true);
+ assert.equal((await call('a','/relationship',{ id:incoming.id, action:'accept' })).status,409);
+ assert.equal((await call('b','/relationship',{ id:incoming.id, action:'accept' })).status,200);
+ assert.equal((await call('a','/friends')).body.relationships[0].status,'accepted');
+ assert.equal((await call('b','/report',{ target:a, reason:'Abuse' })).status,200);
+ assert.equal(db.prepare('SELECT count(*) n FROM community_reports').get().n,1);
+ await call('b','/block',{ target:a });
+ assert.equal((await call('a','/friends')).body.relationships.length,0);
+ assert.equal((await call('a','/friend-request',{ target:b })).status,409);
+ assert.equal((await call('a','/discover')).body.people.length,0);
+});

@@ -130,6 +130,60 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
     return json({ people: rows.map(m => ({ profile: publicProfile(m), stadium: m.stadium,
       latitude: m.stadium_lat, longitude: m.stadium_lon, expiresAt: m.expires_at })), serverNow: now });
   }
+  const peerGuard = `m.enabled=1 AND m.club_id=? AND NOT EXISTS
+    (SELECT 1 FROM community_blocks b WHERE (b.blocker=? AND b.blocked=m.id) OR (b.blocked=? AND b.blocker=m.id))`;
+  if (path === "/friends" && request.method === "GET") {
+    const rows = (await sql(`SELECT m.*, r.id relationship_id, r.sender, r.status FROM community_relationships r
+      JOIN community_members m ON m.id=CASE WHEN r.sender=? THEN r.recipient ELSE r.sender END
+      WHERE (r.sender=? OR r.recipient=?) AND ${peerGuard} LIMIT 200`, me.id, me.id, me.id, me.club_id, me.id, me.id)
+      .all<Member & { relationship_id: string; sender: string; status: string }>()).results;
+    return json({ relationships: rows.map(row => ({ id: row.relationship_id, status: row.status,
+      incoming: row.sender !== me!.id, profile: publicProfile(row) })) });
+  }
+  if (path === "/friend-request" && request.method === "POST") {
+    if (typeof data.target !== "string" || data.target === me.id) fail("Choose a visible supporter.");
+    // Every eligibility predicate is checked in the INSERT, so stale discovery cannot grant access.
+    const result = await sql(`INSERT OR IGNORE INTO community_relationships(id,sender,recipient,status)
+      SELECT ?,?,m.id,'pending' FROM community_members m
+      JOIN community_presence p ON p.member_id=m.id
+      JOIN community_presence own ON own.member_id=? AND own.fixture_id=p.fixture_id
+      JOIN community_members self ON self.id=own.member_id
+      WHERE m.id=? AND ${peerGuard} AND self.enabled=1 AND self.location_visible=1
+      AND self.club_id=m.club_id AND m.location_visible=1 AND own.expires_at>? AND p.expires_at>?`,
+      crypto.randomUUID(), me.id, me.id, data.target, me.club_id, me.id, me.id, now, now).run();
+    if (!result.meta.changes) fail("This supporter is unavailable or a request already exists.", 409);
+    return json({ ok: true });
+  }
+  if (path === "/relationship" && request.method === "POST") {
+    if (typeof data.id !== "string" || !["accept", "decline", "unfriend"].includes(data.action)) fail("Invalid friendship action.");
+    if (data.action === "accept") {
+      const result = await sql(`UPDATE community_relationships SET status='accepted' WHERE id=? AND recipient=? AND status='pending'
+        AND EXISTS (SELECT 1 FROM community_members m WHERE m.id=sender AND ${peerGuard})`, data.id, me.id, me.club_id, me.id, me.id).run();
+      if (!result.meta.changes) fail("This request is no longer available.", 409);
+    } else {
+      await sql("DELETE FROM community_relationships WHERE id=? AND (sender=? OR recipient=?) AND status=?", data.id, me.id, me.id, data.action === "decline" ? "pending" : "accepted").run();
+    }
+    return json({ ok: true });
+  }
+  if (path === "/block" && request.method === "POST") {
+    if (typeof data.target !== "string" || data.target === me.id) fail("Choose a supporter to block.");
+    const target = await sql("SELECT id FROM community_members WHERE id=?", data.target).first();
+    if (!target) fail("Supporter unavailable.", 404);
+    await env.DB.batch([
+      sql("INSERT OR IGNORE INTO community_blocks(blocker,blocked) VALUES(?,?)", me.id, data.target),
+      sql("DELETE FROM community_relationships WHERE (sender=? AND recipient=?) OR (sender=? AND recipient=?)", me.id, data.target, data.target, me.id),
+    ]);
+    return json({ ok: true });
+  }
+  if (path === "/report" && request.method === "POST") {
+    if (typeof data.target !== "string" || typeof data.reason !== "string" || !data.reason.trim() || data.reason.length>1000 || data.target===me.id) fail("Enter a report reason of 1–1000 characters.");
+    const target = await sql("SELECT id FROM community_members WHERE id=?", data.target).first();
+    if (!target) fail("Supporter unavailable.", 404);
+    const recent = await sql("SELECT id FROM community_reports WHERE reporter=? AND reported=? AND created_at>?", me.id, data.target, now-3600000).first();
+    if (recent) fail("Your report has already been received.", 429);
+    await sql("INSERT INTO community_reports VALUES(?,?,?,?,?)", crypto.randomUUID(), me.id, data.target, data.reason.trim(), now).run();
+    return json({ ok: true });
+  }
   // Feature routes are added in independently checkpointed stages.
   return json({ error: "Community route not found." }, 404);
  } catch (error) {
