@@ -11004,6 +11004,11 @@ const handleTileDrop = (id: string, tx: number, ty: number) => {
               height: asset.height,
               fileName: asset.filename,
               source: "automatic",
+              provenance: {
+                kind: "matchday-experience",
+                experienceId: experience.id,
+                matchId: experience.matchId,
+              },
               latitude: Number.isFinite(Number(info?.location?.latitude))
                 ? Number(info?.location?.latitude)
                 : undefined,

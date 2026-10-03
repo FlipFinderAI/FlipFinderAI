@@ -18,6 +18,14 @@ export type MatchMediaReference = {
   // Persist how this media entered Match Memory. Legacy references have no
   // source and are deliberately preserved rather than guessed.
   source?: "automatic" | "manual";
+  // Explicit provenance is required before Matchday Experience media can be
+  // subject to attendance-based retention. Legacy/unmarked references are
+  // deliberately preserved rather than inferred from dates or GPS.
+  provenance?: {
+    kind: "matchday-experience";
+    experienceId: string;
+    matchId: string;
+  };
   // Preserve the original Photos GPS on Ticket Frame's own media reference.
   // This survives durable copying and means venue/stadium intelligence does
   // not depend on repeatedly asking Apple Photos for the location.
