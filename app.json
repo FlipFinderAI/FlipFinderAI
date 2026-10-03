@@ -42,7 +42,7 @@
         "expo-image-picker",
         {
           "photosPermission": "Football Ticket Frame needs access to ticket screenshots you choose and match-day photos you privately save in Match Memories.",
-          "cameraPermission": false,
+          "cameraPermission": "Football Ticket Frame uses the camera only when you choose to take a Community profile photo or an eligible matchday photo.",
           "microphonePermission": false
         }
       ],

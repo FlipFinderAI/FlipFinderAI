@@ -70,6 +70,8 @@
 	<string>Football Ticket Frame uses your location for live nearby Apple Maps results, stadium attendance and private photo-location grouping.</string>
 	<key>NSMotionUsageDescription</key>
 	<string>Football Ticket Frame does not use motion data directly; this permission description is included because an integrated framework may reference motion-related system APIs.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Football Ticket Frame uses the camera only when you choose to take a Community profile photo or an eligible matchday photo.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Football Ticket Frame can save photos you choose for match memories.</string>
 	<key>NSPhotoLibraryUsageDescription</key>

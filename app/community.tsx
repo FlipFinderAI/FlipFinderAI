@@ -3,9 +3,11 @@ import Messages from "@/components/community/Messages";
 import Matchday from "@/components/community/Matchday";
 import { useEffect, useState } from "react";
 import { router, useLocalSearchParams } from "expo-router";
-import { Alert, AppState, ScrollView, Switch, Text, TextInput, View } from "react-native";
+import { Alert, AppState, Image, ScrollView, Switch, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as ImagePicker from "expo-image-picker";
+import * as ImageManipulator from "expo-image-manipulator";
 import { loadAttendanceHistory } from "@/lib/attendanceHistory";
 import { AVATARS, OFF, attendanceSummary, type Avatar, type CommunityState } from "@/lib/community/model";
 import {
@@ -28,6 +30,8 @@ import {
 import { Action, styles } from "@/components/community/Controls";
 
 const DRAFT_KEY = "ticket-frame.community-profile-draft.v1";
+const AVATAR_PHOTO_KEY = "ticket-frame.community-avatar-photo.v1";
+const BIOMETRIC_KEY = "ticket-frame.community-biometric-enabled.v1";
 export default function CommunityScreen() {
   const {
     clubId,
@@ -47,7 +51,13 @@ export default function CommunityScreen() {
   const openedFromMatchdayExperience =
     experience === "active" && Boolean(experienceId) && Boolean(fixtureId);
   const [name, setName] = useState("");
+  // The emoji value remains an internal server-compatibility fallback until
+  // Community private image storage is added. It is no longer shown as the UI avatar.
   const [avatar, setAvatar] = useState<Avatar>("⚽");
+  const [avatarPhoto, setAvatarPhoto] = useState<string | null>(null);
+  const [biometricEnabled, setBiometricEnabled] = useState(false);
+  const [biometricChoiceMade, setBiometricChoiceMade] = useState(false);
+  const [showSecuritySetup, setShowSecuritySetup] = useState(false);
   const [summary, setSummary] = useState({ gamesAttended: 0, groundsVisited: [] as string[] });
   const [state, setState] = useState<CommunityState>({
     profile: null,
@@ -85,10 +95,28 @@ export default function CommunityScreen() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [draft, records] = await Promise.all([AsyncStorage.getItem(DRAFT_KEY), loadAttendanceHistory()]);
+      const [draft, records, storedAvatarPhoto, storedBiometric] = await Promise.all([
+        AsyncStorage.getItem(DRAFT_KEY),
+        loadAttendanceHistory(),
+        AsyncStorage.getItem(AVATAR_PHOTO_KEY),
+        AsyncStorage.getItem(BIOMETRIC_KEY),
+      ]);
+
       if (cancelled) return;
+
       setSummary(attendanceSummary(records));
-      if (draft) { const d = JSON.parse(draft); setName(typeof d.name === "string" ? d.name : ""); if (AVATARS.includes(d.avatar)) setAvatar(d.avatar); }
+      setAvatarPhoto(storedAvatarPhoto);
+
+      if (storedBiometric === "1" || storedBiometric === "0") {
+        setBiometricChoiceMade(true);
+        setBiometricEnabled(storedBiometric === "1");
+      }
+
+      if (draft) {
+        const d = JSON.parse(draft);
+        setName(typeof d.name === "string" ? d.name : "");
+        if (AVATARS.includes(d.avatar)) setAvatar(d.avatar);
+      }
       if (serviceConfigured) {
         const restored = await communityRestoreSession();
         if (cancelled) return;
@@ -154,6 +182,13 @@ export default function CommunityScreen() {
     setPassword("");
     await loadUnlockedCommunity(next);
 
+    const capability = await communityUnlockCapability();
+    setUnlockCapability(capability);
+
+    if (!biometricChoiceMade) {
+      setShowSecuritySetup(true);
+    }
+
     if (next.communityEligible) {
       setStatus("Signed in to Community.");
     } else {
@@ -185,8 +220,109 @@ export default function CommunityScreen() {
     setPassword("");
     await loadUnlockedCommunity(next);
 
+    const capability = await communityUnlockCapability();
+    setUnlockCapability(capability);
+    setShowSecuritySetup(true);
+
     setStatus(
-      "Community account created. Finish your profile and choose how you want to unlock Community.",
+      "Community account created. Choose how you want to unlock Community on this iPhone.",
+    );
+  }
+
+  async function storeAvatarPhoto(uri: string) {
+    const result = await ImageManipulator.manipulateAsync(
+      uri,
+      [{ resize: { width: 512, height: 512 } }],
+      {
+        compress: 0.72,
+        format: ImageManipulator.SaveFormat.JPEG,
+        base64: true,
+      },
+    );
+
+    if (!result.base64) {
+      throw new Error("Could not prepare that avatar photo.");
+    }
+
+    const dataUri = `data:image/jpeg;base64,${result.base64}`;
+
+    await AsyncStorage.setItem(AVATAR_PHOTO_KEY, dataUri);
+    setAvatarPhoto(dataUri);
+  }
+
+  async function chooseAvatarPhoto() {
+    const permission =
+      await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+    if (!permission.granted) {
+      throw new Error(
+        "Photo access is needed to choose a Community avatar.",
+      );
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.9,
+    });
+
+    if (result.canceled || !result.assets?.[0]?.uri) return;
+
+    await storeAvatarPhoto(result.assets[0].uri);
+    setStatus("Avatar photo selected.");
+  }
+
+  async function takeAvatarPhoto() {
+    const permission =
+      await ImagePicker.requestCameraPermissionsAsync();
+
+    if (!permission.granted) {
+      throw new Error(
+        "Camera access is needed to take a Community avatar photo.",
+      );
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ["images"],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.9,
+      cameraType: ImagePicker.CameraType.front,
+    });
+
+    if (result.canceled || !result.assets?.[0]?.uri) return;
+
+    await storeAvatarPhoto(result.assets[0].uri);
+    setStatus("Avatar photo taken.");
+  }
+
+  async function removeAvatarPhoto() {
+    await AsyncStorage.removeItem(AVATAR_PHOTO_KEY);
+    setAvatarPhoto(null);
+    setStatus("Avatar photo removed.");
+  }
+
+  async function finishSecuritySetup(useBiometrics: boolean) {
+    if (useBiometrics && !unlockCapability.available) {
+      throw new Error(
+        "Face ID or Touch ID is not currently available on this iPhone.",
+      );
+    }
+
+    await AsyncStorage.setItem(
+      BIOMETRIC_KEY,
+      useBiometrics ? "1" : "0",
+    );
+
+    setBiometricEnabled(useBiometrics);
+    setBiometricChoiceMade(true);
+    setShowSecuritySetup(false);
+
+    setStatus(
+      useBiometrics
+        ? `${unlockCapability.label} will be offered for future Community unlocks.`
+        : "Community password will be used for future Community unlocks.",
     );
   }
 
@@ -301,7 +437,10 @@ export default function CommunityScreen() {
   async function saveProfile() {
     if (!name.trim() || name.trim().length > 40) throw new Error("Choose a display name of 1–40 characters.");
     if (!clubId || !clubName || clubName === "Your Club") throw new Error("Choose your favourite club on Home first.");
-    await AsyncStorage.setItem(DRAFT_KEY, JSON.stringify({ name: name.trim(), avatar }));
+    await AsyncStorage.setItem(
+      DRAFT_KEY,
+      JSON.stringify({ name: name.trim(), avatar }),
+    );
     if (connected) {
       setState(await communityRequest<CommunityState>("/profile", { displayName: name.trim(), avatar, clubId, ...summary }));
       setStatus("Public profile saved. Any previous matchday visibility has ended.");
@@ -320,6 +459,128 @@ export default function CommunityScreen() {
     setState(await communityRequest<CommunityState>("/preferences", preferences));
     setStatus("Community privacy choices saved. Matchday presence has ended.");
   }
+  if (
+    serviceConfigured &&
+    session &&
+    unlocked &&
+    showSecuritySetup
+  ) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: "#f8f5ec" }}>
+        <ScrollView
+          contentContainerStyle={{
+            flexGrow: 1,
+            justifyContent: "center",
+            padding: 20,
+          }}
+        >
+          <View
+            style={{
+              width: "100%",
+              maxWidth: 520,
+              alignSelf: "center",
+              gap: 14,
+            }}
+          >
+            <Text
+              accessibilityRole="header"
+              style={[
+                styles.title,
+                {
+                  color: colour || "#17221c",
+                  textAlign: "center",
+                  fontSize: 30,
+                },
+              ]}
+            >
+              COMMUNITY
+            </Text>
+
+            {avatarPhoto ? (
+              <Image
+                source={{ uri: avatarPhoto }}
+                accessibilityLabel="Your Community avatar"
+                style={{
+                  width: 112,
+                  height: 112,
+                  borderRadius: 56,
+                  borderWidth: 3,
+                  borderColor: colour || "#17221c",
+                  alignSelf: "center",
+                }}
+              />
+            ) : null}
+
+            <Text
+              style={[
+                styles.heading,
+                {
+                  textAlign: "center",
+                  marginTop: 8,
+                },
+              ]}
+            >
+              Future Community login
+            </Text>
+
+            <Text
+              style={[
+                styles.copy,
+                {
+                  textAlign: "center",
+                  marginBottom: 6,
+                },
+              ]}
+            >
+              Choose how you want to unlock Community on this iPhone.
+              Your Community password is never saved on the phone.
+            </Text>
+
+            {unlockCapability.available ? (
+              <Action
+                title={`Use ${unlockCapability.label}`}
+                disabled={busy}
+                onPress={() =>
+                  void run(() => finishSecuritySetup(true))
+                }
+                colour={colour}
+              />
+            ) : (
+              <Text
+                style={[
+                  styles.copy,
+                  {
+                    textAlign: "center",
+                  },
+                ]}
+              >
+                Face ID or Touch ID is not currently available.
+              </Text>
+            )}
+
+            <Action
+              title="Use Community Password"
+              disabled={busy}
+              onPress={() =>
+                void run(() => finishSecuritySetup(false))
+              }
+              colour={colour}
+            />
+
+            {!!status ? (
+              <Text
+                accessibilityLiveRegion="polite"
+                style={{ textAlign: "center" }}
+              >
+                {status}
+              </Text>
+            ) : null}
+          </View>
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
   if (serviceConfigured && !session) {
     const creating = authMode === "create";
 
@@ -471,6 +732,96 @@ export default function CommunityScreen() {
               />
             ) : null}
 
+            {creating ? (
+              <View
+                style={{
+                  alignItems: "center",
+                  marginBottom: 18,
+                  gap: 10,
+                }}
+              >
+                {avatarPhoto ? (
+                  <Image
+                    source={{ uri: avatarPhoto }}
+                    accessibilityLabel="Your Community avatar"
+                    style={{
+                      width: 116,
+                      height: 116,
+                      borderRadius: 58,
+                      borderWidth: 3,
+                      borderColor: colour || "#17221c",
+                    }}
+                  />
+                ) : (
+                  <View
+                    accessibilityLabel="No Community avatar photo selected"
+                    style={{
+                      width: 116,
+                      height: 116,
+                      borderRadius: 58,
+                      borderWidth: 3,
+                      borderColor: colour || "#17221c",
+                      backgroundColor: "#eee9dd",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <Text
+                      style={{
+                        fontSize: 36,
+                        fontWeight: "900",
+                        color: colour || "#17221c",
+                      }}
+                    >
+                      {name.trim().slice(0, 1).toUpperCase() || "?"}
+                    </Text>
+                  </View>
+                )}
+
+                <Text
+                  style={[
+                    styles.copy,
+                    {
+                      textAlign: "center",
+                      fontWeight: "800",
+                    },
+                  ]}
+                >
+                  PROFILE PHOTO
+                </Text>
+
+                <View
+                  style={{
+                    width: "100%",
+                    gap: 8,
+                  }}
+                >
+                  <Action
+                    title="Take Photo"
+                    disabled={busy}
+                    onPress={() => void run(takeAvatarPhoto)}
+                    colour={colour}
+                  />
+
+                  <Action
+                    title="Choose Photo"
+                    disabled={busy}
+                    onPress={() => void run(chooseAvatarPhoto)}
+                    colour={colour}
+                  />
+
+                  {avatarPhoto ? (
+                    <Action
+                      title="Remove Photo"
+                      disabled={busy}
+                      onPress={() => void run(removeAvatarPhoto)}
+                      colour={colour}
+                    />
+                  ) : null}
+                </View>
+              </View>
+            ) : null}
+
             <TextInput
               accessibilityLabel="Community email"
               placeholder="Email"
@@ -574,7 +925,7 @@ export default function CommunityScreen() {
 
         <Text>{session.email}</Text>
 
-        {unlockCapability.available && (
+        {biometricEnabled && unlockCapability.available && (
           <Action
             title={`Unlock with ${unlockCapability.label}`}
             disabled={busy}
@@ -812,7 +1163,59 @@ export default function CommunityScreen() {
         </Text>
       )}
       <TextInput accessibilityLabel="Community display name" placeholder="Choose a display name" value={name} maxLength={40} onChangeText={setName} style={styles.input} />
-      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>{AVATARS.map(a => <Action key={a} title={`${a}${avatar === a ? " ✓" : ""}`} onPress={() => setAvatar(a)} colour={colour} />)}</View>
+      <View style={{ alignItems: "center", gap: 8 }}>
+        {avatarPhoto ? (
+          <Image
+            source={{ uri: avatarPhoto }}
+            accessibilityLabel="Your Community avatar"
+            style={{
+              width: 104,
+              height: 104,
+              borderRadius: 52,
+              borderWidth: 3,
+              borderColor: colour || "#17221c",
+            }}
+          />
+        ) : (
+          <View
+            style={{
+              width: 104,
+              height: 104,
+              borderRadius: 52,
+              borderWidth: 3,
+              borderColor: colour || "#17221c",
+              backgroundColor: "#eee9dd",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Text
+              style={{
+                fontSize: 32,
+                fontWeight: "900",
+                color: colour || "#17221c",
+              }}
+            >
+              {name.trim().slice(0, 1).toUpperCase() || "?"}
+            </Text>
+          </View>
+        )}
+
+        <View style={{ width: "100%", gap: 8 }}>
+          <Action
+            title="Take New Photo"
+            disabled={busy}
+            onPress={() => void run(takeAvatarPhoto)}
+            colour={colour}
+          />
+          <Action
+            title="Choose Photo"
+            disabled={busy}
+            onPress={() => void run(chooseAvatarPhoto)}
+            colour={colour}
+          />
+        </View>
+      </View>
       <Text>{summary.gamesAttended} games attended · {summary.groundsVisited.length} grounds visited</Text>
       <Text>{summary.groundsVisited.join(" · ") || "No confirmed grounds yet"}</Text>
       <Action title={connected ? "Save public profile" : "Save profile draft"} disabled={busy || !loaded} onPress={() => void run(saveProfile)} colour={colour} />
