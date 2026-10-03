@@ -14,15 +14,24 @@ export type CommunityEnv = {
   COMMUNITY_AUTH?: { fetch(request: Request): Promise<Response> };
 };
 type Member = {
- id: string; subject: string; display_name: string; avatar: string; club_id: string;
- games_attended: number; grounds_json: string; enabled: number; location_visible: number;
+ id: string; subject: string; safety_id: string | null;
+ display_name: string; avatar: string; club_id: string;
+ games_attended: number; grounds_json: string;
+ enabled: number; location_visible: number;
+ share_games: number; share_grounds: number; photo_sharing: number;
 };
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), {
  status, headers: { "content-type": "application/json", "cache-control": "no-store" },
 });
 function publicProfile(m: Member) {
- return { id: m.id, displayName: m.display_name, avatar: m.avatar, clubId: m.club_id,
- gamesAttended: m.games_attended, groundsVisited: JSON.parse(m.grounds_json) };
+ return {
+  id: m.id,
+  displayName: m.display_name,
+  avatar: m.avatar,
+  clubId: m.club_id,
+  gamesAttended: m.share_games ? m.games_attended : 0,
+  groundsVisited: m.share_grounds ? JSON.parse(m.grounds_json) : [],
+ };
 }
 function fail(message: string, status = 400): never { throw Object.assign(new Error(message), { status }); }
 export async function communityFetch(request: Request, env: CommunityEnv): Promise<Response> {
@@ -32,14 +41,46 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
   if (!authorization?.startsWith("Bearer ")) return json({ error: "Sign in required." }, 401);
   const session = await env.COMMUNITY_AUTH.fetch(new Request("https://session.internal/verify", { headers: { authorization } }));
   if (!session.ok) return json({ error: "Sign in required." }, 401);
-  const identity = await session.json() as { subject?: string };
-  if (!identity.subject || typeof identity.subject !== "string") return json({ error: "Sign in required." }, 401);
+  const identity = await session.json() as {
+   subject?: string;
+   communityEligible?: boolean;
+   isChild?: boolean;
+  };
+
+  if (!identity.subject || typeof identity.subject !== "string") {
+   return json({ error: "Sign in required." }, 401);
+  }
+
+  if (identity.communityEligible !== true || identity.isChild !== false) {
+   return json({ error: "Community is not available for this account." }, 403);
+  }
+
   const sql = (query: string, ...args: unknown[]) => env.DB.prepare(query).bind(...args);
   let me = await sql("SELECT * FROM community_members WHERE subject = ?", identity.subject).first<Member>();
+
+  if (me && !me.safety_id) {
+   const safetyId = `TF-C-${crypto.randomUUID().replace(/-/g, "").slice(0, 12).toUpperCase()}`;
+   await sql(
+    "UPDATE community_members SET safety_id=? WHERE id=? AND safety_id IS NULL",
+    safetyId,
+    me.id
+   ).run();
+   me = await sql("SELECT * FROM community_members WHERE id=?", me.id).first<Member>();
+  }
   const path = new URL(request.url).pathname.replace("/api/community", "");
   const now = Date.now();
-  const state = () => ({ profile: me ? publicProfile(me) : null, preferences: {
-    enabled: Boolean(me?.enabled), locationVisible: Boolean(me?.location_visible) }, serverNow: now });
+  const state = () => ({
+   profile: me ? publicProfile(me) : null,
+   preferences: {
+    enabled: Boolean(me?.enabled),
+    locationVisible: Boolean(me?.location_visible),
+    shareGames: Boolean(me?.share_games),
+    shareGrounds: Boolean(me?.share_grounds),
+    photoSharing: Boolean(me?.photo_sharing),
+   },
+   safetyId: me?.safety_id || null,
+   serverNow: now,
+  });
   if (path === "/me" && request.method === "GET") return json(state());
   const raw = request.method === "GET" ? "{}" : await request.text();
   if (raw.length > 24000) return json({ error: "Request is too large." }, 413);
@@ -51,11 +92,23 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
         !Array.isArray(data.groundsVisited) || data.groundsVisited.length > 2000 ||
         data.groundsVisited.some((g: unknown) => typeof g !== "string" || g.length > 160)) fail("Check your public profile.");
     const id = me?.id || crypto.randomUUID();
+    const safetyId = me?.safety_id ||
+     `TF-C-${crypto.randomUUID().replace(/-/g, "").slice(0, 12).toUpperCase()}`;
+
     await env.DB.batch([
-      sql(`INSERT INTO community_members(id,subject,display_name,avatar,club_id,games_attended,grounds_json)
-      VALUES(?,?,?,?,?,?,?) ON CONFLICT(subject) DO UPDATE SET display_name=excluded.display_name,
-      avatar=excluded.avatar,club_id=excluded.club_id,games_attended=excluded.games_attended,grounds_json=excluded.grounds_json`,
-      id, identity.subject, data.displayName.trim(), data.avatar, data.clubId, data.gamesAttended, JSON.stringify([...new Set(data.groundsVisited)])),
+      sql(`INSERT INTO community_members(
+       id,subject,safety_id,display_name,avatar,club_id,games_attended,grounds_json
+      )
+      VALUES(?,?,?,?,?,?,?,?)
+      ON CONFLICT(subject) DO UPDATE SET
+       safety_id=COALESCE(community_members.safety_id,excluded.safety_id),
+       display_name=excluded.display_name,
+       avatar=excluded.avatar,
+       club_id=excluded.club_id,
+       games_attended=excluded.games_attended,
+       grounds_json=excluded.grounds_json`,
+      id, identity.subject, safetyId, data.displayName.trim(), data.avatar,
+      data.clubId, data.gamesAttended, JSON.stringify([...new Set(data.groundsVisited)])),
       sql("DELETE FROM community_presence WHERE member_id = ?", id),
     ]);
     me = await sql("SELECT * FROM community_members WHERE id = ?", id).first<Member>();
@@ -63,11 +116,31 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
   }
   if (!me) fail("Save your Community profile first.", 409);
   if (path === "/preferences" && request.method === "POST") {
-    if (typeof data.enabled !== "boolean" || typeof data.locationVisible !== "boolean") fail("Invalid privacy options.");
+    if (
+     typeof data.enabled !== "boolean" ||
+     typeof data.locationVisible !== "boolean" ||
+     typeof data.shareGames !== "boolean" ||
+     typeof data.shareGrounds !== "boolean" ||
+     typeof data.photoSharing !== "boolean"
+    ) fail("Invalid privacy options.");
+
+    const enabled = data.enabled;
+    const locationVisible = enabled && data.locationVisible;
+    const shareGames = enabled && data.shareGames;
+    const shareGrounds = enabled && data.shareGrounds;
+
+    // Consent only. A future photo endpoint must ALSO require
+    // an active Matchday Experience session server-side.
+    const photoSharing = enabled && data.photoSharing;
+
     await env.DB.batch([
-      sql("UPDATE community_members SET enabled=?,location_visible=? WHERE id=?", +data.enabled, +(data.enabled && data.locationVisible), me.id),
+      sql(`UPDATE community_members
+       SET enabled=?,location_visible=?,share_games=?,share_grounds=?,photo_sharing=?
+       WHERE id=?`,
+       +enabled, +locationVisible, +shareGames, +shareGrounds, +photoSharing, me.id),
       sql("DELETE FROM community_presence WHERE member_id=?", me.id),
     ]);
+
     me = await sql("SELECT * FROM community_members WHERE id=?", me.id).first<Member>();
     return json(state());
   }
@@ -177,12 +250,52 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
   }
   if (path === "/report" && request.method === "POST") {
     if (typeof data.target !== "string" || typeof data.reason !== "string" || !data.reason.trim() || data.reason.length>1000 || data.target===me.id) fail("Enter a report reason of 1–1000 characters.");
-    const target = await sql("SELECT id FROM community_members WHERE id=?", data.target).first();
+    let target = await sql(
+     "SELECT id,safety_id FROM community_members WHERE id=?",
+     data.target
+    ).first<{ id: string; safety_id: string | null }>();
+
     if (!target) fail("Supporter unavailable.", 404);
-    const recent = await sql("SELECT id FROM community_reports WHERE reporter=? AND reported=? AND created_at>?", me.id, data.target, now-3600000).first();
+
+    if (!target.safety_id) {
+     const safetyId = `TF-C-${crypto.randomUUID().replace(/-/g, "").slice(0, 12).toUpperCase()}`;
+     await sql(
+      "UPDATE community_members SET safety_id=? WHERE id=? AND safety_id IS NULL",
+      safetyId,
+      data.target
+     ).run();
+
+     target = await sql(
+      "SELECT id,safety_id FROM community_members WHERE id=?",
+      data.target
+     ).first<{ id: string; safety_id: string | null }>();
+    }
+
+    if (!target) fail("Supporter unavailable.", 404);
+
+    const recent = await sql(
+     "SELECT id FROM community_reports WHERE reporter=? AND reported=? AND created_at>?",
+     me.id, data.target, now - 3600000
+    ).first();
+
     if (recent) fail("Your report has already been received.", 429);
-    await sql("INSERT INTO community_reports VALUES(?,?,?,?,?)", crypto.randomUUID(), me.id, data.target, data.reason.trim(), now).run();
-    return json({ ok: true });
+
+    const reportId = crypto.randomUUID();
+    const context =
+     typeof data.context === "string" ? data.context.trim().slice(0, 500) : "";
+
+    await sql(
+     `INSERT INTO community_reports(id,reporter,reported,reason,created_at,context)
+      VALUES(?,?,?,?,?,?)`,
+     reportId, me.id, data.target, data.reason.trim(), now, context
+    ).run();
+
+    return json({
+     ok: true,
+     reportId,
+     reportedSafetyId: target.safety_id,
+     contact: "info@handytize.co.uk",
+    });
   }
   // Feature routes are added in independently checkpointed stages.
 

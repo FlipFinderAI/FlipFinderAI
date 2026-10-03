@@ -14,7 +14,11 @@ const fixture = { id: 'verified', clubIds: ['club-a'], kickoff: new Date(kickoff
 const coords = { latitude: 53, longitude: -1, accuracy: 5 };
 function setup() {
  const db = new DatabaseSync(':memory:');
- db.exec(fs.readFileSync(require.resolve('../private-demo-service/migrations/0001_community.sql'), 'utf8'));
+ const path = require('node:path');
+ const migrationsDir = path.join(__dirname, '../private-demo-service/migrations');
+ for (const file of fs.readdirSync(migrationsDir).filter(name => name.endsWith('.sql')).sort()) {
+  db.exec(fs.readFileSync(path.join(migrationsDir, file), 'utf8'));
+ }
  function prepare(query) {
   let args = [];
   return { bind(...values) { args = values; return this; },
@@ -24,7 +28,13 @@ function setup() {
   };
  }
  const env = { DB: { prepare, async batch(stmts) { db.exec('BEGIN'); try { const r = []; for (const s of stmts) r.push(await s.run()); db.exec('COMMIT'); return r; } catch(e) { db.exec('ROLLBACK'); throw e; } } },
- COMMUNITY_AUTH: { async fetch(r) { return Response.json({ subject: r.headers.get('authorization').slice(7) }); } },
+ COMMUNITY_AUTH: { async fetch(r) {
+  return Response.json({
+   subject: r.headers.get('authorization').slice(7),
+   communityEligible: true,
+   isChild: false
+  });
+ } },
  COMMUNITY_FIXTURES: { async fetch() { return Response.json({ fixtures: [fixture] }); } } };
  async function call(user, path, data, method) {
   const response = await communityFetch(new Request('https://test/api/community' + path, { method: method || (data ? 'POST' : 'GET'), headers: { authorization: 'Bearer ' + user }, body: data ? JSON.stringify(data) : undefined }), env);
@@ -33,7 +43,13 @@ function setup() {
  async function member(user, clubId = 'club-a') {
   const r = await call(user, '/profile', { displayName: user, avatar: '⚽', clubId, gamesAttended: 3, groundsVisited: ['Ground'] });
   assert.equal(r.status, 200);
-  await call(user, '/preferences', { enabled: true, locationVisible: true });
+  await call(user, '/preferences', {
+  enabled: true,
+  locationVisible: true,
+  shareGames: true,
+  shareGrounds: true,
+  photoSharing: false
+ });
   return r.body.profile.id;
  }
  return { db, env, call, member };
@@ -58,16 +74,34 @@ test('authentication missing fails closed', async () => {
 test('profile defaults off; eligibility and withdrawal use server state', async () => {
  const { call, db } = setup();
  const r = await call('private-subject', '/profile', { displayName: 'Fan', avatar: '⚽', clubId: 'club-a', gamesAttended: 1, groundsVisited: ['Ground'], email: 'secret', photo: 'secret' });
- assert.deepEqual(r.body.preferences, { enabled: false, locationVisible: false });
+ assert.deepEqual(r.body.preferences, {
+  enabled: false,
+  locationVisible: false,
+  shareGames: false,
+  shareGrounds: false,
+  photoSharing: false
+ });
  assert.equal(JSON.stringify(r.body).includes('private-subject'), false);
  assert.equal(JSON.stringify(r.body).includes('secret'), false);
  assert.equal((await call('private-subject', '/presence', { fixtureId: fixture.id, ...coords })).status, 403);
- await call('private-subject', '/preferences', { enabled: true, locationVisible: true });
+ await call('private-subject', '/preferences', {
+  enabled: true,
+  locationVisible: true,
+  shareGames: true,
+  shareGrounds: true,
+  photoSharing: false
+ });
  const p = await call('private-subject', '/presence', { fixtureId: fixture.id, ...coords, kickoff: 'fake' });
  assert.equal(p.status, 200); assert.equal(p.body.presence.onMap, false);
  const stored = db.prepare('SELECT * FROM community_presence').get();
  assert.equal(stored.stadium_lat, fixture.latitude); assert.equal('accuracy' in stored, false);
- await call('private-subject', '/preferences', { enabled: false, locationVisible: false });
+ await call('private-subject', '/preferences', {
+  enabled: false,
+  locationVisible: false,
+  shareGames: false,
+  shareGrounds: false,
+  photoSharing: false
+ });
  assert.equal(db.prepare('SELECT count(*) n FROM community_presence').get().n, 0);
 });
 module.exports = { setup, fixture, coords };
@@ -311,4 +345,129 @@ test('messages reject blank and oversized content', async () => {
    )).status,
    400
  );
+});
+
+
+test('child accounts are rejected by the trusted authentication boundary', async () => {
+ const { env } = setup();
+
+ env.COMMUNITY_AUTH = {
+  async fetch(r) {
+   return Response.json({
+    subject: r.headers.get('authorization').slice(7),
+    communityEligible: false,
+    isChild: true
+   });
+  }
+ };
+
+ const response = await communityFetch(
+  new Request('https://test/api/community/me', {
+   headers: { authorization: 'Bearer child-account' }
+  }),
+  env
+ );
+
+ assert.equal(response.status, 403);
+
+ const body = await response.json();
+ assert.equal(body.error, 'Community is not available for this account.');
+});
+
+test('missing age eligibility fails closed', async () => {
+ const { env } = setup();
+
+ env.COMMUNITY_AUTH = {
+  async fetch(r) {
+   return Response.json({
+    subject: r.headers.get('authorization').slice(7)
+   });
+  }
+ };
+
+ const response = await communityFetch(
+  new Request('https://test/api/community/me', {
+   headers: { authorization: 'Bearer unknown-age' }
+  }),
+  env
+ );
+
+ assert.equal(response.status, 403);
+});
+
+test('profile aggregates are private unless individually enabled', async () => {
+ const { call } = setup();
+
+ const created = await call('privacy-user', '/profile', {
+  displayName: 'Privacy User',
+  avatar: '⚽',
+  clubId: 'club-a',
+  gamesAttended: 42,
+  groundsVisited: ['Ground A', 'Ground B']
+ });
+
+ assert.equal(created.body.profile.gamesAttended, 0);
+ assert.deepEqual(created.body.profile.groundsVisited, []);
+ assert.match(created.body.safetyId, /^TF-C-[A-F0-9]{12}$/);
+
+ const gamesOnly = await call('privacy-user', '/preferences', {
+  enabled: true,
+  locationVisible: false,
+  shareGames: true,
+  shareGrounds: false,
+  photoSharing: false
+ });
+
+ assert.equal(gamesOnly.body.profile.gamesAttended, 42);
+ assert.deepEqual(gamesOnly.body.profile.groundsVisited, []);
+
+ const all = await call('privacy-user', '/preferences', {
+  enabled: true,
+  locationVisible: true,
+  shareGames: true,
+  shareGrounds: true,
+  photoSharing: true
+ });
+
+ assert.equal(all.body.profile.gamesAttended, 42);
+ assert.deepEqual(all.body.profile.groundsVisited, ['Ground A', 'Ground B']);
+ assert.equal(all.body.preferences.photoSharing, true);
+
+ const off = await call('privacy-user', '/preferences', {
+  enabled: false,
+  locationVisible: true,
+  shareGames: true,
+  shareGrounds: true,
+  photoSharing: true
+ });
+
+ assert.deepEqual(off.body.preferences, {
+  enabled: false,
+  locationVisible: false,
+  shareGames: false,
+  shareGrounds: false,
+  photoSharing: false
+ });
+});
+
+test('reports return moderation references without authentication subjects', async () => {
+ const { member, call } = setup();
+
+ const reporter = await member('reporter-account');
+ const reported = await member('reported-account');
+
+ assert.ok(reporter);
+ assert.ok(reported);
+
+ const result = await call('reporter-account', '/report', {
+  target: reported,
+  reason: 'Safety concern',
+  context: 'Community profile'
+ });
+
+ assert.equal(result.status, 200);
+ assert.match(result.body.reportId, /^[0-9a-f-]{36}$/i);
+ assert.match(result.body.reportedSafetyId, /^TF-C-[A-F0-9]{12}$/);
+ assert.equal(result.body.contact, 'info@handytize.co.uk');
+ assert.equal(JSON.stringify(result.body).includes('reported-account'), false);
 });

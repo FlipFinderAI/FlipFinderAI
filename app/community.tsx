@@ -17,7 +17,12 @@ export default function CommunityScreen() {
   const [name, setName] = useState("");
   const [avatar, setAvatar] = useState<Avatar>("⚽");
   const [summary, setSummary] = useState({ gamesAttended: 0, groundsVisited: [] as string[] });
-  const [state, setState] = useState<CommunityState>({ profile: null, preferences: OFF, serverNow: 0 });
+  const [state, setState] = useState<CommunityState>({
+    profile: null,
+    preferences: OFF,
+    safetyId: null,
+    serverNow: 0,
+  });
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [status, setStatus] = useState("");
@@ -56,9 +61,18 @@ export default function CommunityScreen() {
       setStatus("Public profile saved. Any previous matchday visibility has ended.");
     } else setStatus("Profile draft saved on this iPhone. Nothing has been shared.");
   }
-  async function privacy(enabled: boolean, locationVisible: boolean) {
-    setState(await communityRequest<CommunityState>("/preferences", { enabled, locationVisible }));
-    setStatus("Privacy choices saved. Matchday presence has ended; check eligibility to appear again.");
+  async function privacy(patch: Partial<CommunityState["preferences"]>) {
+    const preferences = { ...state.preferences, ...patch };
+
+    if (!preferences.enabled) {
+      preferences.locationVisible = false;
+      preferences.shareGames = false;
+      preferences.shareGrounds = false;
+      preferences.photoSharing = false;
+    }
+
+    setState(await communityRequest<CommunityState>("/preferences", preferences));
+    setStatus("Community privacy choices saved. Matchday presence has ended.");
   }
   return <SafeAreaView style={{ flex: 1, backgroundColor: "#f8f5ec" }}>
     <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 20, gap: 14 }}>
@@ -66,22 +80,77 @@ export default function CommunityScreen() {
       <Text accessibilityRole="header" style={[styles.title, { color: colour || "#17221c" }]}>COMMUNITY</Text>
       <Text>{clubName || "Choose a favourite club"} supporters</Text>
       {!connected && <Text style={styles.copy}>Community sign-in and the online service are not connected yet. You can prepare your profile here. Discovery, friends and messages stay unavailable until they are connected.</Text>}
-      <Text style={styles.copy}>Only your chosen name, avatar, favourite club, games attended and grounds visited are public when you join. Your tickets, Ticket Frame photos and account details stay private.</Text>
+      <Text style={styles.copy}>
+        Your chosen name, avatar and favourite club identify you in Community.
+        Games attended and grounds visited are shared only if you choose to share them.
+        Your tickets, Ticket Frame photos and account details stay private.
+      </Text>
       <Text style={styles.heading}>Your public profile</Text>
       <TextInput accessibilityLabel="Community display name" placeholder="Choose a display name" value={name} maxLength={40} onChangeText={setName} style={styles.input} />
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>{AVATARS.map(a => <Action key={a} title={`${a}${avatar === a ? " ✓" : ""}`} onPress={() => setAvatar(a)} colour={colour} />)}</View>
       <Text>{summary.gamesAttended} games attended · {summary.groundsVisited.length} grounds visited</Text>
       <Text>{summary.groundsVisited.join(" · ") || "No confirmed grounds yet"}</Text>
       <Action title={connected ? "Save public profile" : "Save profile draft"} disabled={busy || !loaded} onPress={() => void run(saveProfile)} colour={colour} />
-      <Text style={styles.heading}>Privacy</Text>
-      {!sameClub && state.profile && <Text>Save your profile with your current favourite club before using Community.</Text>}
+      <Text style={styles.heading}>Community & Privacy</Text>
+
+      {!sameClub && state.profile && (
+        <Text>Save your profile with your current favourite club before using Community.</Text>
+      )}
+
       <Text>Join Community — off by default</Text>
-      <Switch accessibilityLabel="Join Community" value={state.preferences.enabled} disabled={busy || !connected || !sameClub}
-        onValueChange={enabled => void run(() => privacy(enabled, enabled && state.preferences.locationVisible))} />
-      <Text>Visible to eligible same-club supporters on matchday</Text>
-      <Switch accessibilityLabel="Matchday location visibility" value={state.preferences.locationVisible} disabled={busy || !active}
-        onValueChange={visible => void run(() => privacy(true, visible))} />
-      <Text style={styles.copy}>Location is checked only when you ask, while the app is open. Joining Community does not add you to the Matchday Map.</Text>
+      <Switch
+        accessibilityLabel="Join Community"
+        value={state.preferences.enabled}
+        disabled={busy || !connected || !sameClub}
+        onValueChange={enabled => void run(() => privacy({ enabled }))}
+      />
+
+      <Text>Share my games-attended total</Text>
+      <Switch
+        accessibilityLabel="Share games attended"
+        value={state.preferences.shareGames}
+        disabled={busy || !active}
+        onValueChange={shareGames => void run(() => privacy({ shareGames }))}
+      />
+
+      <Text>Share the grounds I have visited</Text>
+      <Switch
+        accessibilityLabel="Share grounds visited"
+        value={state.preferences.shareGrounds}
+        disabled={busy || !active}
+        onValueChange={shareGrounds => void run(() => privacy({ shareGrounds }))}
+      />
+
+      <Text>Allow matchday location features</Text>
+      <Switch
+        accessibilityLabel="Matchday location visibility"
+        value={state.preferences.locationVisible}
+        disabled={busy || !active}
+        onValueChange={locationVisible => void run(() => privacy({ locationVisible }))}
+      />
+
+      <Text>Allow me to send photos during Matchday Experience</Text>
+      <Switch
+        accessibilityLabel="Matchday Experience photo sharing"
+        value={state.preferences.photoSharing}
+        disabled={busy || !active}
+        onValueChange={photoSharing => void run(() => privacy({ photoSharing }))}
+      />
+
+      <Text style={styles.copy}>
+        Photo permission does not make your photo library public.
+        Photos cannot be sent through normal Community or normal matchday discovery.
+        Photo sending will require an active Matchday Experience.
+      </Text>
+
+      <Text style={styles.copy}>
+        Location is checked only when you deliberately use a matchday feature.
+        Joining Community does not automatically put you on a map.
+      </Text>
+
+      {!!state.safetyId && (
+        <Text style={styles.copy}>Community Safety ID: {state.safetyId}</Text>
+      )}
       <Matchday enabled={active && state.preferences.locationVisible} clubId={clubId} busy={busy} run={run} />
       <Friends enabled={active} busy={busy} run={run} />
       <Messages enabled={active} busy={busy} run={run} />
