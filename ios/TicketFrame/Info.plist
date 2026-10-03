@@ -66,6 +66,8 @@
 	<string>Football Ticket Frame uses low-power stadium geofences only around your favourite team's Next Match so it can offer one attendance check-in.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Football Ticket Frame uses your location for live nearby Apple Maps results, stadium attendance and private photo-location grouping.</string>
+	<key>NSMotionUsageDescription</key>
+	<string>Football Ticket Frame does not use motion data directly; this permission description is included because an integrated framework may reference motion-related system APIs.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Football Ticket Frame can save photos you choose for match memories.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
@@ -118,7 +120,5 @@
 	<string>Light</string>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<false/>
-	<key>NSMotionUsageDescription</key>
-	<string>Football Ticket Frame does not use motion data directly; this permission description is included because an integrated framework may reference motion-related system APIs.</string>
 </dict>
 </plist>
