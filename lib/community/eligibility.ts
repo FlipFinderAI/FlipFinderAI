@@ -2,6 +2,12 @@ import { distanceMiles } from "../geoDistance";
 export type VerifiedFixture = {
  id: string; clubIds: string[]; kickoff: string; stadium: string;
  latitude: number; longitude: number;
+
+ // Optional trusted metadata used only for extended
+ // Matchday Experience lifecycle decisions.
+ homeClubId?: string;
+ awayClubId?: string;
+ competition?: string;
 };
 export function validCoordinates(lat: number, lon: number) {
  return Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;

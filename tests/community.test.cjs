@@ -10,7 +10,17 @@ const { eligible } = require('../lib/community/eligibility.ts');
 const { attendanceSummary } = require('../lib/community/model.ts');
 const { communityFetch } = require('../private-demo-service/src/community.ts');
 const kickoff = Date.now();
-const fixture = { id: 'verified', clubIds: ['club-a'], kickoff: new Date(kickoff).toISOString(), stadium: 'Verified Ground', latitude: 53, longitude: -1 };
+const fixture = {
+ id: 'verified',
+ clubIds: ['club-a'],
+ kickoff: new Date(kickoff).toISOString(),
+ stadium: 'Verified Ground',
+ latitude: 53,
+ longitude: -1,
+ homeClubId: 'club-home',
+ awayClubId: 'club-a',
+ competition: 'UEFA Champions League'
+};
 const coords = { latitude: 53, longitude: -1, accuracy: 5 };
 function setup() {
  const db = new DatabaseSync(':memory:');
@@ -799,10 +809,11 @@ test('Matchday Experience is explicit, any-distance, snapshot-based and separate
   const noLocationStart = await call(
     'experience-no-location',
     '/experience',
-    { fixtureId: fixture.id }
+    { fixtureId: fixture.id, supporter: 'away' }
   );
 
   assert.equal(noLocationStart.status, 200);
+  assert.equal(noLocationStart.body.experience.supporter, 'away');
   assert.equal(noLocationStart.body.experience.fixtureId, fixture.id);
   assert.equal(noLocationStart.body.experience.latitude, null);
   assert.equal(noLocationStart.body.experience.longitude, null);
@@ -920,6 +931,113 @@ test('Matchday Experience is explicit, any-distance, snapshot-based and separate
   );
 
   assert.equal(discover.body.people.length, 0);
+});
+
+
+test('Matchday Experience reminders extend safely and location updates preserve expiry', async () => {
+  const { member, call, db, env } = setup();
+
+  const a = await member('experience-reminder');
+
+  let result = await call(
+    'experience-reminder',
+    '/experience',
+    {
+      fixtureId: fixture.id,
+      supporter: 'away'
+    }
+  );
+
+  assert.equal(result.status, 200);
+  assert.equal(result.body.experience.supporter, 'away');
+
+  // Trusted European-away metadata permits the original long reminders.
+  result = await call(
+    'experience-reminder',
+    '/experience/reminder',
+    { hours: 60 }
+  );
+
+  assert.equal(result.status, 200);
+  assert.equal(result.body.experience.reminderHours, 60);
+
+  const extendedExpiry = db.prepare(
+    `SELECT expires_at
+     FROM community_matchday_experience_sessions
+     WHERE member_id=?`
+  ).get(a).expires_at;
+
+  assert.equal(
+    extendedExpiry,
+    result.body.experience.expiresAt
+  );
+
+  // Updating optional GPS must not reset the session to kickoff +11h.
+  result = await call(
+    'experience-reminder',
+    '/experience/location',
+    {
+      latitude: 52.5,
+      longitude: -1.9,
+      accuracy: 10
+    }
+  );
+
+  assert.equal(result.status, 200);
+  assert.equal(result.body.experience.expiresAt, extendedExpiry);
+
+  assert.equal(
+    db.prepare(
+      `SELECT expires_at
+       FROM community_matchday_experience_sessions
+       WHERE member_id=?`
+    ).get(a).expires_at,
+    extendedExpiry
+  );
+
+  // Arbitrary reminder lengths are never accepted.
+  assert.equal(
+    (await call(
+      'experience-reminder',
+      '/experience/reminder',
+      { hours: 12 }
+    )).status,
+    403
+  );
+
+  // Long European reminders fail closed if trusted fixture metadata
+  // does not independently prove European-away status.
+  env.COMMUNITY_FIXTURES = {
+    async fetch() {
+      return Response.json({
+        fixtures: [{
+          ...fixture,
+          homeClubId: undefined,
+          awayClubId: undefined,
+          competition: undefined
+        }]
+      });
+    }
+  };
+
+  assert.equal(
+    (await call(
+      'experience-reminder',
+      '/experience/reminder',
+      { hours: 24 }
+    )).status,
+    403
+  );
+
+  // Standard reminders remain valid without the extra European metadata.
+  assert.equal(
+    (await call(
+      'experience-reminder',
+      '/experience/reminder',
+      { hours: 8 }
+    )).status,
+    200
+  );
 });
 
 test('Matchday Friend messaging works during a shared active Matchday Experience', async () => {

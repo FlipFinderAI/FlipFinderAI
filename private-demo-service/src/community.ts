@@ -40,6 +40,46 @@ function publicProfile(m: Member) {
  };
 }
 function fail(message: string, status = 400): never { throw Object.assign(new Error(message), { status }); }
+
+const EUROPEAN_COMPETITION =
+  /champions league|european cup|europa league|uefa cup|conference league|cup winners|fairs cup|intertoto/i;
+
+function trustedExperienceFixture(
+  fixture: VerifiedFixture | undefined,
+  clubId: string,
+) {
+  return !!(
+    fixture &&
+    Array.isArray(fixture.clubIds) &&
+    fixture.clubIds.includes(clubId) &&
+    typeof fixture.kickoff === "string" &&
+    /T.*(?:Z|[+-]\d{2}:\d{2})$/.test(fixture.kickoff) &&
+    fixture.stadium &&
+    validCoordinates(fixture.latitude, fixture.longitude) &&
+    Number.isFinite(Date.parse(fixture.kickoff))
+  );
+}
+
+function experienceReminderAllowed(
+  fixture: VerifiedFixture,
+  clubId: string,
+  supporter: string,
+  hours: number,
+) {
+  if ([1, 2, 4, 8].includes(hours)) return true;
+
+  if (![24, 48, 60].includes(hours)) return false;
+
+  // Long reminders are fail-closed. The user's Home/Away selection
+  // alone is never sufficient: trusted fixture data must independently
+  // prove that their club is away in a recognised European competition.
+  return (
+    supporter === "away" &&
+    fixture.awayClubId === clubId &&
+    typeof fixture.competition === "string" &&
+    EUROPEAN_COMPETITION.test(fixture.competition)
+  );
+}
 function experienceExpiry(
   fixture: VerifiedFixture,
   clubId: string,
@@ -305,7 +345,7 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
   }
   if (path === "/experience" && request.method === "GET") {
     const experience = await sql(
-      `SELECT fixture_id,stadium,latitude,longitude,accuracy,
+      `SELECT fixture_id,stadium,supporter,latitude,longitude,accuracy,
               started_at,updated_at,expires_at
        FROM community_matchday_experience_sessions
        WHERE member_id=? AND expires_at>?`,
@@ -314,6 +354,7 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
     ).first<{
       fixture_id: string;
       stadium: string;
+      supporter: "home" | "away";
       latitude: number | null;
       longitude: number | null;
       accuracy: number | null;
@@ -327,6 +368,7 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
         ? {
             fixtureId: experience.fixture_id,
             stadium: experience.stadium,
+            supporter: experience.supporter,
             latitude: experience.latitude,
             longitude: experience.longitude,
             accuracy: experience.accuracy,
@@ -346,6 +388,17 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
     ) {
       fail("Choose a verified fixture.");
     }
+
+    if (
+      data.supporter !== undefined &&
+      data.supporter !== "home" &&
+      data.supporter !== "away"
+    ) {
+      fail("Choose Home or Away.");
+    }
+
+    const supporter: "home" | "away" =
+      data.supporter === "away" ? "away" : "home";
 
     // Starting Matchday Experience is not a location-sharing action.
     // A location snapshot is optional and is only accepted when the
@@ -385,13 +438,14 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
 
     await sql(
       `INSERT INTO community_matchday_experience_sessions(
-         member_id,fixture_id,stadium,latitude,longitude,accuracy,
+         member_id,fixture_id,stadium,supporter,latitude,longitude,accuracy,
          started_at,updated_at,expires_at
        )
-       VALUES(?,?,?,?,?,?,?,?,?)
+       VALUES(?,?,?,?,?,?,?,?,?,?)
        ON CONFLICT(member_id) DO UPDATE SET
          fixture_id=excluded.fixture_id,
          stadium=excluded.stadium,
+         supporter=excluded.supporter,
          latitude=excluded.latitude,
          longitude=excluded.longitude,
          accuracy=excluded.accuracy,
@@ -401,6 +455,7 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
       me.id,
       fixture.id,
       fixture.stadium,
+      supporter,
       suppliedLocation ? data.latitude : null,
       suppliedLocation ? data.longitude : null,
       suppliedLocation ? data.accuracy : null,
@@ -413,6 +468,7 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
       experience: {
         fixtureId: fixture.id,
         stadium: fixture.stadium,
+        supporter,
         latitude: suppliedLocation ? data.latitude : null,
         longitude: suppliedLocation ? data.longitude : null,
         accuracy: suppliedLocation ? data.accuracy : null,
@@ -437,12 +493,16 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
     }
 
     const current = await sql(
-      `SELECT fixture_id
+      `SELECT fixture_id,supporter,expires_at
        FROM community_matchday_experience_sessions
        WHERE member_id=? AND expires_at>?`,
       me.id,
       now,
-    ).first<{ fixture_id: string }>();
+    ).first<{
+      fixture_id: string;
+      supporter: "home" | "away";
+      expires_at: number;
+    }>();
 
     if (!current) {
       fail("Start Matchday Experience first.", 409);
@@ -452,40 +512,123 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
       f => f.id === current.fixture_id,
     );
 
-    const expiresAt = fixture
-      ? experienceExpiry(fixture, me.club_id, now)
-      : null;
-
-    if (!fixture || !expiresAt) {
+    if (!trustedExperienceFixture(fixture, me.club_id)) {
       await sql(
         "DELETE FROM community_matchday_experience_sessions WHERE member_id=?",
         me.id,
       ).run();
 
-      fail("This Matchday Experience has expired.", 403);
+      fail("This Matchday Experience is no longer verified.", 403);
     }
 
+    // trustedExperienceFixture() above fails closed for missing fixtures.
+    // Keep an explicit narrowed reference for TypeScript.
+    const verifiedFixture = fixture!;
+
+    // Updating the optional map snapshot must NEVER shorten a
+    // reminder-extended Matchday Experience.
     await sql(
       `UPDATE community_matchday_experience_sessions
-       SET latitude=?,longitude=?,accuracy=?,updated_at=?,expires_at=?
+       SET latitude=?,longitude=?,accuracy=?,updated_at=?
        WHERE member_id=? AND fixture_id=?`,
       data.latitude,
       data.longitude,
       data.accuracy,
       now,
-      expiresAt,
       me.id,
-      fixture.id,
+      verifiedFixture.id,
     ).run();
 
     return json({
       experience: {
-        fixtureId: fixture.id,
-        stadium: fixture.stadium,
+        fixtureId: verifiedFixture.id,
+        stadium: verifiedFixture.stadium,
         latitude: data.latitude,
         longitude: data.longitude,
         accuracy: data.accuracy,
         updatedAt: now,
+        expiresAt: current.expires_at,
+      },
+      serverNow: now,
+    });
+  }
+
+  if (
+    path === "/experience/reminder" &&
+    request.method === "POST"
+  ) {
+    if (
+      typeof data.hours !== "number" ||
+      !Number.isInteger(data.hours)
+    ) {
+      fail("Choose a valid reminder.");
+    }
+
+    const current = await sql(
+      `SELECT fixture_id,supporter,expires_at
+       FROM community_matchday_experience_sessions
+       WHERE member_id=? AND expires_at>?`,
+      me.id,
+      now,
+    ).first<{
+      fixture_id: string;
+      supporter: "home" | "away";
+      expires_at: number;
+    }>();
+
+    if (!current) {
+      fail("Start Matchday Experience first.", 409);
+    }
+
+    const fixture = (await fixtures()).find(
+      f => f.id === current.fixture_id,
+    );
+
+    if (!trustedExperienceFixture(fixture, me.club_id)) {
+      await sql(
+        "DELETE FROM community_matchday_experience_sessions WHERE member_id=?",
+        me.id,
+      ).run();
+
+      fail("This Matchday Experience is no longer verified.", 403);
+    }
+
+    if (
+      !experienceReminderAllowed(
+        fixture!,
+        me.club_id,
+        current.supporter,
+        data.hours,
+      )
+    ) {
+      fail("That reminder is not available for this fixture.", 403);
+    }
+
+    // Canonical Ticket Frame behaviour:
+    // reminder = now + selected delay
+    // automatic stop = reminder + 8 hours.
+    const requestedAt =
+      now + data.hours * 60 * 60 * 1000;
+
+    const expiresAt =
+      requestedAt + 8 * 60 * 60 * 1000;
+
+    await sql(
+      `UPDATE community_matchday_experience_sessions
+       SET updated_at=?,expires_at=?
+       WHERE member_id=? AND fixture_id=?`,
+      now,
+      expiresAt,
+      me.id,
+      fixture!.id,
+    ).run();
+
+    return json({
+      experience: {
+        fixtureId: fixture!.id,
+        supporter: current.supporter,
+        reminderHours: data.hours,
+        reminderAt: requestedAt,
         expiresAt,
       },
       serverNow: now,
