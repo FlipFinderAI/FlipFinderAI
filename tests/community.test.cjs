@@ -792,6 +792,28 @@ test('Matchday Experience is explicit, any-distance, snapshot-based and separate
   const a = await member('experience-a');
   const b = await member('experience-b');
 
+  // Starting Matchday Experience itself does not require GPS.
+  // Location sharing remains a separate privacy-controlled action.
+  const noLocation = await member('experience-no-location');
+
+  const noLocationStart = await call(
+    'experience-no-location',
+    '/experience',
+    { fixtureId: fixture.id }
+  );
+
+  assert.equal(noLocationStart.status, 200);
+  assert.equal(noLocationStart.body.experience.fixtureId, fixture.id);
+  assert.equal(noLocationStart.body.experience.latitude, null);
+  assert.equal(noLocationStart.body.experience.longitude, null);
+
+  assert.equal(
+    db.prepare(
+      'SELECT count(*) n FROM community_matchday_experience_sessions WHERE member_id=?'
+    ).get(noLocation).n,
+    1
+  );
+
   const farA = {
     latitude: 51.5074,
     longitude: -0.1278,
@@ -805,7 +827,7 @@ test('Matchday Experience is explicit, any-distance, snapshot-based and separate
   };
 
   // These locations are deliberately nowhere near the test stadium.
-  // Experience is calendar-day based, not the normal two-mile rule.
+  // Experience uses its extended lifecycle, not the normal two-mile rule.
   let result = await call('experience-a', '/experience', {
     fixtureId: fixture.id,
     ...farA
@@ -845,7 +867,7 @@ test('Matchday Experience is explicit, any-distance, snapshot-based and separate
 
   assert.equal(
     db.prepare(
-      'SELECT count(*) n FROM community_matchday_experiences WHERE member_id=?'
+      'SELECT count(*) n FROM community_matchday_experience_sessions WHERE member_id=?'
     ).get(a).n,
     1
   );
@@ -867,7 +889,7 @@ test('Matchday Experience is explicit, any-distance, snapshot-based and separate
 
   const stored = db.prepare(
     `SELECT latitude,longitude
-     FROM community_matchday_experiences
+     FROM community_matchday_experience_sessions
      WHERE member_id=?`
   ).get(a);
 
@@ -887,7 +909,7 @@ test('Matchday Experience is explicit, any-distance, snapshot-based and separate
 
   assert.equal(
     db.prepare(
-      'SELECT count(*) n FROM community_matchday_experiences WHERE member_id=?'
+      'SELECT count(*) n FROM community_matchday_experience_sessions WHERE member_id=?'
     ).get(a).n,
     0
   );
@@ -1013,7 +1035,7 @@ test('Matchday Friend messaging works during a shared active Matchday Experience
   );
 });
 
-test('Matchday Experience fails closed for invalid location and privacy withdrawal', async () => {
+test('Matchday Experience rejects invalid location and closes when Community is disabled', async () => {
   const { member, call, db } = setup();
 
   const a = await member('experience-private');
@@ -1048,7 +1070,7 @@ test('Matchday Experience fails closed for invalid location and privacy withdraw
 
   assert.equal(
     db.prepare(
-      'SELECT count(*) n FROM community_matchday_experiences WHERE member_id=?'
+      'SELECT count(*) n FROM community_matchday_experience_sessions WHERE member_id=?'
     ).get(a).n,
     1
   );
@@ -1063,7 +1085,7 @@ test('Matchday Experience fails closed for invalid location and privacy withdraw
 
   assert.equal(
     db.prepare(
-      'SELECT count(*) n FROM community_matchday_experiences WHERE member_id=?'
+      'SELECT count(*) n FROM community_matchday_experience_sessions WHERE member_id=?'
     ).get(a).n,
     0
   );

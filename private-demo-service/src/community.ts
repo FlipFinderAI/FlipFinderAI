@@ -59,15 +59,16 @@ function experienceExpiry(
   const match = fixture.kickoff.match(
     /^(\d{4})-(\d{2})-(\d{2})T.*(Z|([+-])(\d{2}):(\d{2}))$/,
   );
-
   if (!match) return null;
+
+  const kickoff = Date.parse(fixture.kickoff);
+  if (!Number.isFinite(kickoff)) return null;
 
   const year = Number(match[1]);
   const month = Number(match[2]);
   const day = Number(match[3]);
 
   let offsetMinutes = 0;
-
   if (match[4] !== "Z") {
     const sign = match[5] === "-" ? -1 : 1;
     const hours = Number(match[6]);
@@ -85,34 +86,19 @@ function experienceExpiry(
     offsetMinutes = sign * (hours * 60 + minutes);
   }
 
-  const localNow = new Date(now + offsetMinutes * 60000);
+  // 00:00 in the fixture's own offset, expressed as UTC milliseconds.
+  const opensAt =
+    Date.UTC(year, month - 1, day, 0, 0, 0, 0) -
+    offsetMinutes * 60000;
 
-  if (
-    localNow.getUTCFullYear() !== year ||
-    localNow.getUTCMonth() + 1 !== month ||
-    localNow.getUTCDate() !== day
-  ) {
-    return null;
-  }
+  // Preserve the original Ticket Frame initial lifecycle:
+  // first close prompt kickoff +3h, automatic stop eight hours later.
+  const expiresAt = kickoff + 11 * 60 * 60 * 1000;
 
-  const localMidnightUtc = Date.UTC(
-    year,
-    month - 1,
-    day + 1,
-    0,
-    0,
-    0,
-    0,
-  );
+  if (now < opensAt || now >= expiresAt) return null;
 
-  const expiresAt =
-    localMidnightUtc - offsetMinutes * 60000;
-
-  return Number.isFinite(expiresAt) && expiresAt > now
-    ? expiresAt
-    : null;
+  return expiresAt;
 }
-
 function validExperienceLocation(data: {
   latitude?: unknown;
   longitude?: unknown;
@@ -226,7 +212,7 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
       id, identity.subject, safetyId, friendId, data.displayName.trim(), data.avatar,
       data.clubId, data.gamesAttended, JSON.stringify([...new Set(data.groundsVisited)])),
       sql("DELETE FROM community_presence WHERE member_id = ?", id),
-      sql("DELETE FROM community_matchday_experiences WHERE member_id = ?", id),
+      sql("DELETE FROM community_matchday_experience_sessions WHERE member_id = ?", id),
     ]);
     me = await sql("SELECT * FROM community_members WHERE id = ?", id).first<Member>();
     return json(state());
@@ -256,7 +242,30 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
        WHERE id=?`,
        +enabled, +locationVisible, +shareGames, +shareGrounds, +photoSharing, me.id),
       sql("DELETE FROM community_presence WHERE member_id=?", me.id),
-      sql("DELETE FROM community_matchday_experiences WHERE member_id=?", me.id),
+      // Location privacy and Community membership are separate:
+      // - location off: keep Experience, erase its optional GPS snapshot
+      // - Community off: remove the server-side Community Experience
+      sql(
+        `UPDATE community_matchday_experience_sessions
+         SET latitude=CASE WHEN ?=0 THEN NULL ELSE latitude END,
+             longitude=CASE WHEN ?=0 THEN NULL ELSE longitude END,
+             accuracy=CASE WHEN ?=0 THEN NULL ELSE accuracy END,
+             updated_at=?
+         WHERE member_id=?`,
+        +locationVisible,
+        +locationVisible,
+        +locationVisible,
+        now,
+        me.id,
+      ),
+      sql(
+        `DELETE FROM community_matchday_experience_sessions
+         WHERE member_id=? AND ?=0`,
+        me.id,
+        +enabled,
+      ),
+
+
     ]);
 
     me = await sql("SELECT * FROM community_members WHERE id=?", me.id).first<Member>();
@@ -298,16 +307,16 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
     const experience = await sql(
       `SELECT fixture_id,stadium,latitude,longitude,accuracy,
               started_at,updated_at,expires_at
-       FROM community_matchday_experiences
+       FROM community_matchday_experience_sessions
        WHERE member_id=? AND expires_at>?`,
       me.id,
       now,
     ).first<{
       fixture_id: string;
       stadium: string;
-      latitude: number;
-      longitude: number;
-      accuracy: number;
+      latitude: number | null;
+      longitude: number | null;
+      accuracy: number | null;
       started_at: number;
       updated_at: number;
       expires_at: number;
@@ -331,16 +340,27 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
   }
 
   if (path === "/experience" && request.method === "POST") {
-    if (!me.location_visible) {
-      fail("Enable matchday visibility first.", 403);
-    }
-
     if (
       typeof data.fixtureId !== "string" ||
-      !data.fixtureId ||
-      !validExperienceLocation(data)
+      !data.fixtureId
     ) {
-      fail("Choose a verified fixture and share a valid location.");
+      fail("Choose a verified fixture.");
+    }
+
+    // Starting Matchday Experience is not a location-sharing action.
+    // A location snapshot is optional and is only accepted when the
+    // supporter has separately enabled Community location visibility.
+    const suppliedLocation =
+      data.latitude !== undefined ||
+      data.longitude !== undefined ||
+      data.accuracy !== undefined;
+
+    if (suppliedLocation && !me.location_visible) {
+      fail("Enable matchday visibility before sharing location.", 403);
+    }
+
+    if (suppliedLocation && !validExperienceLocation(data)) {
+      fail("Share a valid location.");
     }
 
     const fixture = (await fixtures()).find(
@@ -353,7 +373,7 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
 
     if (!fixture || !expiresAt) {
       await sql(
-        "DELETE FROM community_matchday_experiences WHERE member_id=?",
+        "DELETE FROM community_matchday_experience_sessions WHERE member_id=?",
         me.id,
       ).run();
 
@@ -364,7 +384,7 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
     }
 
     await sql(
-      `INSERT INTO community_matchday_experiences(
+      `INSERT INTO community_matchday_experience_sessions(
          member_id,fixture_id,stadium,latitude,longitude,accuracy,
          started_at,updated_at,expires_at
        )
@@ -381,9 +401,9 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
       me.id,
       fixture.id,
       fixture.stadium,
-      data.latitude,
-      data.longitude,
-      data.accuracy,
+      suppliedLocation ? data.latitude : null,
+      suppliedLocation ? data.longitude : null,
+      suppliedLocation ? data.accuracy : null,
       now,
       now,
       expiresAt,
@@ -393,9 +413,9 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
       experience: {
         fixtureId: fixture.id,
         stadium: fixture.stadium,
-        latitude: data.latitude,
-        longitude: data.longitude,
-        accuracy: data.accuracy,
+        latitude: suppliedLocation ? data.latitude : null,
+        longitude: suppliedLocation ? data.longitude : null,
+        accuracy: suppliedLocation ? data.accuracy : null,
         startedAt: now,
         updatedAt: now,
         expiresAt,
@@ -418,7 +438,7 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
 
     const current = await sql(
       `SELECT fixture_id
-       FROM community_matchday_experiences
+       FROM community_matchday_experience_sessions
        WHERE member_id=? AND expires_at>?`,
       me.id,
       now,
@@ -438,7 +458,7 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
 
     if (!fixture || !expiresAt) {
       await sql(
-        "DELETE FROM community_matchday_experiences WHERE member_id=?",
+        "DELETE FROM community_matchday_experience_sessions WHERE member_id=?",
         me.id,
       ).run();
 
@@ -446,7 +466,7 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
     }
 
     await sql(
-      `UPDATE community_matchday_experiences
+      `UPDATE community_matchday_experience_sessions
        SET latitude=?,longitude=?,accuracy=?,updated_at=?,expires_at=?
        WHERE member_id=? AND fixture_id=?`,
       data.latitude,
@@ -474,7 +494,7 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
 
   if (path === "/experience" && request.method === "DELETE") {
     await sql(
-      "DELETE FROM community_matchday_experiences WHERE member_id=?",
+      "DELETE FROM community_matchday_experience_sessions WHERE member_id=?",
       me.id,
     ).run();
 
@@ -494,14 +514,21 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
         `SELECT m.*, peer.fixture_id,peer.stadium,
                 peer.latitude,peer.longitude,
                 peer.updated_at,peer.expires_at
-         FROM community_matchday_experiences own
-         JOIN community_matchday_experiences peer
+         FROM community_matchday_experience_sessions own
+         JOIN community_matchday_experience_sessions peer
            ON peer.fixture_id=own.fixture_id
          JOIN community_members m
            ON m.id=peer.member_id
          WHERE own.member_id=?
          AND own.expires_at>?
          AND peer.expires_at>?
+         -- Experience membership does not imply location sharing.
+         -- Both sides must have explicitly supplied a location snapshot
+         -- before the Experience location-discovery view is available.
+         AND own.latitude IS NOT NULL
+         AND own.longitude IS NOT NULL
+         AND peer.latitude IS NOT NULL
+         AND peer.longitude IS NOT NULL
          AND peer.member_id<>?
          AND m.club_id=?
          AND m.enabled=1
@@ -705,8 +732,8 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
          AND m.location_visible=1
          AND EXISTS (
            SELECT 1
-           FROM community_matchday_experiences own
-           JOIN community_matchday_experiences peer
+           FROM community_matchday_experience_sessions own
+           JOIN community_matchday_experience_sessions peer
              ON peer.fixture_id=own.fixture_id
            WHERE own.member_id=?
            AND peer.member_id=m.id
@@ -850,8 +877,8 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
 
     const experience = await sql(
       `SELECT 1 ok
-       FROM community_matchday_experiences own
-       JOIN community_matchday_experiences peer
+       FROM community_matchday_experience_sessions own
+       JOIN community_matchday_experience_sessions peer
          ON peer.fixture_id=own.fixture_id
        WHERE own.member_id=?
        AND peer.member_id=?
