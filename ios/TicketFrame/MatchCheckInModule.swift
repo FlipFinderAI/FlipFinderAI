@@ -96,7 +96,21 @@ final class MatchCheckInMonitor: NSObject, CLLocationManagerDelegate {
     }
     let keys = Set(rows.compactMap { $0["key"] as? String })
     for old in fixtures {
-      if let key = old["key"] as? String, !keys.contains(key) { cancel(key); presence.removeValue(forKey: key) }
+      if let key = old["key"] as? String, !keys.contains(key) {
+        cancel(key)
+
+        // Keep a genuine in-window stadium detection until the supporter
+        // answers the final attendance question on a later app launch.
+        // Tentative detections made before the check-in window are disposable.
+        let detected = presence[key] as? [String: Any]
+        let keepForFinalConfirmation =
+          !acknowledgements.contains(key) &&
+          detected?["tentative"] as? Bool == false
+
+        if !keepForFinalConfirmation {
+          presence.removeValue(forKey: key)
+        }
+      }
     }
     state["fixtures"] = rows
     state["enabled"] = true
@@ -171,11 +185,16 @@ final class MatchCheckInMonitor: NSObject, CLLocationManagerDelegate {
   }
 
   func unresolved() -> [[String: Any]] {
-    let now = Date().timeIntervalSince1970 * 1000
     return presence.compactMap { key, value in
-      guard !acknowledgements.contains(key), let item = value as? [String: Any],
-            let fixture = item["fixture"] as? [String: Any], let kickoff = fixture["kickoffMs"] as? Double,
-            now >= kickoff - 3600000, now <= kickoff + 10800000 else { return nil }
+      guard !acknowledgements.contains(key),
+            let item = value as? [String: Any],
+            item["tentative"] as? Bool == false,
+            let fixture = item["fixture"] as? [String: Any] else { return nil }
+
+      // A real stadium detection remains unresolved until the supporter
+      // explicitly confirms or rejects attendance. This provides the
+      // final "Did you attend?" question on the next app launch even
+      // after the normal check-in window has ended.
       return fixture
     }
   }
@@ -188,7 +207,19 @@ final class MatchCheckInMonitor: NSObject, CLLocationManagerDelegate {
     guard let fixture = fixtures.first(where: { $0["key"] as? String == key }) else { return }
     if !inside {
       cancel(key)
-      presence.removeValue(forKey: key)
+
+      // Leaving the stadium must not erase a genuine in-window detection.
+      // Preserve it until the supporter answers the attendance question.
+      // Early/tentative detections can still be discarded.
+      let detected = presence[key] as? [String: Any]
+      let keepForFinalConfirmation =
+        !acknowledgements.contains(key) &&
+        detected?["tentative"] as? Bool == false
+
+      if !keepForFinalConfirmation {
+        presence.removeValue(forKey: key)
+      }
+
       save()
       return
     }
