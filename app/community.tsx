@@ -3,7 +3,7 @@ import Messages from "@/components/community/Messages";
 import Matchday from "@/components/community/Matchday";
 import { useEffect, useState } from "react";
 import { router, useLocalSearchParams } from "expo-router";
-import { Alert, ScrollView, Switch, Text, TextInput, View } from "react-native";
+import { Alert, AppState, ScrollView, Switch, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { loadAttendanceHistory } from "@/lib/attendanceHistory";
@@ -17,6 +17,11 @@ import {
   communitySignUp,
 } from "@/lib/community/api";
 import type { CommunitySession } from "@/lib/community/session";
+import {
+  communityUnlockCapability,
+  unlockCommunityLocally,
+  type CommunityUnlockCapability,
+} from "@/lib/community/localLock";
 import { Action, styles } from "@/components/community/Controls";
 
 const DRAFT_KEY = "ticket-frame.community-profile-draft.v1";
@@ -37,8 +42,16 @@ export default function CommunityScreen() {
   const [session, setSession] = useState<CommunitySession | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [unlocked, setUnlocked] = useState(false);
+  const [unlockCapability, setUnlockCapability] = useState<CommunityUnlockCapability>({
+    available: false,
+    label: "Biometrics",
+  });
   const serviceConfigured = communityAvailable();
-  const connected = serviceConfigured && Boolean(session?.communityEligible);
+  const connected =
+    serviceConfigured &&
+    unlocked &&
+    Boolean(session?.communityEligible);
   const sameClub = state.profile?.clubId === clubId;
   const active = connected && sameClub && state.preferences.enabled;
   async function run(task: () => Promise<void>) {
@@ -60,27 +73,19 @@ export default function CommunityScreen() {
         setSession(restored);
         if (restored?.email) setEmail(restored.email);
 
-        if (restored?.communityEligible) {
-          const current = await communityRequest<CommunityState>("/me");
+        if (restored) {
+          const capability = await communityUnlockCapability();
           if (cancelled) return;
-          setState(current);
-          if (current.profile) {
-            setName(current.profile.displayName);
-            setAvatar(current.profile.avatar);
-          }
+          setUnlockCapability(capability);
         }
       }
     })().catch(error => { if (!cancelled) setStatus(error.message || "Could not load Community."); })
       .finally(() => { if (!cancelled) setLoaded(true); });
     return () => { cancelled = true; };
   }, [serviceConfigured]);
-  async function signIn() {
-    if (!email.trim()) throw new Error("Enter your registered email address.");
-    if (!password) throw new Error("Enter your Community password.");
-
-    const next = await communitySignIn(email.trim(), password);
-    setPassword("");
+  async function loadUnlockedCommunity(next: CommunitySession) {
     setSession(next);
+    setUnlocked(true);
 
     if (next.communityEligible) {
       const current = await communityRequest<CommunityState>("/me");
@@ -89,6 +94,45 @@ export default function CommunityScreen() {
         setName(current.profile.displayName);
         setAvatar(current.profile.avatar);
       }
+    }
+  }
+
+  async function unlockWithDevice() {
+    const success = await unlockCommunityLocally();
+
+    if (!success) {
+      setStatus(
+        unlockCapability.available
+          ? "Community stayed locked."
+          : "No enrolled biometric unlock is available. Use your Community password.",
+      );
+      return;
+    }
+
+    if (!session) return;
+    await loadUnlockedCommunity(session);
+    setStatus(`Community unlocked with ${unlockCapability.label}.`);
+  }
+
+  async function unlockWithPassword() {
+    if (!session) return;
+    if (!password) throw new Error("Enter your Community password.");
+
+    const next = await communitySignIn(session.email, password);
+    setPassword("");
+    await loadUnlockedCommunity(next);
+    setStatus("Community unlocked.");
+  }
+
+  async function signIn() {
+    if (!email.trim()) throw new Error("Enter your registered email address.");
+    if (!password) throw new Error("Enter your Community password.");
+
+    const next = await communitySignIn(email.trim(), password);
+    setPassword("");
+    await loadUnlockedCommunity(next);
+
+    if (next.communityEligible) {
       setStatus("Signed in to Community.");
     } else {
       setStatus("Signed in. Community eligibility still needs to be confirmed.");
@@ -103,13 +147,14 @@ export default function CommunityScreen() {
 
     const next = await communitySignUp(email.trim(), password);
     setPassword("");
-    setSession(next);
+    await loadUnlockedCommunity(next);
     setStatus("Account created securely. Community eligibility still needs to be confirmed.");
   }
 
   async function signOut() {
     await communitySignOut();
     setSession(null);
+    setUnlocked(false);
     setPassword("");
     setState({
       profile: null,
@@ -119,6 +164,17 @@ export default function CommunityScreen() {
     });
     setStatus("Signed out of Community on this iPhone.");
   }
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", nextState => {
+      if (nextState !== "active" && session) {
+        setUnlocked(false);
+        setPassword("");
+      }
+    });
+
+    return () => subscription.remove();
+  }, [session]);
 
   async function saveProfile() {
     if (!name.trim() || name.trim().length > 40) throw new Error("Choose a display name of 1–40 characters.");
@@ -142,6 +198,76 @@ export default function CommunityScreen() {
     setState(await communityRequest<CommunityState>("/preferences", preferences));
     setStatus("Community privacy choices saved. Matchday presence has ended.");
   }
+  if (serviceConfigured && session && !unlocked) {
+    return <SafeAreaView style={{ flex: 1, backgroundColor: "#f8f5ec" }}>
+      <ScrollView
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={{ padding: 20, gap: 14 }}
+      >
+        <Action title="Back to Ticket Frame" onPress={() => router.back()} colour={colour} />
+
+        <Text
+          accessibilityRole="header"
+          style={[styles.title, { color: colour || "#17221c" }]}
+        >
+          COMMUNITY
+        </Text>
+
+        <Text style={styles.heading}>Community locked</Text>
+        <Text style={styles.copy}>
+          Your Community session is remembered securely on this iPhone.
+          Unlock it to see your Community profile, friends, messages and matchday features.
+        </Text>
+
+        <Text>{session.email}</Text>
+
+        {unlockCapability.available && (
+          <Action
+            title={`Unlock with ${unlockCapability.label}`}
+            disabled={busy}
+            onPress={() => void run(unlockWithDevice)}
+            colour={colour}
+          />
+        )}
+
+        <Text style={styles.copy}>
+          You can also unlock by entering your Community password.
+          The password is checked by the Community service and is not saved on this iPhone.
+        </Text>
+
+        <TextInput
+          accessibilityLabel="Community password to unlock"
+          placeholder="Community password"
+          secureTextEntry
+          autoCapitalize="none"
+          autoCorrect={false}
+          textContentType="password"
+          value={password}
+          onChangeText={setPassword}
+          style={styles.input}
+        />
+
+        <Action
+          title="Unlock with Community password"
+          disabled={busy || !password}
+          onPress={() => void run(unlockWithPassword)}
+          colour={colour}
+        />
+
+        <Action
+          title="Sign out of Community"
+          disabled={busy}
+          onPress={() => void run(signOut)}
+          colour={colour}
+        />
+
+        {!!status && (
+          <Text accessibilityLiveRegion="polite">{status}</Text>
+        )}
+      </ScrollView>
+    </SafeAreaView>;
+  }
+
   return <SafeAreaView style={{ flex: 1, backgroundColor: "#f8f5ec" }}>
     <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 20, gap: 14 }}>
       <Action title="Back to Ticket Frame" onPress={() => router.back()} colour={colour} />
