@@ -23602,8 +23602,8 @@ const renderGroundRow = (
             ]}
           >
             {(homeSeasonOptions.length
-              ? `${ticketCollectionClub.name} ${seasonFrame.season} Season`
-              : `${ticketCollectionClub.name} Tickets`
+              ? `${favouriteClub.name} ${seasonFrame.season} Season`
+              : `${favouriteClub.name} Tickets`
             ).toUpperCase()}
           </Text>
 
