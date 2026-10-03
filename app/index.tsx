@@ -24535,14 +24535,44 @@ const renderGroundRow = (
         {Platform.OS === "ios" && (
           <Pressable
             accessibilityRole="button"
-            style={({ pressed }) => [s.finish, { width: "100%", marginBottom: 14,
-              borderColor: visibleInkOnCream(favouriteClub.primary), opacity: pressed ? 0.62 : 1 }]}
+            style={({ pressed }) => [
+              s.finish,
+              {
+                width: "100%",
+                marginBottom: 24,
+                backgroundColor: favouriteClub.secondary,
+                borderColor: favouriteClub.primary,
+                opacity: pressed ? 0.72 : 1,
+                transform: [{ scale: pressed ? 0.985 : 1 }],
+              },
+            ]}
             onPress={() => router.push({ pathname: "/community", params: {
               clubId: favouriteClub.id, clubName: favouriteClub.name,
               colour: visibleInkOnCream(favouriteClub.primary),
             } })}
           >
-            <Text style={[s.finishText, { color: visibleInkOnCream(favouriteClub.primary) }]}>COMMUNITY</Text>
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 12,
+              }}
+            >
+              <Ionicons
+                name="people"
+                size={28}
+                color={favouriteClub.primary}
+              />
+              <Text
+                style={[
+                  s.finishText,
+                  { color: favouriteClub.primary },
+                ]}
+              >
+                COMMUNITY
+              </Text>
+            </View>
           </Pressable>
         )}
       </ScrollView>
