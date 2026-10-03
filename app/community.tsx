@@ -29,7 +29,23 @@ import { Action, styles } from "@/components/community/Controls";
 
 const DRAFT_KEY = "ticket-frame.community-profile-draft.v1";
 export default function CommunityScreen() {
-  const { clubId, clubName, colour } = useLocalSearchParams<{ clubId: string; clubName: string; colour: string }>();
+  const {
+    clubId,
+    clubName,
+    colour,
+    experience,
+    experienceId,
+    fixtureId,
+  } = useLocalSearchParams<{
+    clubId: string;
+    clubName: string;
+    colour: string;
+    experience?: string;
+    experienceId?: string;
+    fixtureId?: string;
+  }>();
+  const openedFromMatchdayExperience =
+    experience === "active" && Boolean(experienceId) && Boolean(fixtureId);
   const [name, setName] = useState("");
   const [avatar, setAvatar] = useState<Avatar>("⚽");
   const [summary, setSummary] = useState({ gamesAttended: 0, groundsVisited: [] as string[] });
@@ -372,6 +388,24 @@ export default function CommunityScreen() {
       <Action title="Back to Ticket Frame" onPress={() => router.back()} colour={colour} />
       <Text accessibilityRole="header" style={[styles.title, { color: colour || "#17221c" }]}>COMMUNITY</Text>
       <Text>{clubName || "Choose a favourite club"} supporters</Text>
+      {openedFromMatchdayExperience ? (
+        <View
+          style={{
+            borderWidth: 1,
+            borderColor: colour || "#17221c",
+            borderRadius: 10,
+            padding: 10,
+          }}
+        >
+          <Text style={{ fontWeight: "900", color: "#17221c" }}>
+            MATCHDAY EXPERIENCE COMMUNITY
+          </Text>
+          <Text style={[styles.copy, { marginTop: 4 }]}>
+            Your original Matchday Experience is active. Community uses that
+            Experience window until you close it or it automatically ends.
+          </Text>
+        </View>
+      ) : null}
       {!serviceConfigured && (
         <Text style={styles.copy}>
           Community online service is not configured yet. You can prepare your profile here, but nothing is sent online.

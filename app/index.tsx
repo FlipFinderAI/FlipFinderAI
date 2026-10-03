@@ -12040,6 +12040,60 @@ useEffect(() => {
                 <Text style={[s.helpText, { marginTop: 0, marginBottom: 8, fontWeight: "900" }]}>
                   Matchday Experience information will only be kept if you attend the match.
                 </Text>
+
+                {Platform.OS === "ios" ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Open Community for this Matchday Experience"
+                    onPress={() =>
+                      router.push({
+                        pathname: "/community",
+                        params: {
+                          clubId: favouriteClub.id,
+                          clubName: favouriteClub.name,
+                          colour: visibleInkOnCream(favouriteClub.primary),
+                          experience: "active",
+                          experienceId: matchdayExperience.id,
+                          fixtureId: matchdayExperience.matchId,
+                        },
+                      })
+                    }
+                    style={({ pressed }) => ({
+                      width: "100%",
+                      borderWidth: 2,
+                      borderColor: favouriteClub.primary,
+                      borderRadius: 10,
+                      backgroundColor: favouriteClub.primary,
+                      paddingHorizontal: 12,
+                      paddingVertical: 11,
+                      marginBottom: 9,
+                      opacity: pressed ? 0.72 : 1,
+                    })}
+                  >
+                    <Text
+                      style={{
+                        textAlign: "center",
+                        fontSize: 13,
+                        fontWeight: "900",
+                        color: readableTextColour(favouriteClub.primary),
+                      }}
+                    >
+                      COMMUNITY
+                    </Text>
+                    <Text
+                      style={{
+                        textAlign: "center",
+                        marginTop: 3,
+                        fontSize: 10,
+                        fontWeight: "700",
+                        color: readableTextColour(favouriteClub.primary),
+                      }}
+                    >
+                      Matchday Experience active · friends, messages and matchday Community
+                    </Text>
+                  </Pressable>
+                ) : null}
+
                 <View style={{ gap: 7 }}>
                   {([
                     ["pub", "Find / Check in to Pub"],
