@@ -1,3 +1,4 @@
+import { eligible, type VerifiedFixture } from "../../lib/community/eligibility";
 import { AVATARS } from "../../lib/community/model";
 
 type Statement = {
@@ -9,6 +10,7 @@ type Statement = {
 export type CommunityEnv = {
   DB: { prepare(sql: string): Statement; batch(statements: Statement[]): Promise<unknown> };
   // Trusted internal service binding, never a client-supplied identity header.
+  COMMUNITY_FIXTURES?: { fetch(request: Request): Promise<Response> };
   COMMUNITY_AUTH?: { fetch(request: Request): Promise<Response> };
 };
 type Member = {
@@ -68,6 +70,38 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
     ]);
     me = await sql("SELECT * FROM community_members WHERE id=?", me.id).first<Member>();
     return json(state());
+  }
+  if (path === "/presence" && request.method === "DELETE") {
+    await sql("DELETE FROM community_presence WHERE member_id=?", me.id).run();
+    return json({ ok: true });
+  }
+  if (!me.enabled) fail("Enable Community first.", 403);
+  async function fixtures() {
+    if (!env.COMMUNITY_FIXTURES) fail("Verified football data service is not configured.", 503);
+    const response = await env.COMMUNITY_FIXTURES.fetch(new Request(`https://football.internal/community-fixtures?clubId=${encodeURIComponent(me!.club_id)}`));
+    if (!response.ok) fail("Verified fixture data is unavailable.", 503);
+    const body = await response.json() as { fixtures: VerifiedFixture[] };
+    if (!Array.isArray(body.fixtures)) fail("Verified fixture data is unavailable.", 503);
+    return body.fixtures;
+  }
+  if (path === "/fixtures" && request.method === "GET") {
+    if (!me.location_visible) fail("Enable matchday visibility first.", 403);
+    return json({ fixtures: await fixtures(), serverNow: now });
+  }
+  if (path === "/presence" && request.method === "POST") {
+    if (!me.location_visible) fail("Enable matchday visibility first.", 403);
+    const fixture = (await fixtures()).find(f => f.id === data.fixtureId);
+    if (!fixture || !eligible(fixture, me.club_id, now, data)) {
+      await sql("DELETE FROM community_presence WHERE member_id=?", me.id).run();
+      fail("You are not eligible for discovery at this fixture.", 403);
+    }
+    const expiresAt = Math.min(now + 120000, Date.parse(fixture.kickoff) + 4 * 3600000);
+    await sql(`INSERT INTO community_presence(member_id,fixture_id,stadium,stadium_lat,stadium_lon,expires_at,on_map)
+      VALUES(?,?,?,?,?,?,0) ON CONFLICT(member_id) DO UPDATE SET fixture_id=excluded.fixture_id,
+      stadium=excluded.stadium,stadium_lat=excluded.stadium_lat,stadium_lon=excluded.stadium_lon,
+      expires_at=excluded.expires_at,on_map=0`, me.id, fixture.id, fixture.stadium, fixture.latitude, fixture.longitude, expiresAt).run();
+    return json({ presence: { fixtureId: fixture.id, stadium: fixture.stadium, latitude: fixture.latitude,
+      longitude: fixture.longitude, expiresAt, onMap: false }, serverNow: now });
   }
   // Feature routes are added in independently checkpointed stages.
   return json({ error: "Community route not found." }, 404);
