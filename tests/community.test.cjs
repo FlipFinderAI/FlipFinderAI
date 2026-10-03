@@ -107,3 +107,208 @@ test('friend lifecycle rejects forged accept, other clubs, expired visibility an
  assert.equal((await call('a','/friend-request',{ target:b })).status,409);
  assert.equal((await call('a','/discover')).body.people.length,0);
 });
+
+
+test('messages require accepted same-club friendship and stop after block', async () => {
+ const { member, call } = setup();
+
+ const a = await member('message-a');
+ const b = await member('message-b');
+ const c = await member('message-c', 'club-c');
+
+ // No friendship yet.
+ assert.equal(
+   (await call('message-a','/message',{
+     target:b,
+     body:'Too early'
+   })).status,
+   403
+ );
+
+ // Different favourite club can never be messaged.
+ assert.equal(
+   (await call('message-a','/message',{
+     target:c,
+     body:'Wrong club'
+   })).status,
+   403
+ );
+
+ // Become eligible to discover each other.
+ await call(
+   'message-a',
+   '/presence',
+   { fixtureId:fixture.id,...coords }
+ );
+
+ await call(
+   'message-b',
+   '/presence',
+   { fixtureId:fixture.id,...coords }
+ );
+
+ assert.equal(
+   (await call(
+     'message-a',
+     '/friend-request',
+     { target:b }
+   )).status,
+   200
+ );
+
+ const incoming =
+   (await call('message-b','/friends'))
+     .body.relationships[0];
+
+ assert.equal(
+   (await call(
+     'message-b',
+     '/relationship',
+     {
+       id:incoming.id,
+       action:'accept'
+     }
+   )).status,
+   200
+ );
+
+ // Accepted friendship allows private messaging.
+ assert.equal(
+   (await call(
+     'message-a',
+     '/message',
+     {
+       target:b,
+       body:' Hello friend '
+     }
+   )).status,
+   200
+ );
+
+ // Recipient sees one unread conversation.
+ const inbox =
+   await call('message-b','/conversations');
+
+ assert.equal(inbox.status,200);
+ assert.equal(inbox.body.conversations.length,1);
+ assert.equal(inbox.body.conversations[0].friend.id,a);
+ assert.equal(inbox.body.conversations[0].unread,1);
+
+ // Opening the thread returns the message.
+ const thread =
+   await call(
+     'message-b',
+     `/messages?friend=${encodeURIComponent(a)}`
+   );
+
+ assert.equal(thread.status,200);
+ assert.equal(thread.body.messages.length,1);
+ assert.equal(thread.body.messages[0].body,'Hello friend');
+ assert.equal(thread.body.messages[0].sender,a);
+
+ // Opening marks incoming messages read.
+ const readInbox =
+   await call('message-b','/conversations');
+
+ assert.equal(
+   readInbox.body.conversations[0].unread,
+   0
+ );
+
+ // Blocking immediately removes messaging access.
+ await call(
+   'message-b',
+   '/block',
+   { target:a }
+ );
+
+ assert.equal(
+   (await call(
+     'message-a',
+     '/message',
+     {
+       target:b,
+       body:'Blocked'
+     }
+   )).status,
+   403
+ );
+
+ assert.equal(
+   (await call(
+     'message-a',
+     `/messages?friend=${encodeURIComponent(b)}`
+   )).status,
+   403
+ );
+
+ assert.equal(
+   (await call(
+     'message-a',
+     '/conversations'
+   )).body.conversations.length,
+   0
+ );
+});
+
+test('messages reject blank and oversized content', async () => {
+ const { member, call } = setup();
+
+ const a = await member('length-a');
+ const b = await member('length-b');
+
+ await call(
+   'length-a',
+   '/presence',
+   { fixtureId:fixture.id,...coords }
+ );
+
+ await call(
+   'length-b',
+   '/presence',
+   { fixtureId:fixture.id,...coords }
+ );
+
+ await call(
+   'length-a',
+   '/friend-request',
+   { target:b }
+ );
+
+ const incoming =
+   (await call('length-b','/friends'))
+     .body.relationships[0];
+
+ await call(
+   'length-b',
+   '/relationship',
+   {
+     id:incoming.id,
+     action:'accept'
+   }
+ );
+
+ assert.equal(
+   (await call(
+     'length-a',
+     '/message',
+     {
+       target:b,
+       body:'   '
+     }
+   )).status,
+   400
+ );
+
+ assert.equal(
+   (await call(
+     'length-a',
+     '/message',
+     {
+       target:b,
+       body:'x'.repeat(1001)
+     }
+   )).status,
+   400
+ );
+});

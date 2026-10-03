@@ -185,7 +185,139 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
     return json({ ok: true });
   }
   // Feature routes are added in independently checkpointed stages.
-  return json({ error: "Community route not found." }, 404);
+
+   async function acceptedFriend(target: unknown) {
+     if (typeof target !== "string" || target === me!.id) {
+       fail("Choose a friend.");
+     }
+
+     return sql(`SELECT m.* FROM community_members m
+       JOIN community_relationships r
+         ON ((r.sender=? AND r.recipient=m.id)
+         OR (r.recipient=? AND r.sender=m.id))
+       WHERE m.id=? AND r.status='accepted'
+       AND ${peerGuard}
+       LIMIT 1`,
+       me!.id,
+       me!.id,
+       target,
+       me!.club_id,
+       me!.id,
+       me!.id
+     ).first<Member>();
+   }
+
+   if (path === "/conversations" && request.method === "GET") {
+     const rows = (await sql(`SELECT m.*,
+       (SELECT count(*) FROM community_messages msg
+        WHERE msg.sender=m.id
+        AND msg.recipient=?
+        AND msg.read_at IS NULL) unread
+       FROM community_relationships r
+       JOIN community_members m
+         ON m.id=CASE
+           WHEN r.sender=? THEN r.recipient
+           ELSE r.sender
+         END
+       WHERE (r.sender=? OR r.recipient=?)
+       AND r.status='accepted'
+       AND ${peerGuard}
+       ORDER BY m.display_name COLLATE NOCASE
+       LIMIT 200`,
+       me.id,
+       me.id,
+       me.id,
+       me.id,
+       me.club_id,
+       me.id,
+       me.id
+     ).all<Member & { unread: number }>()).results;
+
+     return json({
+       conversations: rows.map(row => ({
+         friend: publicProfile(row),
+         unread: Number(row.unread || 0),
+       }))
+     });
+   }
+
+   if (path === "/messages" && request.method === "GET") {
+     const target = new URL(request.url).searchParams.get("friend");
+     const friend = await acceptedFriend(target);
+
+     if (!friend) {
+       fail("This conversation is unavailable.", 403);
+     }
+
+     await sql(`UPDATE community_messages
+       SET read_at=?
+       WHERE sender=?
+       AND recipient=?
+       AND read_at IS NULL`,
+       now,
+       friend.id,
+       me.id
+     ).run();
+
+     const rows = (await sql(`SELECT id,sender,body,created_at
+       FROM community_messages
+       WHERE (sender=? AND recipient=?)
+       OR (sender=? AND recipient=?)
+       ORDER BY created_at ASC, id ASC
+       LIMIT 500`,
+       me.id,
+       friend.id,
+       friend.id,
+       me.id
+     ).all<{
+       id: string;
+       sender: string;
+       body: string;
+       created_at: number;
+     }>()).results;
+
+     return json({
+       messages: rows.map(row => ({
+         id: row.id,
+         sender: row.sender,
+         body: row.body,
+         createdAt: row.created_at,
+       }))
+     });
+   }
+
+   if (path === "/message" && request.method === "POST") {
+     if (
+       typeof data.body !== "string" ||
+       !data.body.trim() ||
+       data.body.length > 1000
+     ) {
+       fail("Enter a message of 1–1000 characters.");
+     }
+
+     const friend = await acceptedFriend(data.target);
+
+     if (!friend) {
+       fail(
+         "You can only message an accepted same-club friend.",
+         403
+       );
+     }
+
+     await sql(`INSERT INTO community_messages
+       (id,sender,recipient,body,created_at,read_at)
+       VALUES(?,?,?,?,?,NULL)`,
+       crypto.randomUUID(),
+       me.id,
+       friend.id,
+       data.body.trim(),
+       now
+     ).run();
+
+     return json({ ok: true });
+   }
+
+   return json({ error: "Community route not found." }, 404);
  } catch (error) {
   const known = error as Error & { status?: number };
   return json({ error: known.status ? known.message : "Community is unavailable. Please try again." }, known.status || 500);
