@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Text, TextInput, View } from "react-native";
+import { Linking, Text, TextInput, View } from "react-native";
 import { communityRequest } from "@/lib/community/api";
 import type { PublicProfile, Relationship } from "@/lib/community/model";
 import { Action, styles } from "./Controls";
@@ -9,7 +9,19 @@ export default function Friends({ enabled, busy, run }: { enabled: boolean; busy
  const [report, setReport] = useState<PublicProfile | null>(null);
  const [reason, setReason] = useState("");
  const [notice, setNotice] = useState("");
- useEffect(() => { setPeople([]); setRelationships([]); setReport(null); }, [enabled]);
+ const [submittedReport, setSubmittedReport] = useState<{
+  reportId: string;
+  reportedSafetyId: string | null;
+  contact: string;
+  displayName: string;
+  reason: string;
+ } | null>(null);
+ useEffect(() => {
+  setPeople([]);
+  setRelationships([]);
+  setReport(null);
+  setSubmittedReport(null);
+ }, [enabled]);
  async function refresh() {
    const result = await communityRequest<{ relationships: Relationship[] }>("/friends"); setRelationships(result.relationships);
  }
@@ -52,9 +64,80 @@ export default function Friends({ enabled, busy, run }: { enabled: boolean; busy
    {enabled && report && <><Text>Report {report.displayName}</Text>
      <TextInput style={styles.input} accessibilityLabel="Report reason" placeholder="What happened?" multiline maxLength={1000} value={reason} onChangeText={setReason} />
      <Action title="Submit report" disabled={busy || !reason.trim()} onPress={() => void run(async () => {
-       await communityRequest("/report", { target: report.id, reason }); setReport(null); setNotice("Report submitted.");
-     })} /><Action title="Cancel report" onPress={() => setReport(null)} />
+       const submittedReason = reason.trim();
+       const submittedName = report.displayName;
+
+       const result = await communityRequest<{
+        ok: boolean;
+        reportId: string;
+        reportedSafetyId: string | null;
+        contact: string;
+       }>("/report", {
+        target: report.id,
+        reason: submittedReason,
+        context: "Community supporter profile",
+       });
+
+       setSubmittedReport({
+        reportId: result.reportId,
+        reportedSafetyId: result.reportedSafetyId,
+        contact: result.contact,
+        displayName: submittedName,
+        reason: submittedReason,
+       });
+
+       setReport(null);
+       setReason("");
+       setNotice(
+        `Report submitted. Reference ${result.reportId}. You can also email Ticket Frame support.`
+       );
+     })} />
+     <Action title="Cancel report" onPress={() => setReport(null)} />
    </>}
+   {submittedReport && <>
+     <Text style={styles.heading}>Report submitted</Text>
+     <Text accessibilityLabel="Report reference">
+       Report reference: {submittedReport.reportId}
+     </Text>
+     {!!submittedReport.reportedSafetyId && (
+       <Text accessibilityLabel="Reported supporter safety ID">
+         Supporter Safety ID: {submittedReport.reportedSafetyId}
+       </Text>
+     )}
+     <Action
+       title="Email report to Ticket Frame support"
+       disabled={busy}
+       onPress={() => void run(async () => {
+         const subject = `Ticket Frame Community report ${submittedReport.reportId}`;
+
+         const body = [
+          "Ticket Frame Community safety report",
+          "",
+          `Report reference: ${submittedReport.reportId}`,
+          `Reported supporter: ${submittedReport.displayName}`,
+          `Supporter Safety ID: ${submittedReport.reportedSafetyId || "Unavailable"}`,
+          "",
+          "Reason:",
+          submittedReport.reason,
+          "",
+          "This email intentionally contains no supporter location data.",
+         ].join("\n");
+
+         const url =
+          `mailto:${encodeURIComponent(submittedReport.contact)}` +
+          `?subject=${encodeURIComponent(subject)}` +
+          `&body=${encodeURIComponent(body)}`;
+
+         await Linking.openURL(url);
+       })}
+     />
+     <Action
+       title="Close report details"
+       disabled={busy}
+       onPress={() => setSubmittedReport(null)}
+     />
+   </>}
+
    {!!notice && <Text accessibilityLiveRegion="polite">{notice}</Text>}
  </>;
 }
