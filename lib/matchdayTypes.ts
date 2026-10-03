@@ -50,6 +50,8 @@ export type MatchdayExperienceRecord = {
   supporter: MatchdaySupporterType;
   captureEnabled: boolean;
   captureStoppedAt?: string;
+  // True lifecycle end. Capture Off is only a pause and must not set this.
+  endedAt?: string;
   collapsed: boolean;
   closePromptAt?: string;
   closePromptCount?: number;

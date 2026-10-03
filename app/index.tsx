@@ -409,6 +409,8 @@ import { APP_NAME, APP_VERSION } from "@/lib/appVersion";
 import {
   acknowledgeAndCancelMatchCheckIn,
   resolveMatchCheckInAttendance,
+  matchCheckInAttendanceDecision,
+  matchCheckInFixtureKey,
   configureMatchGeofences,
   buildMatchCheckInFixtures,
   checkMatchCheckInPermissions,
@@ -2099,6 +2101,7 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
       void FileSystem.deleteAsync(ownedUri, { idempotent: true });
   };
 
+
   const persistMediaReferences = async (
     recordId: string,
     references: MatchMediaReference[],
@@ -2491,6 +2494,122 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
   const [matchdayExperiences, setMatchdayExperiences] =
     useState<MatchdayExperienceRecord[]>([]);
   const [matchdayExperiencesReady, setMatchdayExperiencesReady] = useState(false);
+
+  useEffect(() => {
+    if (
+      !storageReady ||
+      !matchdayExperiencesReady ||
+      !matchMediaReferencesReady ||
+      !matchdayMediaAssignmentsReady
+    )
+      return;
+
+    const endedExperiences = matchdayExperiences.filter(
+      (experience) =>
+        Boolean(experience.endedAt) &&
+        Boolean(experience.matchDate),
+    );
+
+    if (!endedExperiences.length) return;
+
+    let cancelled = false;
+
+    void (async () => {
+      const unresolved = await unresolvedMatchCheckInPresence().catch(() => []);
+      if (cancelled) return;
+
+      const unresolvedKeys = new Set(
+        unresolved.map((fixture) => fixture.key),
+      );
+
+      for (const experience of endedExperiences) {
+        if (cancelled || !experience.matchDate) return;
+
+        const checkInKey = matchCheckInFixtureKey({
+          club: experience.clubName,
+          opponent: experience.opponentName,
+          date: experience.matchDate.slice(0, 10),
+          competition: experience.competition ?? null,
+          homeAway: experience.supporter,
+        });
+
+        const decision =
+          await matchCheckInAttendanceDecision(checkInKey);
+
+        if (cancelled) return;
+
+        // Stadium attendance was confirmed: Experience media may remain.
+        if (decision?.outcome === "confirmed") continue;
+
+        // Genuine stadium presence exists but the supporter has not answered
+        // the final attendance question yet. Keep the media provisional.
+        if (!decision && unresolvedKeys.has(checkInKey)) continue;
+
+        // Final No, or a genuinely ended Experience with no stadium detection:
+        // remove only media explicitly tagged as belonging to this Experience.
+        const removals: Array<{
+          recordId: string;
+          reference: MatchMediaReference;
+        }> = [];
+
+        for (const [recordId, references] of Object.entries(
+          matchMediaReferencesRef.current,
+        )) {
+          for (const reference of references) {
+            if (
+              reference.provenance?.kind === "matchday-experience" &&
+              reference.provenance.experienceId === experience.id
+            ) {
+              removals.push({ recordId, reference });
+            }
+          }
+        }
+
+        if (!removals.length) continue;
+
+        for (const { recordId, reference } of removals) {
+          removeMatchMediaReference(recordId, reference);
+        }
+
+        const removalKeys = new Set(
+          removals.map(
+            ({ recordId, reference }) =>
+              `${recordId}|asset:${reference.assetId}`,
+          ),
+        );
+
+        setMatchdayMediaAssignments((current) => {
+          let changed = false;
+          const next = { ...current };
+
+          for (const key of removalKeys) {
+            if (key in next) {
+              delete next[key];
+              changed = true;
+            }
+          }
+
+          return changed ? next : current;
+        });
+      }
+    })().catch((error) => {
+      if (__DEV__)
+        console.warn(
+          "[matchday-experience] attendance retention cleanup failed",
+          error,
+        );
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    matchdayExperiences,
+    matchdayExperiencesReady,
+    matchMediaReferencesReady,
+    matchdayMediaAssignmentsReady,
+    storageReady,
+  ]);
   const [activeMatchdayExperienceId, setActiveMatchdayExperienceId] =
     useState<string | null>(null);
   const [matchdayFinder, setMatchdayFinder] =
@@ -2639,7 +2758,7 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
         setMatchdayExperiences((current) =>
           current.map((item) =>
             ids.has(item.id)
-              ? { ...item, captureEnabled: false, captureStoppedAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
+              ? { ...item, captureEnabled: false, captureStoppedAt: new Date().toISOString(), endedAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
               : item,
           ),
         );
@@ -2680,7 +2799,7 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
         setMatchdayExperiences((current) =>
           current.map((item) =>
             item.id === due.id
-              ? { ...item, captureEnabled: false, captureStoppedAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
+              ? { ...item, captureEnabled: false, captureStoppedAt: new Date().toISOString(), endedAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
               : item,
           ),
         );
@@ -10918,6 +11037,29 @@ const handleTileDrop = (id: string, tx: number, ty: number) => {
       for (const experience of matchdayExperiences) {
         if (cancelled) return;
         if (!experience.createdAt || !experience.matchDate) continue;
+
+        const experienceCheckInKey = matchCheckInFixtureKey({
+          club: experience.clubName,
+          opponent: experience.opponentName,
+          date: experience.matchDate.slice(0, 10),
+          competition: experience.competition ?? null,
+          homeAway: experience.supporter,
+        });
+        const attendanceDecision =
+          await matchCheckInAttendanceDecision(experienceCheckInKey);
+
+        // A final No can never recover Matchday Experience media again.
+        if (attendanceDecision?.outcome === "rejected") continue;
+
+        // Once the Experience has genuinely ended, no geo recognition means
+        // its media must not remain. A genuine detected-but-unanswered stadium
+        // presence is the exception: keep it provisional for the last-chance
+        // "Did you attend this game?" prompt.
+        if (experience.endedAt && !attendanceDecision) {
+          const unresolved = await unresolvedMatchCheckInPresence();
+          if (!unresolved.some((fixture) => fixture.key === experienceCheckInKey))
+            continue;
+        }
 
         const history = findMatchingAttendance(attendanceHistory, {
           club: experience.clubName,

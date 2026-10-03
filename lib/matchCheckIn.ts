@@ -41,6 +41,22 @@ export type MatchCheckInFixture = {
   longitude: number;
 };
 
+export function matchCheckInFixtureKey(
+  fixture: Pick<
+    MatchCheckInFixture,
+    "club" | "opponent" | "date" | "competition" | "homeAway"
+  >,
+): string {
+  return [
+    "match-v2",
+    normaliseFixtureText(fixture.club),
+    fixture.date,
+    normaliseFixtureText(fixture.opponent),
+    fixture.homeAway,
+    normaliseFixtureText(fixture.competition),
+  ].join("|");
+}
+
 type NativeFixture = MatchCheckInFixture & { kickoffMs: number | null };
 const nativeFixture = (fixture: MatchCheckInFixture): NativeFixture =>
   ({ ...fixture, kickoffMs: matchKickoffMs(fixture) });
@@ -187,9 +203,13 @@ export function buildMatchCheckInFixtures(rows: Array<{
       onMissingGround?.();
       continue;
     }
-    const key = ["match-v2", normaliseFixtureText(club), row.date,
-      normaliseFixtureText(opponent), home ? "home" : "away",
-      normaliseFixtureText(row.competition)].join("|");
+    const key = matchCheckInFixtureKey({
+      club,
+      opponent,
+      date: row.date,
+      competition: row.competition,
+      homeAway: home ? "home" : "away",
+    });
     if (candidates.some(item => item.key === key)) continue;
     candidates.push({key, club, opponent, date: row.date, kickoff: row.kickoff,
       competition: row.competition, ground: ground.stadium,
