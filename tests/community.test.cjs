@@ -69,7 +69,7 @@ test('public attendance projection excludes private source properties', () => {
 });
 test('authentication missing fails closed', async () => {
  const { env } = setup(); delete env.COMMUNITY_AUTH;
- assert.equal((await communityFetch(new Request('https://test/api/community/me'), env)).status, 503);
+ assert.equal((await communityFetch(new Request('https://test/api/community/me'), env)).status, 401);
 });
 test('profile defaults off; eligibility and withdrawal use server state', async () => {
  const { call, db } = setup();

@@ -1,5 +1,6 @@
 import { eligible, type VerifiedFixture } from "../../lib/community/eligibility";
 import { AVATARS } from "../../lib/community/model";
+import { verifyCommunitySession } from "./auth";
 
 type Statement = {
   bind(...values: unknown[]): Statement;
@@ -37,16 +38,34 @@ function publicProfile(m: Member) {
 function fail(message: string, status = 400): never { throw Object.assign(new Error(message), { status }); }
 export async function communityFetch(request: Request, env: CommunityEnv): Promise<Response> {
  try {
-  if (!env.COMMUNITY_AUTH) return json({ error: "Community authentication is not configured." }, 503);
   const authorization = request.headers.get("authorization");
   if (!authorization?.startsWith("Bearer ")) return json({ error: "Sign in required." }, 401);
-  const session = await env.COMMUNITY_AUTH.fetch(new Request("https://session.internal/verify", { headers: { authorization } }));
-  if (!session.ok) return json({ error: "Sign in required." }, 401);
-  const identity = await session.json() as {
-   subject?: string;
-   communityEligible?: boolean;
-   isChild?: boolean;
-  };
+
+  let identity: {
+    subject?: string;
+    communityEligible?: boolean;
+    isChild?: boolean;
+  } | null = null;
+
+  if (env.COMMUNITY_AUTH) {
+    const session = await env.COMMUNITY_AUTH.fetch(
+      new Request("https:" + "//session.internal/verify", {
+        headers: { authorization },
+      }),
+    );
+
+    if (session.ok) {
+      identity = await session.json() as {
+        subject?: string;
+        communityEligible?: boolean;
+        isChild?: boolean;
+      };
+    }
+  } else {
+    identity = await verifyCommunitySession(request, env);
+  }
+
+  if (!identity) return json({ error: "Sign in required." }, 401);
 
   if (!identity.subject || typeof identity.subject !== "string") {
    return json({ error: "Sign in required." }, 401);
