@@ -1,13 +1,15 @@
+import HistoryStadiumNativeMap from "@/components/history/HistoryStadiumNativeMap";
 import { useEffect, useState } from "react";
-import { AppState, Text } from "react-native";
+import { AppState, Text, View } from "react-native";
 import * as Location from "expo-location";
 import { communityRequest } from "@/lib/community/api";
 import { eligible, type VerifiedFixture } from "@/lib/community/eligibility";
-import type { Presence } from "@/lib/community/model";
+import type { Presence, PublicProfile } from "@/lib/community/model";
 import { Action, styles } from "./Controls";
 export default function Matchday({ enabled, clubId, busy, run }: {
  enabled: boolean; clubId: string; busy: boolean; run(task: () => Promise<void>): Promise<void>;
 }) {
+ const [people, setPeople] = useState<{ profile: PublicProfile; stadium: string; latitude: number; longitude: number; expiresAt: number }[]>([]);
  const [presence, setPresence] = useState<Presence | null>(null);
  const [leaseMs, setLeaseMs] = useState(0);
  const [message, setMessage] = useState("");
@@ -47,6 +49,24 @@ export default function Matchday({ enabled, clubId, busy, run }: {
    <Text>Within 2 miles · kickoff −2 hours to +4 hours. Only same-club supporters who also qualify can see you. Visibility lasts at most two minutes per check.</Text>
    <Action title="Check matchday eligibility" disabled={!enabled || busy} onPress={() => void run(check)} />
    {!!message && <Text>{message}</Text>}
-   {/* MATCHDAY_MAP */}
+   <Text style={styles.heading}>Matchday Map</Text>
+   <Text>The marker represents the stadium, never a supporter's GPS point. Joining this map is a separate choice.</Text>
+   <Action title="Add Me to Matchday Map" disabled={!presence || !enabled || busy || presence.onMap} onPress={() => void run(async () => {
+     await communityRequest("/map", {}); setPresence(p => p ? { ...p, onMap: true } : null);
+   })} />
+   <Action title="Leave Matchday Map" disabled={!enabled || busy} onPress={() => void run(async () => {
+     await communityRequest("/map", undefined, "DELETE"); setPresence(p => p ? { ...p, onMap: false } : null); setPeople([]);
+   })} />
+   <Action title="Refresh Matchday Map" disabled={!presence || !enabled || busy} onPress={() => void run(async () => {
+     const result = await communityRequest<{ people: typeof people }>("/map"); setPeople(result.people);
+   })} />
+   {presence && enabled && <View style={{ height: 260 }}>
+     <HistoryStadiumNativeMap style={{ flex: 1 }} showUserLocation={false} mapType="standard"
+       stadiums={[{ name: presence.stadium, latitude: presence.latitude, longitude: presence.longitude, club: "Matchday stadium presence", visits: 0 }]} />
+   </View>}
+   {presence && enabled && people.map(person => <Text key={person.profile.id}>{person.profile.avatar} {person.profile.displayName} · {person.stadium}</Text>)}
+   <Action title="End live visibility" disabled={!enabled || busy} onPress={() => void run(async () => {
+     await communityRequest("/presence", undefined, "DELETE"); setPresence(null); setPeople([]); setMessage("Live visibility ended.");
+   })} />
  </>;
 }

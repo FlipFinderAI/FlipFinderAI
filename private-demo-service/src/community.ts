@@ -103,6 +103,33 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
     return json({ presence: { fixtureId: fixture.id, stadium: fixture.stadium, latitude: fixture.latitude,
       longitude: fixture.longitude, expiresAt, onMap: false }, serverNow: now });
   }
+  if (path === "/map" && request.method === "DELETE") {
+    await sql("UPDATE community_presence SET on_map=0 WHERE member_id=?", me.id).run();
+    return json({ ok: true });
+  }
+  if (path === "/map" && request.method === "POST") {
+    if (!me.location_visible) fail("Enable matchday visibility first.", 403);
+    const present = await sql("SELECT member_id FROM community_presence WHERE member_id=? AND expires_at>?", me.id, now).first();
+    if (!present) fail("Check matchday eligibility again before joining the map.", 403);
+    await sql("UPDATE community_presence SET on_map=1 WHERE member_id=? AND expires_at>?", me.id, now).run();
+    return json({ ok: true });
+  }
+  async function visibleMembers(mapOnly = false) {
+    return (await sql(`SELECT m.*, p.stadium, p.stadium_lat, p.stadium_lon, p.expires_at FROM community_members m
+      JOIN community_presence p ON p.member_id=m.id
+      JOIN community_presence own ON own.member_id=? AND own.fixture_id=p.fixture_id
+      WHERE m.id<>? AND m.club_id=? AND m.enabled=1 AND m.location_visible=1
+      AND p.expires_at>? AND own.expires_at>? AND (?=0 OR p.on_map=1)
+      AND NOT EXISTS (SELECT 1 FROM community_blocks b WHERE (b.blocker=? AND b.blocked=m.id) OR (b.blocked=? AND b.blocker=m.id))
+      LIMIT 100`, me!.id, me!.id, me!.club_id, now, now, +mapOnly, me!.id, me!.id)
+      .all<Member & { stadium: string; stadium_lat: number; stadium_lon: number; expires_at: number }>()).results;
+  }
+  if ((path === "/map" || path === "/discover") && request.method === "GET") {
+    if (!me.location_visible) fail("Enable matchday visibility first.", 403);
+    const rows = await visibleMembers(path === "/map");
+    return json({ people: rows.map(m => ({ profile: publicProfile(m), stadium: m.stadium,
+      latitude: m.stadium_lat, longitude: m.stadium_lon, expiresAt: m.expires_at })), serverNow: now });
+  }
   // Feature routes are added in independently checkpointed stages.
   return json({ error: "Community route not found." }, 404);
  } catch (error) {

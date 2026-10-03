@@ -71,3 +71,20 @@ test('profile defaults off; eligibility and withdrawal use server state', async 
  assert.equal(db.prepare('SELECT count(*) n FROM community_presence').get().n, 0);
 });
 module.exports = { setup, fixture, coords };
+
+test('map is separate opt-in and discovery respects club, expiry and blocks', async () => {
+ const { member, call, db } = setup();
+ const a = await member('a'), b = await member('b'); await member('c', 'club-c');
+ await call('a','/presence',{ fixtureId:fixture.id,...coords });
+ await call('b','/presence',{ fixtureId:fixture.id,...coords });
+ assert.equal((await call('a','/discover')).body.people.length,1);
+ assert.equal((await call('a','/map')).body.people.length,0);
+ await call('b','/map',{});
+ assert.equal((await call('a','/map')).body.people.length,1);
+ db.prepare('INSERT INTO community_blocks VALUES(?,?)').run(b,a);
+ assert.equal((await call('a','/map')).body.people.length,0);
+ db.prepare('DELETE FROM community_blocks').run();
+ db.prepare('UPDATE community_presence SET expires_at=0 WHERE member_id=?').run(b);
+ assert.equal((await call('a','/discover')).body.people.length,0);
+ assert.equal((await call('b','/map',{})).status,403);
+});
