@@ -174,7 +174,74 @@ import {
 import { ticketGridPercentSize, ticketGridShape } from "@/lib/ticketGridLayout";
 import { fetchMatchWeather, type MatchWeather } from "@/lib/matchWeather";
 import "@/lib/notificationSetup";
+import {
+  communityAvailable,
+  communityRequest,
+} from "@/lib/community/api";
+import type { CommunityState } from "@/lib/community/model";
 import { setBackgroundMediaIndexEnabled } from "@/lib/backgroundMediaIndex";
+
+async function startCommunityMatchdayExperience(
+  fixtureId: string,
+  supporter: "home" | "away",
+) {
+  if (!communityAvailable()) return;
+
+  try {
+    const state = await communityRequest<CommunityState>("/me");
+
+    // Starting Ticket Frame Matchday Experience must never silently
+    // opt the supporter into Community.
+    if (!state.preferences.enabled) return;
+
+    await communityRequest("/experience", {
+      fixtureId,
+      supporter,
+    });
+  } catch {
+    // Community must never block the original Matchday Experience.
+  }
+}
+
+async function remindCommunityMatchdayExperience(
+  hours: number,
+) {
+  if (!communityAvailable()) return;
+
+  try {
+    await communityRequest("/experience/reminder", {
+      hours,
+    });
+  } catch {
+    // Local Matchday Experience remains authoritative.
+  }
+}
+
+async function closeCommunityMatchdayExperience(
+  fixtureId: string,
+) {
+  if (!communityAvailable()) return;
+
+  try {
+    const result = await communityRequest<{
+      experience: {
+        fixtureId: string;
+      } | null;
+    }>("/experience");
+
+    // DELETE is member-wide, so never close a different fixture's
+    // currently active Community Experience.
+    if (result.experience?.fixtureId !== fixtureId) return;
+
+    await communityRequest(
+      "/experience",
+      undefined,
+      "DELETE",
+    );
+  } catch {
+    // Local close/auto-off must still complete offline.
+  }
+}
 import {
   ParkingSearchModule,
   SiriShortcutsModule,
@@ -2575,6 +2642,13 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
               : item,
           ),
         );
+
+        for (const item of expired) {
+          void closeCommunityMatchdayExperience(
+            item.matchId,
+          );
+        }
+
         return;
       }
       const due = matchdayExperiences.find(
@@ -2601,7 +2675,7 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
             : item,
         ),
       );
-      const closeNow = () =>
+      const closeNow = () => {
         setMatchdayExperiences((current) =>
           current.map((item) =>
             item.id === due.id
@@ -2609,6 +2683,11 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
               : item,
           ),
         );
+
+        void closeCommunityMatchdayExperience(
+          due.matchId,
+        );
+      };
       const chooseReminder = () => {
         const competition = String(due.competition ?? "").toLowerCase();
         const europeanCompetition =
@@ -2629,7 +2708,7 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
           [
             ...reminderHours.map((hours) => ({
               text: `${hours} hour${hours === 1 ? "" : "s"}`,
-              onPress: () =>
+              onPress: () => {
                 setMatchdayExperiences((current) =>
                   current.map((item) => {
                     if (item.id !== due.id) return item;
@@ -2643,7 +2722,12 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
                       updatedAt: new Date().toISOString(),
                     };
                   }),
-                ),
+                );
+
+                void remindCommunityMatchdayExperience(
+                  hours,
+                );
+              },
             })),
             { text: "Cancel", style: "cancel" },
           ],
@@ -11516,6 +11600,12 @@ useEffect(() => {
                 };
                 setMatchdayExperiences((current) => [...current, record]);
                 setActiveMatchdayExperienceId(record.id);
+
+                void startCommunityMatchdayExperience(
+                  String(match.id),
+                  supporter,
+                );
+
                 void (async () => {
                   const permission = await Notifications.requestPermissionsAsync();
                   if (!permission.granted) return;
