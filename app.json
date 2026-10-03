@@ -67,7 +67,20 @@
       "expo-asset",
       "expo-background-task",
       "expo-sharing",
-      "expo-status-bar"
+      "expo-status-bar",
+      [
+        "expo-secure-store",
+        {
+          "configureAndroidBackup": true,
+          "faceIDPermission": "Allow Football Ticket Frame to use Face ID to unlock Community."
+        }
+      ],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Allow Football Ticket Frame to use Face ID to unlock Community."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
