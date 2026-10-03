@@ -184,6 +184,78 @@ export async function communitySignOut() {
   await clearCommunitySession();
 }
 
+export async function communityRequestPasswordReset(
+  email: string,
+) {
+  return requestJson<{
+    ok: boolean;
+    message: string;
+  }>(
+    "/api/community/auth/password/forgot",
+    {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    },
+  );
+}
+
+export async function communityRequestEmailVerification() {
+  const session = await getCommunitySession();
+
+  if (!session) {
+    throw new Error("Sign in to Community first.");
+  }
+
+  return requestJson<{
+    ok: boolean;
+    emailVerified: boolean;
+    message?: string;
+  }>(
+    "/api/community/auth/verification/request",
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${session.token}`,
+      },
+      body: "{}",
+    },
+  );
+}
+
+export async function communityDeleteAccount(
+  password: string,
+  confirmation: string,
+) {
+  const session = await getCommunitySession();
+
+  if (!session) {
+    throw new Error("Sign in to Community first.");
+  }
+
+  const result = await requestJson<{
+    ok: boolean;
+    deleted: boolean;
+  }>(
+    "/api/community/auth/account/delete",
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${session.token}`,
+      },
+      body: JSON.stringify({
+        password,
+        confirmation,
+      }),
+    },
+  );
+
+  if (result.deleted) {
+    await clearCommunitySession();
+  }
+
+  return result;
+}
+
 export async function communityRequest<T>(
   path: string,
   body?: unknown,

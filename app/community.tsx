@@ -15,6 +15,9 @@ import {
   communitySignIn,
   communitySignOut,
   communitySignUp,
+  communityRequestPasswordReset,
+  communityRequestEmailVerification,
+  communityDeleteAccount,
 } from "@/lib/community/api";
 import type { CommunitySession } from "@/lib/community/session";
 import {
@@ -42,6 +45,8 @@ export default function CommunityScreen() {
   const [session, setSession] = useState<CommunitySession | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [deletePassword, setDeletePassword] = useState("");
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [unlocked, setUnlocked] = useState(false);
   const [unlockCapability, setUnlockCapability] = useState<CommunityUnlockCapability>({
     available: false,
@@ -151,6 +156,89 @@ export default function CommunityScreen() {
     setStatus("Account created securely. Community eligibility still needs to be confirmed.");
   }
 
+  async function requestPasswordReset(
+    targetEmail = email,
+  ) {
+    const normalized = targetEmail.trim();
+
+    if (!normalized) {
+      throw new Error(
+        "Enter your registered Community email address.",
+      );
+    }
+
+    const result =
+      await communityRequestPasswordReset(normalized);
+
+    setStatus(
+      result.message ||
+        "If the account can be recovered, password reset instructions will be available when email delivery is configured.",
+    );
+  }
+
+  async function requestEmailVerification() {
+    const result =
+      await communityRequestEmailVerification();
+
+    if (result.emailVerified) {
+      if (session) {
+        setSession({
+          ...session,
+          emailVerified: true,
+        });
+      }
+
+      setStatus("Your Community email is already verified.");
+      return;
+    }
+
+    setStatus(
+      result.message ||
+        "Verification was requested. Email delivery still needs to be configured.",
+    );
+  }
+
+  async function deleteCommunityAccount() {
+    if (!deletePassword) {
+      throw new Error(
+        "Enter your Community password before deleting your account.",
+      );
+    }
+
+    if (deleteConfirmation !== "DELETE") {
+      throw new Error(
+        'Type DELETE exactly to confirm permanent Community account deletion.',
+      );
+    }
+
+    const result = await communityDeleteAccount(
+      deletePassword,
+      deleteConfirmation,
+    );
+
+    if (!result.deleted) {
+      throw new Error(
+        "Community account deletion was not completed.",
+      );
+    }
+
+    setSession(null);
+    setUnlocked(false);
+    setPassword("");
+    setDeletePassword("");
+    setDeleteConfirmation("");
+    setState({
+      profile: null,
+      preferences: OFF,
+      safetyId: null,
+      serverNow: 0,
+    });
+
+    setStatus(
+      "Your Community account and associated Community data have been deleted.",
+    );
+  }
+
   async function signOut() {
     await communitySignOut();
     setSession(null);
@@ -255,6 +343,17 @@ export default function CommunityScreen() {
         />
 
         <Action
+          title="Forgot Community password"
+          disabled={busy}
+          onPress={() =>
+            void run(() =>
+              requestPasswordReset(session.email)
+            )
+          }
+          colour={colour}
+        />
+
+        <Action
           title="Sign out of Community"
           disabled={busy}
           onPress={() => void run(signOut)}
@@ -314,6 +413,15 @@ export default function CommunityScreen() {
             colour={colour}
           />
           <Action
+            title="Forgot password"
+            disabled={busy || !email.trim()}
+            onPress={() =>
+              void run(() => requestPasswordReset())
+            }
+            colour={colour}
+          />
+
+          <Action
             title="Create Community account"
             disabled={busy}
             onPress={() => void run(signUp)}
@@ -329,6 +437,27 @@ export default function CommunityScreen() {
         <View style={{ gap: 8 }}>
           <Text style={styles.heading}>Community account</Text>
           <Text>{session.email}</Text>
+
+          {!session.emailVerified ? (
+            <>
+              <Text style={styles.copy}>
+                Your Community email has not been verified yet.
+                Verification is separate from Community eligibility.
+              </Text>
+              <Action
+                title="Request email verification"
+                disabled={busy}
+                onPress={() =>
+                  void run(requestEmailVerification)
+                }
+                colour={colour}
+              />
+            </>
+          ) : (
+            <Text style={styles.copy}>
+              Email verified.
+            </Text>
+          )}
           {!session.communityEligible && (
             <Text style={styles.copy}>
               You are signed in, but Community access is not active until eligibility has been confirmed.
@@ -338,6 +467,51 @@ export default function CommunityScreen() {
             title="Sign out of Community"
             disabled={busy}
             onPress={() => void run(signOut)}
+            colour={colour}
+          />
+
+          <Text style={styles.heading}>
+            Delete Community account
+          </Text>
+          <Text style={styles.copy}>
+            This permanently deletes your Community account and
+            associated Community profile, friendships, messages,
+            blocks, reports and presence data. It does not delete
+            Football Ticket Frame or your football history.
+          </Text>
+
+          <TextInput
+            accessibilityLabel="Community password for account deletion"
+            placeholder="Community password"
+            secureTextEntry
+            autoCapitalize="none"
+            autoCorrect={false}
+            textContentType="password"
+            value={deletePassword}
+            onChangeText={setDeletePassword}
+            style={styles.input}
+          />
+
+          <TextInput
+            accessibilityLabel="Type DELETE to confirm Community account deletion"
+            placeholder="Type DELETE to confirm"
+            autoCapitalize="characters"
+            autoCorrect={false}
+            value={deleteConfirmation}
+            onChangeText={setDeleteConfirmation}
+            style={styles.input}
+          />
+
+          <Action
+            title="Permanently delete Community account"
+            disabled={
+              busy ||
+              !deletePassword ||
+              deleteConfirmation !== "DELETE"
+            }
+            onPress={() =>
+              void run(deleteCommunityAccount)
+            }
             colour={colour}
           />
         </View>
