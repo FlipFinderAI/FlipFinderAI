@@ -61,6 +61,7 @@ export default function CommunityScreen() {
   const [session, setSession] = useState<CommunitySession | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [authMode, setAuthMode] = useState<"signin" | "create">("signin");
   const [deletePassword, setDeletePassword] = useState("");
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [unlocked, setUnlocked] = useState(false);
@@ -161,15 +162,32 @@ export default function CommunityScreen() {
   }
 
   async function signUp() {
-    if (!email.trim()) throw new Error("Enter your email address.");
+    const displayName = name.trim();
+
+    if (!displayName || displayName.length > 40) {
+      throw new Error("Choose a Community name of 1–40 characters.");
+    }
+
+    if (!email.trim()) {
+      throw new Error("Enter your email address.");
+    }
+
     if (password.length < 12 || password.length > 128) {
       throw new Error("Use a password between 12 and 128 characters.");
     }
 
+    await AsyncStorage.setItem(
+      DRAFT_KEY,
+      JSON.stringify({ name: displayName, avatar }),
+    );
+
     const next = await communitySignUp(email.trim(), password);
     setPassword("");
     await loadUnlockedCommunity(next);
-    setStatus("Account created securely. Community eligibility still needs to be confirmed.");
+
+    setStatus(
+      "Community account created. Finish your profile and choose how you want to unlock Community.",
+    );
   }
 
   async function requestPasswordReset(
@@ -302,6 +320,237 @@ export default function CommunityScreen() {
     setState(await communityRequest<CommunityState>("/preferences", preferences));
     setStatus("Community privacy choices saved. Matchday presence has ended.");
   }
+  if (serviceConfigured && !session) {
+    const creating = authMode === "create";
+
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: "#f8f5ec" }}>
+        <ScrollView
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={{
+            flexGrow: 1,
+            paddingHorizontal: 20,
+            paddingTop: 18,
+            paddingBottom: 36,
+          }}
+        >
+          <Action
+            title="Back to Ticket Frame"
+            onPress={() => router.back()}
+            colour={colour}
+          />
+
+          <View
+            style={{
+              flex: 1,
+              justifyContent: "center",
+              width: "100%",
+              maxWidth: 520,
+              alignSelf: "center",
+              paddingVertical: 28,
+            }}
+          >
+            <Text
+              accessibilityRole="header"
+              style={[
+                styles.title,
+                {
+                  color: colour || "#17221c",
+                  textAlign: "center",
+                  fontSize: 30,
+                  marginBottom: 4,
+                },
+              ]}
+            >
+              COMMUNITY
+            </Text>
+
+            <Text
+              style={[
+                styles.copy,
+                {
+                  textAlign: "center",
+                  marginBottom: 24,
+                },
+              ]}
+            >
+              {clubName || "Your club"} supporters
+            </Text>
+
+            <View
+              style={{
+                flexDirection: "row",
+                borderWidth: 1,
+                borderColor: colour || "#17221c",
+                borderRadius: 12,
+                padding: 3,
+                marginBottom: 22,
+              }}
+            >
+              <Text
+                accessibilityRole="button"
+                onPress={() => {
+                  setAuthMode("signin");
+                  setStatus("");
+                }}
+                style={{
+                  flex: 1,
+                  textAlign: "center",
+                  paddingVertical: 11,
+                  borderRadius: 9,
+                  overflow: "hidden",
+                  fontWeight: "900",
+                  backgroundColor:
+                    authMode === "signin"
+                      ? colour || "#17221c"
+                      : "transparent",
+                  color:
+                    authMode === "signin"
+                      ? "#ffffff"
+                      : colour || "#17221c",
+                }}
+              >
+                SIGN IN
+              </Text>
+
+              <Text
+                accessibilityRole="button"
+                onPress={() => {
+                  setAuthMode("create");
+                  setStatus("");
+                }}
+                style={{
+                  flex: 1,
+                  textAlign: "center",
+                  paddingVertical: 11,
+                  borderRadius: 9,
+                  overflow: "hidden",
+                  fontWeight: "900",
+                  backgroundColor:
+                    authMode === "create"
+                      ? colour || "#17221c"
+                      : "transparent",
+                  color:
+                    authMode === "create"
+                      ? "#ffffff"
+                      : colour || "#17221c",
+                }}
+              >
+                CREATE ACCOUNT
+              </Text>
+            </View>
+
+            <Text style={[styles.heading, { textAlign: "center" }]}>
+              {creating ? "Create your Community account" : "Welcome back"}
+            </Text>
+
+            <Text
+              style={[
+                styles.copy,
+                {
+                  textAlign: "center",
+                  marginBottom: 16,
+                },
+              ]}
+            >
+              {creating
+                ? "Choose the name other supporters will know you by."
+                : "Sign in to your private Community account."}
+            </Text>
+
+            {creating ? (
+              <TextInput
+                accessibilityLabel="Community name"
+                placeholder="Community name"
+                value={name}
+                maxLength={40}
+                onChangeText={setName}
+                autoCapitalize="words"
+                autoCorrect={false}
+                style={[styles.input, { marginBottom: 10 }]}
+              />
+            ) : null}
+
+            <TextInput
+              accessibilityLabel="Community email"
+              placeholder="Email"
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="email-address"
+              textContentType="emailAddress"
+              value={email}
+              onChangeText={setEmail}
+              style={[styles.input, { marginBottom: 10 }]}
+            />
+
+            <TextInput
+              accessibilityLabel="Community password"
+              placeholder={creating ? "Create password" : "Password"}
+              secureTextEntry
+              autoCapitalize="none"
+              autoCorrect={false}
+              textContentType={creating ? "newPassword" : "password"}
+              value={password}
+              onChangeText={setPassword}
+              style={[styles.input, { marginBottom: 14 }]}
+            />
+
+            <Action
+              title={creating ? "Create Community account" : "Sign in"}
+              disabled={
+                busy ||
+                !email.trim() ||
+                !password ||
+                (creating && !name.trim())
+              }
+              onPress={() =>
+                void run(creating ? signUp : signIn)
+              }
+              colour={colour}
+            />
+
+            {!creating ? (
+              <View style={{ marginTop: 8 }}>
+                <Action
+                  title="Forgot password?"
+                  disabled={busy || !email.trim()}
+                  onPress={() =>
+                    void run(() => requestPasswordReset())
+                  }
+                  colour={colour}
+                />
+              </View>
+            ) : (
+              <Text
+                style={[
+                  styles.copy,
+                  {
+                    textAlign: "center",
+                    marginTop: 12,
+                  },
+                ]}
+              >
+                Your email is private account information. Other supporters see your Community name, not your email address.
+              </Text>
+            )}
+
+            {!!status ? (
+              <Text
+                accessibilityLiveRegion="polite"
+                style={{
+                  textAlign: "center",
+                  marginTop: 16,
+                }}
+              >
+                {status}
+              </Text>
+            ) : null}
+          </View>
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
   if (serviceConfigured && session && !unlocked) {
     return <SafeAreaView style={{ flex: 1, backgroundColor: "#f8f5ec" }}>
       <ScrollView
