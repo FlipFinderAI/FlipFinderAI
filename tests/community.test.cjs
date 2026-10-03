@@ -873,6 +873,55 @@ test('Matchday Experience is explicit, any-distance, snapshot-based and separate
     farB.longitude
   );
 
+  // Social Experience discovery must not depend on GPS or the
+  // location-sharing preference. The no-location supporter joined
+  // the same verified Experience without supplying coordinates.
+  db.prepare(
+    'UPDATE community_members SET location_visible=0 WHERE id=?'
+  ).run(noLocation);
+
+  let socialDiscover = await call(
+    'experience-a',
+    '/experience/supporters'
+  );
+
+  assert.equal(socialDiscover.status, 200);
+  assert.ok(
+    socialDiscover.body.people.some(
+      person => person.profile.id === noLocation
+    )
+  );
+
+  socialDiscover = await call(
+    'experience-no-location',
+    '/experience/supporters'
+  );
+
+  assert.equal(socialDiscover.status, 200);
+  assert.ok(
+    socialDiscover.body.people.some(
+      person => person.profile.id === a
+    )
+  );
+  assert.ok(
+    socialDiscover.body.people.some(
+      person => person.profile.id === b
+    )
+  );
+
+  // A Matchday Friend request through a shared active Experience
+  // also must not require the target to expose location.
+  result = await call(
+    'experience-a',
+    '/friend-request',
+    {
+      target: noLocation,
+      friendType: 'matchday'
+    }
+  );
+
+  assert.equal(result.status, 200);
+
   // Normal Matchday cleanup must NOT finish an Experience.
   await call('experience-a', '/presence', undefined, 'DELETE');
 

@@ -605,9 +605,9 @@ export default function CommunityScreen() {
         onValueChange={locationVisible => void run(() => privacy({ locationVisible }))}
       />
 
-      <Text>Allow me to send photos during Matchday Experience</Text>
+      <Text>Allow eligible matchday photo sharing</Text>
       <Switch
-        accessibilityLabel="Matchday Experience photo sharing"
+        accessibilityLabel="Eligible matchday photo sharing"
         value={state.preferences.photoSharing}
         disabled={busy || !active}
         onValueChange={photoSharing => void run(() => privacy({ photoSharing }))}
@@ -615,8 +615,10 @@ export default function CommunityScreen() {
 
       <Text style={styles.copy}>
         Photo permission does not make your photo library public.
-        Photos cannot be sent through normal Community or normal matchday discovery.
-        Photo sending will require an active Matchday Experience.
+        Photo sharing will be available during normal eligible matchday Community
+        (within 2 miles, from 2 hours before kickoff until 4 hours after) or during
+        your active Matchday Experience. Camera Roll photos will have to prove they
+        were taken during the qualifying matchday window.
       </Text>
 
       <Text style={styles.copy}>
@@ -628,7 +630,12 @@ export default function CommunityScreen() {
         <Text style={styles.copy}>Community Safety ID: {state.safetyId}</Text>
       )}
       <Matchday enabled={active && state.preferences.locationVisible} clubId={clubId} busy={busy} run={run} />
-      <Friends enabled={active} busy={busy} run={run} />
+      <Friends
+        enabled={active}
+        busy={busy}
+        run={run}
+        experienceActive={openedFromMatchdayExperience}
+      />
       <Messages enabled={active} busy={busy} run={run} />
       {/* COMMUNITY_FEATURES */}
       {!!status && <Text accessibilityLiveRegion="polite">{status}</Text>}

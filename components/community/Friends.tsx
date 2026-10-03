@@ -3,7 +3,17 @@ import { Linking, Text, TextInput, View } from "react-native";
 import { communityRequest } from "@/lib/community/api";
 import type { FriendType, PublicProfile, Relationship } from "@/lib/community/model";
 import { Action, styles } from "./Controls";
-export default function Friends({ enabled, busy, run }: { enabled: boolean; busy: boolean; run(task: () => Promise<void>): Promise<void> }) {
+export default function Friends({
+ enabled,
+ busy,
+ run,
+ experienceActive = false,
+}: {
+ enabled: boolean;
+ busy: boolean;
+ run(task: () => Promise<void>): Promise<void>;
+ experienceActive?: boolean;
+}) {
  const [relationships, setRelationships] = useState<Relationship[]>([]);
  const [people, setPeople] = useState<PublicProfile[]>([]);
  const [knownQuery, setKnownQuery] = useState("");
@@ -124,10 +134,35 @@ export default function Friends({ enabled, busy, run }: { enabled: boolean; busy
 
   <Text style={styles.heading}>Matchday supporters</Text>
 
-  <Action title="Find visible supporters" disabled={!enabled || busy} onPress={() => void run(async () => {
-     const result = await communityRequest<{ people: { profile: PublicProfile }[] }>("/discover");
-     setPeople(result.people.map(p => p.profile)); setNotice(result.people.length ? "Only eligible same-club supporters are shown." : "No supporters are visible. Check matchday eligibility first.");
-   })} />
+  <Action
+   title={
+     experienceActive
+       ? "Find Matchday Experience supporters"
+       : "Find visible supporters"
+   }
+   disabled={!enabled || busy}
+   onPress={() => void run(async () => {
+     const result = await communityRequest<{
+       people: { profile: PublicProfile }[];
+     }>(
+       experienceActive
+         ? "/experience/supporters"
+         : "/discover"
+     );
+
+     setPeople(result.people.map(p => p.profile));
+
+     setNotice(
+       result.people.length
+         ? experienceActive
+           ? "Same-club supporters in this active Matchday Experience are shown. Location sharing is not required."
+           : "Only eligible same-club supporters are shown."
+         : experienceActive
+           ? "No other same-club supporters are currently in this Matchday Experience."
+           : "No supporters are visible. Check matchday eligibility first."
+     );
+   })}
+ />
    {enabled && people.map(p => <View key={p.id} style={{ gap: 10 }}>{profile(p)}
      <Action
      title={`Request ${p.displayName} as Matchday Friend`}

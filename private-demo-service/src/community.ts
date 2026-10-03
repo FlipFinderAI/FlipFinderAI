@@ -644,6 +644,54 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
     return json({ ok: true });
   }
 
+  // Social discovery during Matchday Experience is deliberately
+  // separate from location discovery. An active shared Experience
+  // is enough; neither supporter has to share GPS or join a map.
+  if (
+    path === "/experience/supporters" &&
+    request.method === "GET"
+  ) {
+    const rows = (
+      await sql(
+        `SELECT m.*
+         FROM community_matchday_experience_sessions own
+         JOIN community_matchday_experience_sessions peer
+           ON peer.fixture_id=own.fixture_id
+         JOIN community_members m
+           ON m.id=peer.member_id
+         WHERE own.member_id=?
+         AND own.expires_at>?
+         AND peer.expires_at>?
+         AND peer.member_id<>?
+         AND m.club_id=?
+         AND m.enabled=1
+         AND NOT EXISTS (
+           SELECT 1 FROM community_blocks b
+           WHERE
+             (b.blocker=? AND b.blocked=m.id)
+             OR
+             (b.blocked=? AND b.blocker=m.id)
+         )
+         ORDER BY m.display_name COLLATE NOCASE
+         LIMIT 100`,
+        me.id,
+        now,
+        now,
+        me.id,
+        me.club_id,
+        me.id,
+        me.id,
+      ).all<Member>()
+    ).results;
+
+    return json({
+      people: rows.map(row => ({
+        profile: publicProfile(row),
+      })),
+      serverNow: now,
+    });
+  }
+
   if (
     path === "/experience/discover" &&
     request.method === "GET"
@@ -872,7 +920,6 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
          FROM community_members m
          WHERE m.id=?
          AND ${peerGuard}
-         AND m.location_visible=1
          AND EXISTS (
            SELECT 1
            FROM community_matchday_experience_sessions own
