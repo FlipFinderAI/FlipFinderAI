@@ -8,7 +8,15 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { loadAttendanceHistory } from "@/lib/attendanceHistory";
 import { AVATARS, OFF, attendanceSummary, type Avatar, type CommunityState } from "@/lib/community/model";
-import { communityAvailable, communityRequest } from "@/lib/community/api";
+import {
+  communityAvailable,
+  communityRequest,
+  communityRestoreSession,
+  communitySignIn,
+  communitySignOut,
+  communitySignUp,
+} from "@/lib/community/api";
+import type { CommunitySession } from "@/lib/community/session";
 import { Action, styles } from "@/components/community/Controls";
 
 const DRAFT_KEY = "ticket-frame.community-profile-draft.v1";
@@ -26,7 +34,11 @@ export default function CommunityScreen() {
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [status, setStatus] = useState("");
-  const connected = communityAvailable();
+  const [session, setSession] = useState<CommunitySession | null>(null);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const serviceConfigured = communityAvailable();
+  const connected = serviceConfigured && Boolean(session?.communityEligible);
   const sameClub = state.profile?.clubId === clubId;
   const active = connected && sameClub && state.preferences.enabled;
   async function run(task: () => Promise<void>) {
@@ -42,16 +54,72 @@ export default function CommunityScreen() {
       if (cancelled) return;
       setSummary(attendanceSummary(records));
       if (draft) { const d = JSON.parse(draft); setName(typeof d.name === "string" ? d.name : ""); if (AVATARS.includes(d.avatar)) setAvatar(d.avatar); }
-      if (connected) {
-        const current = await communityRequest<CommunityState>("/me");
+      if (serviceConfigured) {
+        const restored = await communityRestoreSession();
         if (cancelled) return;
-        setState(current);
-        if (current.profile) { setName(current.profile.displayName); setAvatar(current.profile.avatar); }
+        setSession(restored);
+        if (restored?.email) setEmail(restored.email);
+
+        if (restored?.communityEligible) {
+          const current = await communityRequest<CommunityState>("/me");
+          if (cancelled) return;
+          setState(current);
+          if (current.profile) {
+            setName(current.profile.displayName);
+            setAvatar(current.profile.avatar);
+          }
+        }
       }
     })().catch(error => { if (!cancelled) setStatus(error.message || "Could not load Community."); })
       .finally(() => { if (!cancelled) setLoaded(true); });
     return () => { cancelled = true; };
-  }, [connected]);
+  }, [serviceConfigured]);
+  async function signIn() {
+    if (!email.trim()) throw new Error("Enter your registered email address.");
+    if (!password) throw new Error("Enter your Community password.");
+
+    const next = await communitySignIn(email.trim(), password);
+    setPassword("");
+    setSession(next);
+
+    if (next.communityEligible) {
+      const current = await communityRequest<CommunityState>("/me");
+      setState(current);
+      if (current.profile) {
+        setName(current.profile.displayName);
+        setAvatar(current.profile.avatar);
+      }
+      setStatus("Signed in to Community.");
+    } else {
+      setStatus("Signed in. Community eligibility still needs to be confirmed.");
+    }
+  }
+
+  async function signUp() {
+    if (!email.trim()) throw new Error("Enter your email address.");
+    if (password.length < 12 || password.length > 128) {
+      throw new Error("Use a password between 12 and 128 characters.");
+    }
+
+    const next = await communitySignUp(email.trim(), password);
+    setPassword("");
+    setSession(next);
+    setStatus("Account created securely. Community eligibility still needs to be confirmed.");
+  }
+
+  async function signOut() {
+    await communitySignOut();
+    setSession(null);
+    setPassword("");
+    setState({
+      profile: null,
+      preferences: OFF,
+      safetyId: null,
+      serverNow: 0,
+    });
+    setStatus("Signed out of Community on this iPhone.");
+  }
+
   async function saveProfile() {
     if (!name.trim() || name.trim().length > 40) throw new Error("Choose a display name of 1–40 characters.");
     if (!clubId || !clubName || clubName === "Your Club") throw new Error("Choose your favourite club on Home first.");
@@ -79,7 +147,76 @@ export default function CommunityScreen() {
       <Action title="Back to Ticket Frame" onPress={() => router.back()} colour={colour} />
       <Text accessibilityRole="header" style={[styles.title, { color: colour || "#17221c" }]}>COMMUNITY</Text>
       <Text>{clubName || "Choose a favourite club"} supporters</Text>
-      {!connected && <Text style={styles.copy}>Community sign-in and the online service are not connected yet. You can prepare your profile here. Discovery, friends and messages stay unavailable until they are connected.</Text>}
+      {!serviceConfigured && (
+        <Text style={styles.copy}>
+          Community online service is not configured yet. You can prepare your profile here, but nothing is sent online.
+        </Text>
+      )}
+
+      {serviceConfigured && !session && (
+        <View style={{ gap: 10 }}>
+          <Text style={styles.heading}>Community sign in</Text>
+          <Text style={styles.copy}>
+            Community has its own private account. Football Ticket Frame itself does not require an account.
+          </Text>
+          <TextInput
+            accessibilityLabel="Community email"
+            placeholder="Email"
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="email-address"
+            textContentType="emailAddress"
+            value={email}
+            onChangeText={setEmail}
+            style={styles.input}
+          />
+          <TextInput
+            accessibilityLabel="Community password"
+            placeholder="Password"
+            secureTextEntry
+            autoCapitalize="none"
+            autoCorrect={false}
+            textContentType="password"
+            value={password}
+            onChangeText={setPassword}
+            style={styles.input}
+          />
+          <Action
+            title="Sign in to Community"
+            disabled={busy}
+            onPress={() => void run(signIn)}
+            colour={colour}
+          />
+          <Action
+            title="Create Community account"
+            disabled={busy}
+            onPress={() => void run(signUp)}
+            colour={colour}
+          />
+          <Text style={styles.copy}>
+            Your password is never saved on this iPhone. After sign-in, only the revocable Community session is stored securely.
+          </Text>
+        </View>
+      )}
+
+      {serviceConfigured && session && (
+        <View style={{ gap: 8 }}>
+          <Text style={styles.heading}>Community account</Text>
+          <Text>{session.email}</Text>
+          {!session.communityEligible && (
+            <Text style={styles.copy}>
+              You are signed in, but Community access is not active until eligibility has been confirmed.
+            </Text>
+          )}
+          <Action
+            title="Sign out of Community"
+            disabled={busy}
+            onPress={() => void run(signOut)}
+            colour={colour}
+          />
+        </View>
+      )}
+
       <Text style={styles.copy}>
         Your chosen name, avatar and favourite club identify you in Community.
         Games attended and grounds visited are shared only if you choose to share them.
