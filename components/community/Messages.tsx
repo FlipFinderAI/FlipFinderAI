@@ -7,6 +7,8 @@ import { Action, styles } from "./Controls";
 type Thread = {
   friend: PublicProfile;
   unread: number;
+  friendType: "matchday" | "full_time";
+  canMessage: boolean;
 };
 
 export default function Messages({
@@ -36,9 +38,21 @@ export default function Messages({
     const result = await communityRequest<{ conversations: Thread[] }>("/conversations");
     setThreads(result.conversations);
 
-    if (friend && !result.conversations.some(item => item.friend.id === friend.id)) {
-      setFriend(null);
-      setMessages([]);
+    if (friend) {
+      const current = result.conversations.find(
+        item => item.friend.id === friend.id
+      );
+
+      if (!current || !current.canMessage) {
+        setFriend(null);
+        setMessages([]);
+
+        if (current?.friendType === "matchday") {
+          setNotice(
+            "That Matchday Friend conversation is locked outside an eligible matchday."
+          );
+        }
+      }
     }
   }
 
@@ -72,8 +86,9 @@ export default function Messages({
     <>
       <Text style={styles.heading}>Messages</Text>
       <Text style={styles.copy}>
-        Messaging is private to accepted friends from your favourite club. Blocking or
-        unfriending ends messaging access.
+        Full-Time Friends can message at any time. Matchday Friends can message only
+        during an eligible matchday or Matchday Experience. Blocking or unfriending
+        ends messaging access. Phone numbers cannot be shared in Community messages.
       </Text>
 
       <Action
@@ -96,9 +111,25 @@ export default function Messages({
             <Text>
               {thread.friend.gamesAttended} games · {thread.friend.groundsVisited.length} grounds
             </Text>
+            <Text>
+              {thread.friendType === "full_time"
+                ? "Full-Time Friend"
+                : "Matchday Friend"}
+            </Text>
+
+            {thread.friendType === "matchday" && !thread.canMessage && (
+              <Text>
+                Messaging unlocks during an eligible matchday or Matchday Experience.
+              </Text>
+            )}
+
             <Action
-              title={`Message ${thread.friend.displayName}`}
-              disabled={busy}
+              title={
+                thread.canMessage
+                  ? `Message ${thread.friend.displayName}`
+                  : "Matchday messaging locked"
+              }
+              disabled={busy || !thread.canMessage}
               onPress={() => void run(() => openThread(thread.friend))}
             />
           </View>

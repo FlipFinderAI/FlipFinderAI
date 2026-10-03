@@ -86,6 +86,11 @@ export default function CommunityScreen() {
         Your tickets, Ticket Frame photos and account details stay private.
       </Text>
       <Text style={styles.heading}>Your public profile</Text>
+      {!!state.profile?.friendId && (
+        <Text accessibilityLabel="Your Community Friend ID">
+          Your Friend ID: {state.profile.friendId}
+        </Text>
+      )}
       <TextInput accessibilityLabel="Community display name" placeholder="Choose a display name" value={name} maxLength={40} onChangeText={setName} style={styles.input} />
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>{AVATARS.map(a => <Action key={a} title={`${a}${avatar === a ? " ✓" : ""}`} onPress={() => setAvatar(a)} colour={colour} />)}</View>
       <Text>{summary.gamesAttended} games attended · {summary.groundsVisited.length} grounds visited</Text>

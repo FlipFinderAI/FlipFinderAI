@@ -2,7 +2,8 @@
 export const AVATARS = ["⚽", "🏟️", "🦁", "🦊", "🦉", "🐝", "⭐", "🏆"] as const;
 export type Avatar = typeof AVATARS[number];
 export type PublicProfile = {
-  id: string; displayName: string; avatar: Avatar; clubId: string;
+  id: string;
+  friendId: string; displayName: string; avatar: Avatar; clubId: string;
   gamesAttended: number; groundsVisited: string[];
 };
 export type Preferences = {
@@ -12,9 +13,22 @@ export type Preferences = {
   shareGrounds: boolean;
   photoSharing: boolean;
 };
-export type Relationship = { id: string; status: "pending" | "accepted"; incoming: boolean; profile: PublicProfile };
+export type FriendType = "matchday" | "full_time";
+
+export type Relationship = {
+  id: string;
+  status: "pending" | "accepted";
+  friendType: FriendType;
+  incoming: boolean;
+  profile: PublicProfile;
+};
 export type Message = { id: string; sender: string; body: string; createdAt: number };
-export type Conversation = { friend: PublicProfile; unread: number };
+export type Conversation = {
+  friend: PublicProfile;
+  unread: number;
+  friendType: FriendType;
+  canMessage: boolean;
+};
 export type Presence = {
   fixtureId: string; stadium: string; latitude: number; longitude: number;
   expiresAt: number; onMap: boolean;

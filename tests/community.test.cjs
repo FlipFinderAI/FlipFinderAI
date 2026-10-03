@@ -127,8 +127,8 @@ test('friend lifecycle rejects forged accept, other clubs, expired visibility an
  const a = await member('a'), b = await member('b'), c = await member('c','club-c');
  await call('a','/presence',{ fixtureId:fixture.id,...coords });
  await call('b','/presence',{ fixtureId:fixture.id,...coords });
- assert.equal((await call('a','/friend-request',{ target:c })).status,409);
- assert.equal((await call('a','/friend-request',{ target:b })).status,200);
+ assert.equal((await call('a','/friend-request',{ target:c, friendType:'matchday' })).status,409);
+ assert.equal((await call('a','/friend-request',{ target:b, friendType:'matchday' })).status,200);
  const incoming = (await call('b','/friends')).body.relationships[0];
  assert.equal(incoming.incoming,true);
  assert.equal((await call('a','/relationship',{ id:incoming.id, action:'accept' })).status,409);
@@ -138,7 +138,7 @@ test('friend lifecycle rejects forged accept, other clubs, expired visibility an
  assert.equal(db.prepare('SELECT count(*) n FROM community_reports').get().n,1);
  await call('b','/block',{ target:a });
  assert.equal((await call('a','/friends')).body.relationships.length,0);
- assert.equal((await call('a','/friend-request',{ target:b })).status,409);
+ assert.equal((await call('a','/friend-request',{ target:b, friendType:'matchday' })).status,409);
  assert.equal((await call('a','/discover')).body.people.length,0);
 });
 
@@ -185,7 +185,7 @@ test('messages require accepted same-club friendship and stop after block', asyn
    (await call(
      'message-a',
      '/friend-request',
-     { target:b }
+     { target:b , friendType:'matchday' }
    )).status,
    200
  );
@@ -306,7 +306,7 @@ test('messages reject blank and oversized content', async () => {
  await call(
    'length-a',
    '/friend-request',
-   { target:b }
+   { target:b , friendType:'matchday' }
  );
 
  const incoming =
@@ -470,4 +470,318 @@ test('reports return moderation references without authentication subjects', asy
  assert.match(result.body.reportedSafetyId, /^TF-C-[A-F0-9]{12}$/);
  assert.equal(result.body.contact, 'info@handytize.co.uk');
  assert.equal(JSON.stringify(result.body).includes('reported-account'), false);
+});
+
+
+test('friendship types, known supporter lookup and message privacy', async () => {
+ const { member, call, db } = setup();
+
+ const a = await member('known-a');
+ const b = await member('known-b');
+ const c = await member('known-c', 'club-c');
+
+ const bRow = db.prepare(
+  'SELECT friend_id FROM community_members WHERE id=?'
+ ).get(b);
+
+ const cRow = db.prepare(
+  'SELECT friend_id FROM community_members WHERE id=?'
+ ).get(c);
+
+ assert.match(bRow.friend_id, /^TF-F-[A-F0-9]{12}$/);
+
+ // Exact Friend ID finds a same-club supporter without matchday presence.
+ const byId = await call(
+  'known-a',
+  '/friend-search?q=' + encodeURIComponent(bRow.friend_id)
+ );
+
+ assert.equal(byId.status, 200);
+ assert.equal(byId.body.people.length, 1);
+ assert.equal(byId.body.people[0].id, b);
+ assert.equal(byId.body.people[0].friendId, bRow.friend_id);
+
+ // Exact Community name also works.
+ const byName = await call(
+  'known-a',
+  '/friend-search?q=' + encodeURIComponent('known-b')
+ );
+
+ assert.equal(byName.status, 200);
+ assert.equal(byName.body.people.length, 1);
+ assert.equal(byName.body.people[0].id, b);
+
+ // Partial names do not act as broad people search.
+ const partial = await call(
+  'known-a',
+  '/friend-search?q=' + encodeURIComponent('known')
+ );
+
+ assert.equal(partial.status, 200);
+ assert.equal(partial.body.people.length, 0);
+
+ // Other-club supporters remain undiscoverable even with their Friend ID.
+ const otherClub = await call(
+  'known-a',
+  '/friend-search?q=' + encodeURIComponent(cRow.friend_id)
+ );
+
+ assert.equal(otherClub.status, 200);
+ assert.equal(otherClub.body.people.length, 0);
+
+ // Friendship type is mandatory.
+ assert.equal(
+  (await call('known-a','/friend-request',{ target:b })).status,
+  400
+ );
+
+ assert.equal(
+  (await call('known-a','/friend-request',{
+   target:b,
+   friendType:'invalid',
+   lookup:bRow.friend_id
+  })).status,
+  400
+ );
+
+ // Known supporter can be requested as a Full-Time Friend.
+ assert.equal(
+  (await call('known-a','/friend-request',{
+   target:b,
+   friendType:'full_time',
+   lookup:bRow.friend_id
+  })).status,
+  200
+ );
+
+ const incoming = (await call('known-b','/friends')).body.relationships[0];
+
+ assert.equal(incoming.incoming, true);
+ assert.equal(incoming.friendType, 'full_time');
+
+ // Sender still cannot forge acceptance.
+ assert.equal(
+  (await call('known-a','/relationship',{
+   id:incoming.id,
+   action:'accept'
+  })).status,
+  409
+ );
+
+ assert.equal(
+  (await call('known-b','/relationship',{
+   id:incoming.id,
+   action:'accept'
+  })).status,
+  200
+ );
+
+ const accepted = (await call('known-a','/friends')).body.relationships[0];
+
+ assert.equal(accepted.status, 'accepted');
+ assert.equal(accepted.friendType, 'full_time');
+
+ // Full-Time Friends can message with no matchday presence.
+ assert.equal(
+  (await call('known-a','/message',{
+   target:b,
+   body:'See you at the match'
+  })).status,
+  200
+ );
+
+ const conversations = await call('known-a','/conversations');
+
+ assert.equal(conversations.status, 200);
+ assert.equal(conversations.body.conversations.length, 1);
+ assert.equal(conversations.body.conversations[0].friendType, 'full_time');
+ assert.equal(conversations.body.conversations[0].canMessage, true);
+});
+
+
+test('matchday friends lock outside a shared live matchday and unlock during it', async () => {
+ const { member, call, db } = setup();
+
+ const a = await member('matchday-a');
+ const b = await member('matchday-b');
+
+ const bFriendId = db.prepare(
+  'SELECT friend_id FROM community_members WHERE id=?'
+ ).get(b).friend_id;
+
+ assert.equal(
+  (await call('matchday-a','/friend-request',{
+   target:b,
+   friendType:'matchday',
+   lookup:bFriendId
+  })).status,
+  200
+ );
+
+ const incoming = (await call('matchday-b','/friends')).body.relationships[0];
+
+ assert.equal(incoming.friendType, 'matchday');
+
+ assert.equal(
+  (await call('matchday-b','/relationship',{
+   id:incoming.id,
+   action:'accept'
+  })).status,
+  200
+ );
+
+ // No live presence: Matchday Friend messaging is locked.
+ assert.equal(
+  (await call('matchday-a','/message',{
+   target:b,
+   body:'Are you here?'
+  })).status,
+  403
+ );
+
+ assert.equal(
+  (await call(
+   'matchday-a',
+   '/messages?friend=' + encodeURIComponent(b)
+  )).status,
+  403
+ );
+
+ let conversations = await call('matchday-a','/conversations');
+
+ assert.equal(
+  conversations.body.conversations[0].friendType,
+  'matchday'
+ );
+
+ assert.equal(
+  conversations.body.conversations[0].canMessage,
+  false
+ );
+
+ // Both supporters enter the same verified normal Matchday window.
+ assert.equal(
+  (await call('matchday-a','/presence',{
+   fixtureId:fixture.id,
+   ...coords
+  })).status,
+  200
+ );
+
+ assert.equal(
+  (await call('matchday-b','/presence',{
+   fixtureId:fixture.id,
+   ...coords
+  })).status,
+  200
+ );
+
+ conversations = await call('matchday-a','/conversations');
+
+ assert.equal(
+  conversations.body.conversations[0].canMessage,
+  true
+ );
+
+ assert.equal(
+  (await call('matchday-a','/message',{
+   target:b,
+   body:'Now I can message you'
+  })).status,
+  200
+ );
+
+ // Expiring either presence locks Matchday messaging again.
+ db.prepare(
+  'UPDATE community_presence SET expires_at=0 WHERE member_id=?'
+ ).run(b);
+
+ assert.equal(
+  (await call('matchday-a','/message',{
+   target:b,
+   body:'This should now be locked'
+  })).status,
+  403
+ );
+});
+
+
+test('Community messages reject phone numbers without blocking ordinary football numbers', async () => {
+ const { member, call, db } = setup();
+
+ const a = await member('phone-a');
+ const b = await member('phone-b');
+
+ const bFriendId = db.prepare(
+  'SELECT friend_id FROM community_members WHERE id=?'
+ ).get(b).friend_id;
+
+ assert.equal(
+  (await call('phone-a','/friend-request',{
+   target:b,
+   friendType:'full_time',
+   lookup:bFriendId
+  })).status,
+  200
+ );
+
+ const incoming = (await call('phone-b','/friends')).body.relationships[0];
+
+ assert.equal(
+  (await call('phone-b','/relationship',{
+   id:incoming.id,
+   action:'accept'
+  })).status,
+  200
+ );
+
+ for (const body of [
+  '07123 456789',
+  '+44 7123 456789',
+  '07123-456-789',
+  'Call me on (07123) 456789'
+ ]) {
+  const result = await call('phone-a','/message',{ target:b, body });
+
+  assert.equal(
+   result.status,
+   400,
+   `expected phone-like message to be rejected: ${body}`
+  );
+ }
+
+ for (const body of [
+  'We won 3-1',
+  'Kickoff 19:45',
+  'The match is 03/10/2026'
+ ]) {
+  const result = await call('phone-a','/message',{ target:b, body });
+
+  assert.equal(
+   result.status,
+   200,
+   `expected harmless football message to be allowed: ${body}`
+  );
+ }
+});
+
+
+test('existing relationship rows default safely to Matchday Friend', async () => {
+ const { member, db } = setup();
+
+ const a = await member('legacy-a');
+ const b = await member('legacy-b');
+
+ db.prepare(`
+  INSERT INTO community_relationships(id,sender,recipient,status)
+  VALUES(?,?,?,'accepted')
+ `).run('legacy-relationship', a, b);
+
+ const relationship = db.prepare(`
+  SELECT friend_type
+  FROM community_relationships
+  WHERE id='legacy-relationship'
+ `).get();
+
+ assert.equal(relationship.friend_type, 'matchday');
 });

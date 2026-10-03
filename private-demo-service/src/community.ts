@@ -14,7 +14,7 @@ export type CommunityEnv = {
   COMMUNITY_AUTH?: { fetch(request: Request): Promise<Response> };
 };
 type Member = {
- id: string; subject: string; safety_id: string | null;
+ id: string; subject: string; safety_id: string | null; friend_id: string | null;
  display_name: string; avatar: string; club_id: string;
  games_attended: number; grounds_json: string;
  enabled: number; location_visible: number;
@@ -26,6 +26,7 @@ const json = (value: unknown, status = 200) => new Response(JSON.stringify(value
 function publicProfile(m: Member) {
  return {
   id: m.id,
+  friendId: m.friend_id || "",
   displayName: m.display_name,
   avatar: m.avatar,
   clubId: m.club_id,
@@ -94,20 +95,23 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
     const id = me?.id || crypto.randomUUID();
     const safetyId = me?.safety_id ||
      `TF-C-${crypto.randomUUID().replace(/-/g, "").slice(0, 12).toUpperCase()}`;
+    const friendId = me?.friend_id ||
+     `TF-F-${crypto.randomUUID().replace(/-/g, "").slice(0, 12).toUpperCase()}`;
 
     await env.DB.batch([
       sql(`INSERT INTO community_members(
-       id,subject,safety_id,display_name,avatar,club_id,games_attended,grounds_json
+       id,subject,safety_id,friend_id,display_name,avatar,club_id,games_attended,grounds_json
       )
-      VALUES(?,?,?,?,?,?,?,?)
+      VALUES(?,?,?,?,?,?,?,?,?)
       ON CONFLICT(subject) DO UPDATE SET
        safety_id=COALESCE(community_members.safety_id,excluded.safety_id),
+       friend_id=COALESCE(community_members.friend_id,excluded.friend_id),
        display_name=excluded.display_name,
        avatar=excluded.avatar,
        club_id=excluded.club_id,
        games_attended=excluded.games_attended,
        grounds_json=excluded.grounds_json`,
-      id, identity.subject, safetyId, data.displayName.trim(), data.avatar,
+      id, identity.subject, safetyId, friendId, data.displayName.trim(), data.avatar,
       data.clubId, data.gamesAttended, JSON.stringify([...new Set(data.groundsVisited)])),
       sql("DELETE FROM community_presence WHERE member_id = ?", id),
     ]);
@@ -206,27 +210,130 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
   const peerGuard = `m.enabled=1 AND m.club_id=? AND NOT EXISTS
     (SELECT 1 FROM community_blocks b WHERE (b.blocker=? AND b.blocked=m.id) OR (b.blocked=? AND b.blocker=m.id))`;
   if (path === "/friends" && request.method === "GET") {
-    const rows = (await sql(`SELECT m.*, r.id relationship_id, r.sender, r.status FROM community_relationships r
+    const rows = (await sql(`SELECT m.*, r.id relationship_id, r.sender, r.status, r.friend_type FROM community_relationships r
       JOIN community_members m ON m.id=CASE WHEN r.sender=? THEN r.recipient ELSE r.sender END
       WHERE (r.sender=? OR r.recipient=?) AND ${peerGuard} LIMIT 200`, me.id, me.id, me.id, me.club_id, me.id, me.id)
-      .all<Member & { relationship_id: string; sender: string; status: string }>()).results;
-    return json({ relationships: rows.map(row => ({ id: row.relationship_id, status: row.status,
-      incoming: row.sender !== me!.id, profile: publicProfile(row) })) });
+      .all<Member & {
+        relationship_id: string;
+        sender: string;
+        status: string;
+        friend_type: "matchday" | "full_time";
+      }>()).results;
+    return json({ relationships: rows.map(row => ({
+      id: row.relationship_id,
+      status: row.status,
+      friendType: row.friend_type,
+      incoming: row.sender !== me!.id,
+      profile: publicProfile(row)
+    })) });
   }
+  if (path === "/friend-search" && request.method === "GET") {
+    if (!me.enabled) fail("Join Community before finding supporters.", 403);
+
+    const query = (new URL(request.url).searchParams.get("q") || "").trim();
+
+    if (query.length < 2 || query.length > 80) {
+      fail("Enter an exact supporter name or Friend ID.");
+    }
+
+    const rows = (await sql(`SELECT m.* FROM community_members m
+      WHERE m.id<>?
+      AND ${peerGuard}
+      AND (
+        upper(m.friend_id)=upper(?)
+        OR lower(m.display_name)=lower(?)
+      )
+      ORDER BY m.display_name COLLATE NOCASE
+      LIMIT 20`,
+      me.id,
+      me.club_id,
+      me.id,
+      me.id,
+      query,
+      query
+    ).all<Member>()).results;
+
+    return json({ people: rows.map(publicProfile) });
+  }
+
   if (path === "/friend-request" && request.method === "POST") {
-    if (typeof data.target !== "string" || data.target === me.id) fail("Choose a visible supporter.");
-    // Every eligibility predicate is checked in the INSERT, so stale discovery cannot grant access.
-    const result = await sql(`INSERT OR IGNORE INTO community_relationships(id,sender,recipient,status)
-      SELECT ?,?,m.id,'pending' FROM community_members m
+    if (
+      typeof data.target !== "string" ||
+      data.target === me.id ||
+      !["matchday", "full_time"].includes(data.friendType)
+    ) {
+      fail("Choose a supporter and friendship type.");
+    }
+
+    const relationshipId = crypto.randomUUID();
+
+    // Known-supporter route. Exact Friend ID or exact display name is required.
+    if (typeof data.lookup === "string" && data.lookup.trim()) {
+      const lookup = data.lookup.trim();
+
+      const result = await sql(`INSERT OR IGNORE INTO community_relationships
+        (id,sender,recipient,status,friend_type)
+        SELECT ?,?,m.id,'pending',? FROM community_members m
+        WHERE m.id=?
+        AND ${peerGuard}
+        AND (
+          upper(m.friend_id)=upper(?)
+          OR lower(m.display_name)=lower(?)
+        )`,
+        relationshipId,
+        me.id,
+        data.friendType,
+        data.target,
+        me.club_id,
+        me.id,
+        me.id,
+        lookup,
+        lookup
+      ).run();
+
+      if (!result.meta.changes) {
+        fail("This supporter is unavailable or a request already exists.", 409);
+      }
+
+      return json({ ok: true });
+    }
+
+    // Normal Matchday route. Both supporters must still have live presence
+    // for the same verified fixture when the request is created.
+    const result = await sql(`INSERT OR IGNORE INTO community_relationships
+      (id,sender,recipient,status,friend_type)
+      SELECT ?,?,m.id,'pending',? FROM community_members m
       JOIN community_presence p ON p.member_id=m.id
-      JOIN community_presence own ON own.member_id=? AND own.fixture_id=p.fixture_id
+      JOIN community_presence own
+        ON own.member_id=? AND own.fixture_id=p.fixture_id
       JOIN community_members self ON self.id=own.member_id
-      WHERE m.id=? AND ${peerGuard} AND self.enabled=1 AND self.location_visible=1
-      AND self.club_id=m.club_id AND m.location_visible=1 AND own.expires_at>? AND p.expires_at>?`,
-      crypto.randomUUID(), me.id, me.id, data.target, me.club_id, me.id, me.id, now, now).run();
-    if (!result.meta.changes) fail("This supporter is unavailable or a request already exists.", 409);
+      WHERE m.id=?
+      AND ${peerGuard}
+      AND self.enabled=1
+      AND self.location_visible=1
+      AND self.club_id=m.club_id
+      AND m.location_visible=1
+      AND own.expires_at>?
+      AND p.expires_at>?`,
+      relationshipId,
+      me.id,
+      data.friendType,
+      me.id,
+      data.target,
+      me.club_id,
+      me.id,
+      me.id,
+      now,
+      now
+    ).run();
+
+    if (!result.meta.changes) {
+      fail("This supporter is unavailable or a request already exists.", 409);
+    }
+
     return json({ ok: true });
   }
+
   if (path === "/relationship" && request.method === "POST") {
     if (typeof data.id !== "string" || !["accept", "decline", "unfriend"].includes(data.action)) fail("Invalid friendship action.");
     if (data.action === "accept") {
@@ -304,7 +411,7 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
        fail("Choose a friend.");
      }
 
-     return sql(`SELECT m.* FROM community_members m
+     return sql(`SELECT m.*, r.friend_type FROM community_members m
        JOIN community_relationships r
          ON ((r.sender=? AND r.recipient=m.id)
          OR (r.recipient=? AND r.sender=m.id))
@@ -317,11 +424,43 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
        me!.club_id,
        me!.id,
        me!.id
-     ).first<Member>();
+     ).first<Member & { friend_type: "matchday" | "full_time" }>();
+   }
+
+   async function canMessageFriend(
+     friend: Member & { friend_type: "matchday" | "full_time" }
+   ) {
+     if (friend.friend_type === "full_time") return true;
+
+     const live = await sql(`SELECT 1 ok
+       FROM community_presence own
+       JOIN community_presence peer
+         ON peer.fixture_id=own.fixture_id
+       WHERE own.member_id=?
+       AND peer.member_id=?
+       AND own.expires_at>?
+       AND peer.expires_at>?
+       LIMIT 1`,
+       me!.id,
+       friend.id,
+       now,
+       now
+     ).first();
+
+     return Boolean(live);
+   }
+
+   function containsPhoneNumber(value: string) {
+     const candidates = value.match(/\+?\d[\d\s().-]{5,}\d/g) || [];
+
+     return candidates.some(candidate => {
+       const digits = candidate.replace(/\D/g, "");
+       return digits.length >= 9 && digits.length <= 15;
+     });
    }
 
    if (path === "/conversations" && request.method === "GET") {
-     const rows = (await sql(`SELECT m.*,
+     const rows = (await sql(`SELECT m.*, r.friend_type,
        (SELECT count(*) FROM community_messages msg
         WHERE msg.sender=m.id
         AND msg.recipient=?
@@ -344,14 +483,19 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
        me.club_id,
        me.id,
        me.id
-     ).all<Member & { unread: number }>()).results;
+     ).all<Member & {
+       unread: number;
+       friend_type: "matchday" | "full_time";
+     }>()).results;
 
-     return json({
-       conversations: rows.map(row => ({
-         friend: publicProfile(row),
-         unread: Number(row.unread || 0),
-       }))
-     });
+     const conversations = await Promise.all(rows.map(async row => ({
+       friend: publicProfile(row),
+       unread: Number(row.unread || 0),
+       friendType: row.friend_type,
+       canMessage: await canMessageFriend(row),
+     })));
+
+     return json({ conversations });
    }
 
    if (path === "/messages" && request.method === "GET") {
@@ -360,6 +504,13 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
 
      if (!friend) {
        fail("This conversation is unavailable.", 403);
+     }
+
+     if (!(await canMessageFriend(friend))) {
+       fail(
+         "Matchday Friend messaging is only available during an eligible matchday.",
+         403
+       );
      }
 
      await sql(`UPDATE community_messages
@@ -408,11 +559,22 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
        fail("Enter a message of 1–1000 characters.");
      }
 
+     if (containsPhoneNumber(data.body)) {
+       fail("Phone numbers cannot be shared in Community messages.");
+     }
+
      const friend = await acceptedFriend(data.target);
 
      if (!friend) {
        fail(
          "You can only message an accepted same-club friend.",
+         403
+       );
+     }
+
+     if (!(await canMessageFriend(friend))) {
+       fail(
+         "Matchday Friend messaging is only available during an eligible matchday.",
          403
        );
      }
