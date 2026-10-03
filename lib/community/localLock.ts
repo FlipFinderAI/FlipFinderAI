@@ -36,8 +36,7 @@ export async function unlockCommunityLocally(): Promise<boolean> {
   const result = await LocalAuthentication.authenticateAsync({
     promptMessage: "Unlock Community",
     cancelLabel: "Cancel",
-    fallbackLabel: "Use iPhone Passcode",
-    disableDeviceFallback: false,
+    disableDeviceFallback: true,
   });
 
   return result.success === true;
