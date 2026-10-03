@@ -290,3 +290,289 @@ test(
     assert.equal(blocked.status, 429);
   },
 );
+
+test(
+  'Community email verification uses hashed single-use tokens',
+  async () => {
+    const { db, env, auth } = setup();
+    const deliveries = [];
+
+    env.COMMUNITY_EMAIL = {
+      async fetch(request) {
+        deliveries.push(await request.json());
+        return new Response('ok');
+      },
+    };
+
+    const signup = await auth('/signup', {
+      email: 'verify@example.com',
+      password: 'verification password',
+    });
+
+    assert.equal(signup.status, 201);
+
+    const requested = await auth(
+      '/verification/request',
+      {},
+      signup.body.token,
+    );
+
+    assert.equal(requested.status, 200);
+    assert.equal(deliveries.length, 1);
+    assert.equal(deliveries[0].type, 'verify-email');
+
+    const rawToken = deliveries[0].token;
+    const stored = JSON.stringify(
+      db.prepare(
+        'SELECT * FROM community_account_tokens',
+      ).all(),
+    );
+
+    assert.equal(stored.includes(rawToken), false);
+
+    const confirmed = await auth(
+      '/verification/confirm',
+      { token: rawToken },
+    );
+
+    assert.equal(confirmed.status, 200);
+    assert.equal(confirmed.body.emailVerified, true);
+
+    const replay = await auth(
+      '/verification/confirm',
+      { token: rawToken },
+    );
+
+    assert.equal(replay.status, 400);
+
+    const account = db.prepare(
+      `SELECT email_verified
+       FROM community_accounts
+       WHERE email_normalized=?`,
+    ).get('verify@example.com');
+
+    assert.equal(account.email_verified, 1);
+  },
+);
+
+test(
+  'Community password reset is generic, single-use and revokes sessions',
+  async () => {
+    const { env, auth } = setup();
+    const deliveries = [];
+
+    env.COMMUNITY_EMAIL = {
+      async fetch(request) {
+        deliveries.push(await request.json());
+        return new Response('ok');
+      },
+    };
+
+    const signup = await auth('/signup', {
+      email: 'recover@example.com',
+      password: 'original secure password',
+    });
+
+    const unknown = await auth('/password/forgot', {
+      email: 'unknown@example.com',
+    });
+
+    const known = await auth('/password/forgot', {
+      email: 'recover@example.com',
+    });
+
+    assert.equal(unknown.status, 200);
+    assert.equal(known.status, 200);
+    assert.equal(unknown.body.message, known.body.message);
+
+    const reset = deliveries.find(
+      item => item.type === 'password-reset',
+    );
+
+    assert.ok(reset);
+
+    const changed = await auth('/password/reset', {
+      token: reset.token,
+      password: 'replacement secure password',
+    });
+
+    assert.equal(changed.status, 200);
+    assert.equal(changed.body.signedIn, false);
+
+    const oldSession = await auth(
+      '/session',
+      undefined,
+      signup.body.token,
+    );
+
+    assert.equal(oldSession.status, 401);
+
+    const oldPassword = await auth('/login', {
+      email: 'recover@example.com',
+      password: 'original secure password',
+    });
+
+    assert.equal(oldPassword.status, 401);
+
+    const newPassword = await auth('/login', {
+      email: 'recover@example.com',
+      password: 'replacement secure password',
+    });
+
+    assert.equal(newPassword.status, 200);
+
+    const replay = await auth('/password/reset', {
+      token: reset.token,
+      password: 'another replacement password',
+    });
+
+    assert.equal(replay.status, 400);
+  },
+);
+
+test(
+  'Community account deletion removes authentication and associated Community data',
+  async () => {
+    const { db, auth } = setup();
+
+    const signup = await auth('/signup', {
+      email: 'delete@example.com',
+      password: 'delete account password',
+    });
+
+    assert.equal(signup.status, 201);
+
+    const account = db.prepare(
+      `SELECT id
+       FROM community_accounts
+       WHERE email_normalized=?`,
+    ).get('delete@example.com');
+
+    const subject = `community-account:${account.id}`;
+
+    db.prepare(
+      `INSERT INTO community_members(
+        id,subject,display_name,avatar,club_id
+      ) VALUES(?,?,?,?,?)`,
+    ).run(
+      'delete-member',
+      subject,
+      'Delete Me',
+      '⚽',
+      'club:test',
+    );
+
+    db.prepare(
+      `INSERT INTO community_members(
+        id,subject,display_name,avatar,club_id
+      ) VALUES(?,?,?,?,?)`,
+    ).run(
+      'peer-member',
+      'peer-subject',
+      'Peer',
+      '⚽',
+      'club:test',
+    );
+
+    db.prepare(
+      `INSERT INTO community_relationships(
+        id,sender,recipient,status
+      ) VALUES(?,?,?,'accepted')`,
+    ).run(
+      'delete-relationship',
+      'delete-member',
+      'peer-member',
+    );
+
+    db.prepare(
+      `INSERT INTO community_blocks(
+        blocker,blocked
+      ) VALUES(?,?)`,
+    ).run('delete-member', 'peer-member');
+
+    db.prepare(
+      `INSERT INTO community_reports(
+        id,reporter,reported,reason,created_at
+      ) VALUES(?,?,?,?,?)`,
+    ).run(
+      'delete-report',
+      'delete-member',
+      'peer-member',
+      'test',
+      Date.now(),
+    );
+
+    db.prepare(
+      `INSERT INTO community_messages(
+        id,sender,recipient,body,created_at
+      ) VALUES(?,?,?,?,?)`,
+    ).run(
+      'delete-message',
+      'delete-member',
+      'peer-member',
+      'test message',
+      Date.now(),
+    );
+
+    const deleted = await auth(
+      '/account/delete',
+      {
+        confirmation: 'DELETE',
+        password: 'delete account password',
+      },
+      signup.body.token,
+    );
+
+    assert.equal(deleted.status, 200);
+    assert.equal(deleted.body.deleted, true);
+
+    assert.equal(
+      db.prepare(
+        `SELECT COUNT(*) count
+         FROM community_accounts
+         WHERE id=?`,
+      ).get(account.id).count,
+      0,
+    );
+
+    assert.equal(
+      db.prepare(
+        `SELECT COUNT(*) count
+         FROM community_members
+         WHERE id='delete-member'`,
+      ).get().count,
+      0,
+    );
+
+    for (const table of [
+      'community_relationships',
+      'community_blocks',
+      'community_reports',
+      'community_messages',
+    ]) {
+      assert.equal(
+        db.prepare(
+          `SELECT COUNT(*) count FROM ${table}
+           WHERE ${
+             table === 'community_blocks'
+               ? "blocker='delete-member' OR blocked='delete-member'"
+               : table === 'community_relationships'
+                 ? "sender='delete-member' OR recipient='delete-member'"
+                 : table === 'community_reports'
+                   ? "reporter='delete-member' OR reported='delete-member'"
+                   : "sender='delete-member' OR recipient='delete-member'"
+           }`,
+        ).get().count,
+        0,
+      );
+    }
+
+    const session = await auth(
+      '/session',
+      undefined,
+      signup.body.token,
+    );
+
+    assert.equal(session.status, 401);
+  },
+);
