@@ -1,4 +1,6 @@
 /* eslint-disable react-hooks/immutability */
+import { router } from "expo-router";
+import { Platform } from "react-native";
 import { useEffect, useRef, useState, useCallback, useMemo, Fragment } from "react";
 import {
   ActionSheetIOS,
@@ -24172,6 +24174,19 @@ const renderGroundRow = (
               </Text>
             </Pressable>
           </View>
+        )}
+        {Platform.OS === "ios" && (
+          <Pressable
+            accessibilityRole="button"
+            style={({ pressed }) => [s.finish, { width: "100%", marginBottom: 14,
+              borderColor: visibleInkOnCream(favouriteClub.primary), opacity: pressed ? 0.62 : 1 }]}
+            onPress={() => router.push({ pathname: "/community", params: {
+              clubId: favouriteClub.id, clubName: favouriteClub.name,
+              colour: visibleInkOnCream(favouriteClub.primary),
+            } })}
+          >
+            <Text style={[s.finishText, { color: visibleInkOnCream(favouriteClub.primary) }]}>COMMUNITY</Text>
+          </Pressable>
         )}
       </ScrollView>
       {bottomNav()}
