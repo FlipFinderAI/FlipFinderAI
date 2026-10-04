@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  AppState,
   Pressable,
   ScrollView,
   Text,
@@ -136,6 +137,71 @@ export default function Messages({
       }
     }
   }
+
+  // Keep online state, unread counts and the open conversation fresh
+  // while Community is genuinely visible. This is foreground-only and
+  // deliberately independent of location/presence.
+  useEffect(() => {
+    if (!enabled) return;
+
+    let alive = true;
+    let refreshing = false;
+
+    const refreshVisibleConversation = async () => {
+      if (
+        !alive ||
+        refreshing ||
+        AppState.currentState !== "active"
+      ) {
+        return;
+      }
+
+      refreshing = true;
+
+      try {
+        await refreshThreads();
+
+        if (friend) {
+          const result = await communityRequest<{
+            messages: Message[];
+          }>(
+            `/messages?friend=${encodeURIComponent(friend.id)}`,
+          );
+
+          if (alive) {
+            setMessages(result.messages);
+          }
+        }
+      } catch {
+        // Background refresh is best effort. Manual actions still surface
+        // their normal errors through the Community run() wrapper.
+      } finally {
+        refreshing = false;
+      }
+    };
+
+    void refreshVisibleConversation();
+
+    const timer = setInterval(
+      () => void refreshVisibleConversation(),
+      15 * 1000,
+    );
+
+    const subscription = AppState.addEventListener(
+      "change",
+      nextState => {
+        if (nextState === "active") {
+          void refreshVisibleConversation();
+        }
+      },
+    );
+
+    return () => {
+      alive = false;
+      clearInterval(timer);
+      subscription.remove();
+    };
+  }, [enabled, friend?.id]);
 
   async function openThread(profile: PublicProfile) {
     const result = await communityRequest<{
