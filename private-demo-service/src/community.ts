@@ -208,6 +208,12 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
   }
   const path = new URL(request.url).pathname.replace("/api/community", "");
   const now = Date.now();
+
+  // Community activity is separate from authentication sessions,
+  // stadium presence and location sharing. Only accepted friends
+  // receive the coarse activeNow boolean.
+  const ACTIVE_NOW_MS = 5 * 60 * 1000;
+
   const state = () => ({
    profile: me ? publicProfile(me) : null,
    preferences: {
@@ -316,6 +322,16 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
     return json({ ok: true });
   }
   if (!me.enabled) fail("Enable Community first.", 403);
+
+  await sql(
+    `INSERT INTO community_activity(member_id,last_active_at)
+     VALUES(?,?)
+     ON CONFLICT(member_id) DO UPDATE SET
+       last_active_at=excluded.last_active_at`,
+    me.id,
+    now,
+  ).run();
+
   async function fixtures() {
     if (!env.COMMUNITY_FIXTURES) fail("Verified football data service is not configured.", 503);
     const response = await env.COMMUNITY_FIXTURES.fetch(new Request(`https://football.internal/community-fixtures?clubId=${encodeURIComponent(me!.club_id)}`));
@@ -1095,6 +1111,9 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
 
    if (path === "/conversations" && request.method === "GET") {
      const rows = (await sql(`SELECT m.*, r.friend_type,
+      (SELECT activity.last_active_at
+       FROM community_activity activity
+       WHERE activity.member_id=m.id) last_active_at,
        (SELECT count(*) FROM community_messages msg
         WHERE msg.sender=m.id
         AND msg.recipient=?
@@ -1120,6 +1139,7 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
      ).all<Member & {
        unread: number;
        friend_type: "matchday" | "full_time";
+       last_active_at: number | null;
      }>()).results;
 
      const conversations = await Promise.all(rows.map(async row => ({
@@ -1127,6 +1147,9 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
        unread: Number(row.unread || 0),
        friendType: row.friend_type,
        canMessage: await canMessageFriend(row),
+      activeNow:
+        typeof row.last_active_at === "number" &&
+        row.last_active_at >= now - ACTIVE_NOW_MS,
      })));
 
      return json({ conversations });

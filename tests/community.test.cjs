@@ -1257,3 +1257,97 @@ test('Matchday Experience rejects invalid location and closes when Community is 
     0
   );
 });
+
+test('active now is private to accepted friends and is not location presence', async () => {
+  const { member, call, db } = setup();
+
+  const a = await member('active-a');
+  const b = await member('active-b');
+
+  // Community activity must never make a non-friend appear in conversations.
+  assert.equal(
+    (await call('active-a', '/conversations')).body.conversations.length,
+    0
+  );
+
+  // Relationship creation itself is already tested elsewhere. Insert an
+  // accepted Full-Time friendship directly here so this test isolates the
+  // privacy and activity behaviour we are adding.
+  db.prepare(
+    `INSERT INTO community_relationships
+      (id,sender,recipient,status,friend_type)
+     VALUES(?,?,?,?,?)`
+  ).run(
+    'active-now-friendship',
+    a,
+    b,
+    'accepted',
+    'full_time'
+  );
+
+  // Genuine Community use by B records B as recently active.
+  assert.equal(
+    (await call('active-b', '/friends')).status,
+    200
+  );
+
+  let conversations = await call('active-a', '/conversations');
+
+  assert.equal(conversations.status, 200);
+  assert.equal(conversations.body.conversations.length, 1);
+  assert.equal(
+    conversations.body.conversations[0].friend.id,
+    b
+  );
+  assert.equal(
+    conversations.body.conversations[0].activeNow,
+    true
+  );
+
+  // Never expose the underlying activity timestamp.
+  assert.equal(
+    'lastActiveAt' in conversations.body.conversations[0],
+    false
+  );
+  assert.equal(
+    'last_active_at' in conversations.body.conversations[0],
+    false
+  );
+
+  // Age B's private activity beyond the five-minute window.
+  db.prepare(
+    'UPDATE community_activity SET last_active_at=? WHERE member_id=?'
+  ).run(Date.now() - 10 * 60 * 1000, b);
+
+  conversations = await call('active-a', '/conversations');
+
+  assert.equal(
+    conversations.body.conversations[0].activeNow,
+    false
+  );
+
+  // Location presence is not the source of online status.
+  //
+  // /presence is itself genuine Community use, so after exercising it we
+  // deliberately age the Community activity row again. If conversations
+  // were deriving online state from presence, this would incorrectly become
+  // true.
+  assert.equal(
+    (await call('active-b', '/presence', {
+      fixtureId: fixture.id,
+      ...coords
+    })).status,
+    200
+  );
+
+  db.prepare(
+    'UPDATE community_activity SET last_active_at=? WHERE member_id=?'
+  ).run(Date.now() - 10 * 60 * 1000, b);
+
+  conversations = await call('active-a', '/conversations');
+
+  assert.equal(
+    conversations.body.conversations[0].activeNow,
+    false
+  );
+});
