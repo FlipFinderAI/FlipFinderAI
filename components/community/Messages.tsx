@@ -472,79 +472,100 @@ export default function Messages({
   }
 
   return (
-    <View style={{ gap: 10 }}>
+    <View
+      style={{
+        flex: 1,
+        backgroundColor: "#ffffff",
+      }}
+    >
       <View
         style={{
-          flexDirection: "row",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 12,
+          paddingHorizontal: 18,
+          paddingTop: 16,
+          paddingBottom: 10,
         }}
       >
         <Text
-          style={[
-            styles.heading,
-            {
-              marginBottom: 0,
-              fontSize: 22,
-            },
-          ]}
+          accessibilityRole="header"
+          style={{
+            fontSize: 30,
+            lineHeight: 36,
+            fontWeight: "900",
+            color: "#17221c",
+          }}
         >
-          Messages
+          Chats
         </Text>
 
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Refresh messages"
-          disabled={busy}
-          onPress={() => void run(refreshThreads)}
-          style={({ pressed }) => ({
-            paddingHorizontal: 12,
-            paddingVertical: 7,
-            borderRadius: 16,
-            backgroundColor: "#eee9dd",
-            opacity: pressed ? 0.65 : 1,
-          })}
+        <Text
+          style={{
+            marginTop: 2,
+            fontSize: 13,
+            color: "#777168",
+          }}
         >
-          <Text
-            style={{
-              fontWeight: "800",
-              color: "#17221c",
-            }}
-          >
-            Refresh
-          </Text>
-        </Pressable>
+          Your Community conversations
+        </Text>
       </View>
 
       {threads.length === 0 ? (
         <View
           style={{
-            backgroundColor: "#ffffff",
-            borderRadius: 16,
-            padding: 18,
-            borderWidth: 1,
-            borderColor: "#e1dbcf",
+            flex: 1,
+            alignItems: "center",
+            justifyContent: "center",
+            paddingHorizontal: 34,
+            paddingVertical: 70,
           }}
         >
+          <View
+            style={{
+              width: 68,
+              height: 68,
+              borderRadius: 34,
+              alignItems: "center",
+              justifyContent: "center",
+              backgroundColor: "#f1eee6",
+              marginBottom: 16,
+            }}
+          >
+            <Text
+              accessibilityElementsHidden
+              style={{
+                fontSize: 30,
+              }}
+            >
+              💬
+            </Text>
+          </View>
+
           <Text
             style={{
               textAlign: "center",
-              fontWeight: "700",
-              color: "#68645c",
+              fontSize: 18,
+              fontWeight: "900",
+              color: "#17221c",
             }}
           >
-            No conversations yet
+            No chats yet
+          </Text>
+
+          <Text
+            style={{
+              marginTop: 7,
+              textAlign: "center",
+              fontSize: 14,
+              lineHeight: 20,
+              color: "#777168",
+            }}
+          >
+            Add supporters as friends and your conversations will appear here.
           </Text>
         </View>
       ) : (
         <View
           style={{
             backgroundColor: "#ffffff",
-            borderRadius: 18,
-            overflow: "hidden",
-            borderWidth: 1,
-            borderColor: "#e1dbcf",
           }}
         >
           {threads.map((thread, index) => (
@@ -564,10 +585,11 @@ export default function Messages({
                 flexDirection: "row",
                 alignItems: "center",
                 gap: 12,
-                paddingHorizontal: 14,
-                paddingVertical: 12,
+                paddingLeft: 18,
+                paddingRight: 14,
+                paddingVertical: 14,
                 borderTopWidth: index === 0 ? 0 : 1,
-                borderTopColor: "#eee8dc",
+                borderTopColor: "#efede7",
                 opacity: !thread.canMessage
                   ? 0.5
                   : pressed
@@ -659,18 +681,6 @@ export default function Messages({
           ))}
         </View>
       )}
-
-      <Text
-        style={{
-          fontSize: 12,
-          lineHeight: 17,
-          color: "#777168",
-        }}
-      >
-        Full-Time Friends can message at any time. Matchday Friend
-        conversations open only during an eligible matchday or active
-        Matchday Experience.
-      </Text>
 
       {!!notice && (
         <Text accessibilityLiveRegion="polite">
