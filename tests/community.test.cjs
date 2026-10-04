@@ -1351,3 +1351,127 @@ test('active now is private to accepted friends and is not location presence', a
     false
   );
 });
+
+test('Nearby Supporters excludes pending and accepted friends without changing map visibility', async () => {
+  const { member, call, db } = setup();
+
+  const a = await member('nearby-a');
+  const b = await member('nearby-b');
+  const c = await member('nearby-c');
+
+  await call('nearby-a', '/presence', {
+    fixtureId: fixture.id,
+    ...coords
+  });
+
+  await call('nearby-b', '/presence', {
+    fixtureId: fixture.id,
+    ...coords
+  });
+
+  await call('nearby-c', '/presence', {
+    fixtureId: fixture.id,
+    ...coords
+  });
+
+  let discover = await call('nearby-a', '/discover');
+
+  assert.equal(discover.status, 200);
+  assert.deepEqual(
+    new Set(discover.body.people.map(person => person.profile.id)),
+    new Set([b, c])
+  );
+
+  // Social discovery does not need to return stadium coordinates.
+  assert.equal('latitude' in discover.body.people[0], false);
+  assert.equal('longitude' in discover.body.people[0], false);
+
+  db.prepare(`
+    INSERT INTO community_relationships
+      (id,sender,recipient,status,friend_type)
+    VALUES(?,?,?,?,?)
+  `).run('nearby-pending', a, b, 'pending', 'matchday');
+
+  discover = await call('nearby-a', '/discover');
+
+  assert.deepEqual(
+    discover.body.people.map(person => person.profile.id),
+    [c]
+  );
+
+  db.prepare(`
+    UPDATE community_relationships
+    SET status='accepted'
+    WHERE id='nearby-pending'
+  `).run();
+
+  discover = await call('nearby-a', '/discover');
+
+  assert.deepEqual(
+    discover.body.people.map(person => person.profile.id),
+    [c]
+  );
+
+  // Map visibility is a separate opt-in and must not use the
+  // Nearby Supporters relationship filter.
+  await call('nearby-b', '/map', {});
+
+  const map = await call('nearby-a', '/map');
+
+  assert.equal(
+    map.body.people.some(person => person.profile.id === b),
+    true
+  );
+
+  // Matchday Experience social discovery is any-distance and
+  // location-independent, but it must apply the same friend filter.
+  await call('nearby-a', '/experience', {
+    fixtureId: fixture.id,
+    supporter: 'home'
+  });
+
+  await call('nearby-b', '/experience', {
+    fixtureId: fixture.id,
+    supporter: 'home'
+  });
+
+  await call('nearby-c', '/experience', {
+    fixtureId: fixture.id,
+    supporter: 'home'
+  });
+
+  db.prepare(`
+    INSERT INTO community_relationships
+      (id,sender,recipient,status,friend_type)
+    VALUES(?,?,?,?,?)
+  `).run('nearby-c-pending', c, a, 'pending', 'full_time');
+
+  const experience = await call(
+    'nearby-a',
+    '/experience/supporters'
+  );
+
+  assert.equal(experience.status, 200);
+  assert.equal(experience.body.people.length, 0);
+
+  // Remove the relationship rows: both same-club Experience
+  // supporters become discoverable again.
+  db.prepare(`
+    DELETE FROM community_relationships
+    WHERE id IN ('nearby-pending','nearby-c-pending')
+  `).run();
+
+  const experienceAgain = await call(
+    'nearby-a',
+    '/experience/supporters'
+  );
+
+  assert.deepEqual(
+    new Set(
+      experienceAgain.body.people.map(
+        person => person.profile.id
+      )
+    ),
+    new Set([b, c])
+  );
+});

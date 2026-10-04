@@ -688,6 +688,13 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
              OR
              (b.blocked=? AND b.blocker=m.id)
          )
+         AND NOT EXISTS (
+           SELECT 1 FROM community_relationships r
+           WHERE
+             (r.sender=? AND r.recipient=m.id)
+             OR
+             (r.recipient=? AND r.sender=m.id)
+         )
          ORDER BY m.display_name COLLATE NOCASE
          LIMIT 100`,
         me.id,
@@ -695,6 +702,8 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
         now,
         me.id,
         me.club_id,
+        me.id,
+        me.id,
         me.id,
         me.id,
       ).all<Member>()
@@ -792,22 +801,88 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
     await sql("UPDATE community_presence SET on_map=1 WHERE member_id=? AND expires_at>?", me.id, now).run();
     return json({ ok: true });
   }
-  async function visibleMembers(mapOnly = false) {
+  async function visibleMembers(
+    mapOnly = false,
+    excludeRelationships = false,
+  ) {
     return (await sql(`SELECT m.*, p.stadium, p.stadium_lat, p.stadium_lon, p.expires_at FROM community_members m
       JOIN community_presence p ON p.member_id=m.id
       JOIN community_presence own ON own.member_id=? AND own.fixture_id=p.fixture_id
       WHERE m.id<>? AND m.club_id=? AND m.enabled=1 AND m.location_visible=1
       AND p.expires_at>? AND own.expires_at>? AND (?=0 OR p.on_map=1)
-      AND NOT EXISTS (SELECT 1 FROM community_blocks b WHERE (b.blocker=? AND b.blocked=m.id) OR (b.blocked=? AND b.blocker=m.id))
-      LIMIT 100`, me!.id, me!.id, me!.club_id, now, now, +mapOnly, me!.id, me!.id)
-      .all<Member & { stadium: string; stadium_lat: number; stadium_lon: number; expires_at: number }>()).results;
+      AND NOT EXISTS (
+        SELECT 1 FROM community_blocks b
+        WHERE
+          (b.blocker=? AND b.blocked=m.id)
+          OR
+          (b.blocked=? AND b.blocker=m.id)
+      )
+      AND (?=0 OR NOT EXISTS (
+        SELECT 1 FROM community_relationships r
+        WHERE
+          (r.sender=? AND r.recipient=m.id)
+          OR
+          (r.recipient=? AND r.sender=m.id)
+      ))
+      LIMIT 100`,
+      me!.id,
+      me!.id,
+      me!.club_id,
+      now,
+      now,
+      +mapOnly,
+      me!.id,
+      me!.id,
+      +excludeRelationships,
+      me!.id,
+      me!.id,
+    ).all<Member & {
+      stadium: string;
+      stadium_lat: number;
+      stadium_lon: number;
+      expires_at: number;
+    }>()).results;
   }
-  if ((path === "/map" || path === "/discover") && request.method === "GET") {
-    if (!me.location_visible) fail("Enable matchday visibility first.", 403);
-    const rows = await visibleMembers(path === "/map");
-    return json({ people: rows.map(m => ({ profile: publicProfile(m), stadium: m.stadium,
-      latitude: m.stadium_lat, longitude: m.stadium_lon, expiresAt: m.expires_at })), serverNow: now });
+
+  if (
+    (path === "/map" || path === "/discover") &&
+    request.method === "GET"
+  ) {
+    if (!me.location_visible) {
+      fail("Enable matchday visibility first.", 403);
+    }
+
+    const mapRequest = path === "/map";
+
+    const rows = await visibleMembers(
+      mapRequest,
+      !mapRequest,
+    );
+
+    // Nearby Supporters is social discovery. It needs only the
+    // public supporter profile; stadium coordinates belong to
+    // the separately opted-in map surface.
+    if (!mapRequest) {
+      return json({
+        people: rows.map(row => ({
+          profile: publicProfile(row),
+        })),
+        serverNow: now,
+      });
+    }
+
+    return json({
+      people: rows.map(row => ({
+        profile: publicProfile(row),
+        stadium: row.stadium,
+        latitude: row.stadium_lat,
+        longitude: row.stadium_lon,
+        expiresAt: row.expires_at,
+      })),
+      serverNow: now,
+    });
   }
+
   const peerGuard = `m.enabled=1 AND m.club_id=? AND NOT EXISTS
     (SELECT 1 FROM community_blocks b WHERE (b.blocker=? AND b.blocked=m.id) OR (b.blocked=? AND b.blocker=m.id))`;
   if (path === "/friends" && request.method === "GET") {

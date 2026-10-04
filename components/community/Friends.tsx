@@ -132,13 +132,13 @@ export default function Friends({
    </View>
   ))}
 
-  <Text style={styles.heading}>Matchday supporters</Text>
+  <Text style={styles.heading}>Nearby Supporters</Text>
 
   <Action
    title={
      experienceActive
-       ? "Find Matchday Experience supporters"
-       : "Find visible supporters"
+       ? "Find Experience supporters"
+       : "Find nearby supporters"
    }
    disabled={!enabled || busy}
    onPress={() => void run(async () => {
@@ -156,10 +156,10 @@ export default function Friends({
        result.people.length
          ? experienceActive
            ? "Same-club supporters in this active Matchday Experience are shown. Location sharing is not required."
-           : "Only eligible same-club supporters are shown."
+           : "Only eligible nearby same-club supporters who are not already friends or pending are shown."
          : experienceActive
-           ? "No other same-club supporters are currently in this Matchday Experience."
-           : "No supporters are visible. Check matchday eligibility first."
+           ? "No new same-club supporters are currently in this Matchday Experience."
+           : "No new nearby supporters are visible right now."
      );
    })}
  />
