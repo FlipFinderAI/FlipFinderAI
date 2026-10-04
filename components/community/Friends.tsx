@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  AppState,
   Linking,
   Pressable,
   Text,
@@ -42,6 +43,77 @@ export default function Friends({
   setReport(null);
   setSubmittedReport(null);
  }, [enabled]);
+ useEffect(() => {
+  if (!enabled) return;
+
+  let alive = true;
+  let refreshing = false;
+  let timer: ReturnType<typeof setInterval> | null = null;
+
+  const syncRelationships = async () => {
+   if (
+    !alive ||
+    refreshing ||
+    AppState.currentState !== "active"
+   ) {
+    return;
+   }
+
+   refreshing = true;
+
+   try {
+    const result = await communityRequest<{
+     relationships: Relationship[];
+    }>("/friends");
+
+    if (alive) {
+     setRelationships(result.relationships);
+    }
+   } catch {
+    // Passive foreground refresh is best effort.
+   } finally {
+    refreshing = false;
+   }
+  };
+
+  const stopTimer = () => {
+   if (timer) {
+    clearInterval(timer);
+    timer = null;
+   }
+  };
+
+  const startTimer = () => {
+   stopTimer();
+   void syncRelationships();
+   timer = setInterval(
+    () => void syncRelationships(),
+    15 * 1000,
+   );
+  };
+
+  if (AppState.currentState === "active") {
+   startTimer();
+  }
+
+  const subscription = AppState.addEventListener(
+   "change",
+   nextState => {
+    if (nextState === "active") {
+     startTimer();
+    } else {
+     stopTimer();
+    }
+   },
+  );
+
+  return () => {
+   alive = false;
+   stopTimer();
+   subscription.remove();
+  };
+ }, [enabled]);
+
  async function refresh() {
    const result = await communityRequest<{ relationships: Relationship[] }>("/friends"); setRelationships(result.relationships);
  }
@@ -440,8 +512,7 @@ export default function Friends({
      onPress={() => void run(() => requestFriend(p, "full_time"))}
     />
    </View>)}
-   <Action title="Refresh friends and pending requests" disabled={!enabled || busy} onPress={() => void run(refresh)} />
-   {enabled && <><Text
+    {enabled && <><Text
    style={{
     marginTop: 14,
     fontSize: 20,
