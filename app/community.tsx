@@ -89,6 +89,63 @@ export default function CommunityScreen() {
     Boolean(session?.communityEligible);
   const sameClub = state.profile?.clubId === clubId;
   const active = connected && sameClub && state.preferences.enabled;
+
+  // "Active now" means the supporter is genuinely using Community
+  // in the foreground. It is deliberately independent of matchday
+  // GPS, presence leases and map visibility.
+  useEffect(() => {
+    if (!active) return;
+
+    let foreground = AppState.currentState === "active";
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    const markActive = () => {
+      if (!foreground) return;
+
+      void communityRequest("/activity", {}).catch(() => {
+        // Activity is best-effort presence for friends only.
+        // It must never interrupt Community use.
+      });
+    };
+
+    const stopHeartbeat = () => {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
+
+    const startHeartbeat = () => {
+      if (!foreground) return;
+
+      markActive();
+
+      if (!timer) {
+        timer = setInterval(markActive, 2 * 60 * 1000);
+      }
+    };
+
+    startHeartbeat();
+
+    const subscription = AppState.addEventListener(
+      "change",
+      nextState => {
+        foreground = nextState === "active";
+
+        if (foreground) {
+          startHeartbeat();
+        } else {
+          stopHeartbeat();
+        }
+      },
+    );
+
+    return () => {
+      foreground = false;
+      stopHeartbeat();
+      subscription.remove();
+    };
+  }, [active]);
   async function run(task: () => Promise<void>) {
     if (busy) return;
     setBusy(true);
