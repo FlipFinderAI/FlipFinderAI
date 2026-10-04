@@ -19,6 +19,7 @@ type Thread = {
   unread: number;
   friendType: "matchday" | "full_time";
   canMessage: boolean;
+  activeNow: boolean;
 };
 
 function initials(name: string) {
@@ -38,9 +39,11 @@ function initials(name: string) {
 function Avatar({
   profile,
   size = 52,
+  activeNow = false,
 }: {
   profile: PublicProfile;
   size?: number;
+  activeNow?: boolean;
 }) {
   return (
     <View
@@ -65,6 +68,23 @@ function Avatar({
       >
         {initials(profile.displayName)}
       </Text>
+
+      {activeNow && (
+        <View
+          accessibilityLabel={`${profile.displayName} active now`}
+          style={{
+            position: "absolute",
+            right: 0,
+            bottom: 0,
+            width: Math.max(13, size * 0.28),
+            height: Math.max(13, size * 0.28),
+            borderRadius: Math.max(13, size * 0.28) / 2,
+            backgroundColor: "#2fb344",
+            borderWidth: 2,
+            borderColor: "#ffffff",
+          }}
+        />
+      )}
     </View>
   );
 }
@@ -148,6 +168,10 @@ export default function Messages({
 
   if (!enabled) return null;
 
+  const activeThread = friend
+    ? threads.find(thread => thread.friend.id === friend.id)
+    : undefined;
+
   if (friend) {
     return (
       <View
@@ -201,7 +225,11 @@ export default function Messages({
             </Text>
           </Pressable>
 
-          <Avatar profile={friend} size={46} />
+          <Avatar
+            profile={friend}
+            size={46}
+            activeNow={activeThread?.activeNow === true}
+          />
 
           <View style={{ flex: 1 }}>
             <Text
@@ -218,11 +246,20 @@ export default function Messages({
             <Text
               style={{
                 fontSize: 12,
-                color: "#68645c",
+                color:
+                  activeThread?.activeNow === true
+                    ? "#237a3b"
+                    : "#68645c",
+                fontWeight:
+                  activeThread?.activeNow === true
+                    ? "700"
+                    : "400",
                 marginTop: 2,
               }}
             >
-              Community friend
+              {activeThread?.activeNow === true
+                ? "Active now"
+                : "Community friend"}
             </Text>
           </View>
         </View>
@@ -472,7 +509,10 @@ export default function Messages({
                     : 1,
               })}
             >
-              <Avatar profile={thread.friend} />
+              <Avatar
+                profile={thread.friend}
+                activeNow={thread.activeNow === true}
+              />
 
               <View style={{ flex: 1, minWidth: 0 }}>
                 <View

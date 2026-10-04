@@ -28,6 +28,7 @@ export type Conversation = {
   unread: number;
   friendType: FriendType;
   canMessage: boolean;
+  activeNow: boolean;
 };
 export type Presence = {
   fixtureId: string; stadium: string; latitude: number; longitude: number;
