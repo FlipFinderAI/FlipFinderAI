@@ -1,5 +1,11 @@
 import { useEffect, useState } from "react";
-import { Linking, Text, TextInput, View } from "react-native";
+import {
+  Linking,
+  Pressable,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 import { communityRequest } from "@/lib/community/api";
 import type { FriendType, PublicProfile, Relationship } from "@/lib/community/model";
 import { Action, styles } from "./Controls";
@@ -67,22 +73,260 @@ export default function Friends({
  }
 
  function profile(p: PublicProfile) {
-   return <View key={p.id} style={{ gap: 10 }}>
-     <Text style={{ fontWeight: "700" }}>{p.avatar} {p.displayName}</Text>
-     {!!p.friendId && <Text>Friend ID: {p.friendId}</Text>}
-     <Text>{p.gamesAttended} games · {p.groundsVisited.length} grounds</Text>
-     <Text>{p.groundsVisited.join(" · ")}</Text>
-     <Action title={`Block ${p.displayName}`} disabled={busy} onPress={() => void run(async () => {
-       await communityRequest("/block", { target: p.id }); setPeople(list => list.filter(x => x.id !== p.id)); await refresh();
-     })} />
-     <Action title={`Report ${p.displayName}`} disabled={busy} onPress={() => { setReport(p); setReason(""); }} />
-   </View>;
+  const initial =
+   p.displayName.trim().charAt(0).toUpperCase() ||
+   p.avatar ||
+   "?";
+
+  return (
+   <View
+    key={p.id}
+    style={{
+     backgroundColor: "#ffffff",
+     borderRadius: 18,
+     borderWidth: 1,
+     borderColor: "#e7e2d8",
+     padding: 14,
+     gap: 12,
+    }}
+   >
+    <View
+     style={{
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 12,
+     }}
+    >
+     <View
+      style={{
+       width: 52,
+       height: 52,
+       borderRadius: 26,
+       alignItems: "center",
+       justifyContent: "center",
+       backgroundColor: "#eee9dd",
+      }}
+     >
+      <Text
+       style={{
+        fontSize: 21,
+        fontWeight: "900",
+        color: "#17221c",
+       }}
+      >
+       {initial}
+      </Text>
+     </View>
+
+     <View style={{ flex: 1 }}>
+      <Text
+       style={{
+        fontSize: 17,
+        fontWeight: "900",
+        color: "#17221c",
+       }}
+       numberOfLines={1}
+      >
+       {p.displayName}
+      </Text>
+
+      {!!p.friendId && (
+       <Text
+        style={{
+         marginTop: 2,
+         fontSize: 12,
+         color: "#777168",
+        }}
+       >
+        Friend ID {p.friendId}
+       </Text>
+      )}
+     </View>
+    </View>
+
+    <View
+     style={{
+      flexDirection: "row",
+      gap: 8,
+     }}
+    >
+     <View
+      style={{
+       flex: 1,
+       backgroundColor: "#f6f3ec",
+       borderRadius: 12,
+       paddingHorizontal: 12,
+       paddingVertical: 9,
+      }}
+     >
+      <Text
+       style={{
+        fontSize: 17,
+        fontWeight: "900",
+        color: "#17221c",
+       }}
+      >
+       {p.gamesAttended}
+      </Text>
+      <Text
+       style={{
+        marginTop: 1,
+        fontSize: 11,
+        color: "#777168",
+       }}
+      >
+       games
+      </Text>
+     </View>
+
+     <View
+      style={{
+       flex: 1,
+       backgroundColor: "#f6f3ec",
+       borderRadius: 12,
+       paddingHorizontal: 12,
+       paddingVertical: 9,
+      }}
+     >
+      <Text
+       style={{
+        fontSize: 17,
+        fontWeight: "900",
+        color: "#17221c",
+       }}
+      >
+       {p.groundsVisited.length}
+      </Text>
+      <Text
+       style={{
+        marginTop: 1,
+        fontSize: 11,
+        color: "#777168",
+       }}
+      >
+       grounds
+      </Text>
+     </View>
+    </View>
+
+    {p.groundsVisited.length > 0 && (
+     <Text
+      style={{
+       fontSize: 12,
+       lineHeight: 17,
+       color: "#68645c",
+      }}
+      numberOfLines={2}
+     >
+      {p.groundsVisited.join(" · ")}
+     </Text>
+    )}
+
+    <View
+     style={{
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 18,
+      paddingTop: 2,
+     }}
+    >
+     <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`Block ${p.displayName}`}
+      disabled={busy}
+      onPress={() => void run(async () => {
+       await communityRequest("/block", {
+        target: p.id,
+       });
+       setPeople(list =>
+        list.filter(x => x.id !== p.id)
+       );
+       await refresh();
+      })}
+      style={({ pressed }) => ({
+       opacity: busy ? 0.4 : pressed ? 0.55 : 1,
+      })}
+     >
+      <Text
+       style={{
+        fontSize: 12,
+        fontWeight: "700",
+        color: "#777168",
+       }}
+      >
+       Block
+      </Text>
+     </Pressable>
+
+     <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`Report ${p.displayName}`}
+      disabled={busy}
+      onPress={() => {
+       setReport(p);
+       setReason("");
+      }}
+      style={({ pressed }) => ({
+       opacity: busy ? 0.4 : pressed ? 0.55 : 1,
+      })}
+     >
+      <Text
+       style={{
+        fontSize: 12,
+        fontWeight: "700",
+        color: "#9a4c43",
+       }}
+      >
+       Report
+      </Text>
+     </Pressable>
+    </View>
+   </View>
+  );
  }
+
  return <>
-   <Text style={styles.heading}>Supporters and friends</Text>
-   <Text style={styles.copy}>
-   Know another supporter? Search their exact Friend ID or exact Community name.
-   Only supporters with the same favourite club can be found.
+   <View style={{ marginBottom: 4 }}>
+   <Text
+    accessibilityRole="header"
+    style={{
+     fontSize: 30,
+     lineHeight: 36,
+     fontWeight: "900",
+     color: "#17221c",
+    }}
+   >
+    Supporters
+   </Text>
+   <Text
+    style={{
+     marginTop: 2,
+     fontSize: 13,
+     color: "#777168",
+    }}
+   >
+    Find and manage supporters from your club.
+   </Text>
+  </View>
+   <Text
+   style={{
+    marginTop: 8,
+    fontSize: 15,
+    fontWeight: "800",
+    color: "#17221c",
+   }}
+  >
+   Find someone you know
+  </Text>
+  <Text
+   style={{
+    fontSize: 13,
+    lineHeight: 18,
+    color: "#777168",
+   }}
+  >
+   Search their exact Friend ID or Community name. Only supporters
+   with your favourite club can be found.
   </Text>
 
   <TextInput
@@ -132,7 +376,28 @@ export default function Friends({
    </View>
   ))}
 
-  <Text style={styles.heading}>Nearby Supporters</Text>
+  <View style={{ marginTop: 12 }}>
+   <Text
+    style={{
+     fontSize: 20,
+     fontWeight: "900",
+     color: "#17221c",
+    }}
+   >
+    Nearby Supporters
+   </Text>
+   <Text
+    style={{
+     marginTop: 3,
+     fontSize: 13,
+     lineHeight: 18,
+     color: "#777168",
+    }}
+   >
+    Discover eligible supporters from your club who are not already
+    friends or waiting on a request.
+   </Text>
+  </View>
 
   <Action
    title={
@@ -176,7 +441,16 @@ export default function Friends({
     />
    </View>)}
    <Action title="Refresh friends and pending requests" disabled={!enabled || busy} onPress={() => void run(refresh)} />
-   {enabled && <><Text style={styles.heading}>Pending requests</Text>
+   {enabled && <><Text
+   style={{
+    marginTop: 14,
+    fontSize: 20,
+    fontWeight: "900",
+    color: "#17221c",
+   }}
+  >
+   Pending Requests
+  </Text>
    {relationships.filter(r => r.status === "pending").map(r => <View key={r.id} style={{ gap: 10 }}>{profile(r.profile)}
      <Text>
      {r.incoming ? "Incoming request" : "Request sent"} · {friendTypeLabel(r.friendType)}
@@ -188,7 +462,16 @@ export default function Friends({
     />}
      <Action title={r.incoming ? "Decline" : "Cancel request"} disabled={busy} onPress={() => void run(() => relationship(r.id, "decline"))} />
    </View>)}
-   <Text style={styles.heading}>Friends</Text>
+   <Text
+   style={{
+    marginTop: 14,
+    fontSize: 20,
+    fontWeight: "900",
+    color: "#17221c",
+   }}
+  >
+   Friends
+  </Text>
    {relationships.filter(r => r.status === "accepted").map(r => <View key={r.id} style={{ gap: 10 }}>{profile(r.profile)}
     <Text>{friendTypeLabel(r.friendType)}</Text>
      <Action title="Unfriend" disabled={busy} onPress={() => void run(() => relationship(r.id, "unfriend"))} />
