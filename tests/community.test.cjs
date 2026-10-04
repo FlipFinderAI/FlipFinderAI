@@ -1258,7 +1258,7 @@ test('Matchday Experience rejects invalid location and closes when Community is 
   );
 });
 
-test('active now is private to accepted friends and is not location presence', async () => {
+test('active now requires explicit foreground activity and is not location presence', async () => {
   const { member, call, db } = setup();
 
   const a = await member('active-a');
@@ -1270,9 +1270,8 @@ test('active now is private to accepted friends and is not location presence', a
     0
   );
 
-  // Relationship creation itself is already tested elsewhere. Insert an
-  // accepted Full-Time friendship directly here so this test isolates the
-  // privacy and activity behaviour we are adding.
+  // Insert an accepted friendship directly so this test isolates
+  // the activity/privacy contract.
   db.prepare(
     `INSERT INTO community_relationships
       (id,sender,recipient,status,friend_type)
@@ -1285,7 +1284,7 @@ test('active now is private to accepted friends and is not location presence', a
     'full_time'
   );
 
-  // Genuine Community use by B records B as recently active.
+  // Ordinary authenticated Community requests do not mean "online".
   assert.equal(
     (await call('active-b', '/friends')).status,
     200
@@ -1295,16 +1294,26 @@ test('active now is private to accepted friends and is not location presence', a
 
   assert.equal(conversations.status, 200);
   assert.equal(conversations.body.conversations.length, 1);
+  assert.equal(conversations.body.conversations[0].friend.id, b);
   assert.equal(
-    conversations.body.conversations[0].friend.id,
-    b
+    conversations.body.conversations[0].activeNow,
+    false
   );
+
+  // Only the explicit foreground activity endpoint marks B active.
+  const activity = await call('active-b', '/activity', {});
+
+  assert.equal(activity.status, 200);
+  assert.deepEqual(activity.body, { ok: true });
+
+  conversations = await call('active-a', '/conversations');
+
   assert.equal(
     conversations.body.conversations[0].activeNow,
     true
   );
 
-  // Never expose the underlying activity timestamp.
+  // Accepted friends receive only the coarse boolean.
   assert.equal(
     'lastActiveAt' in conversations.body.conversations[0],
     false
@@ -1314,10 +1323,21 @@ test('active now is private to accepted friends and is not location presence', a
     false
   );
 
-  // Age B's private activity beyond the five-minute window.
+  // Friend/profile surfaces must not expose activity state.
+  const relationships =
+    (await call('active-a', '/friends')).body.relationships;
+
+  assert.equal(relationships.length, 1);
+  assert.equal('activeNow' in relationships[0].profile, false);
+  assert.equal('lastActiveAt' in relationships[0].profile, false);
+  assert.equal('last_active_at' in relationships[0].profile, false);
+
+  // Age the private activity outside the five-minute window.
+  const stale = Date.now() - 10 * 60 * 1000;
+
   db.prepare(
     'UPDATE community_activity SET last_active_at=? WHERE member_id=?'
-  ).run(Date.now() - 10 * 60 * 1000, b);
+  ).run(stale, b);
 
   conversations = await call('active-a', '/conversations');
 
@@ -1326,12 +1346,11 @@ test('active now is private to accepted friends and is not location presence', a
     false
   );
 
-  // Location presence is not the source of online status.
-  //
-  // /presence is itself genuine Community use, so after exercising it we
-  // deliberately age the Community activity row again. If conversations
-  // were deriving online state from presence, this would incorrectly become
-  // true.
+  const beforePresence = db.prepare(
+    'SELECT last_active_at FROM community_activity WHERE member_id=?'
+  ).get(b).last_active_at;
+
+  // Matchday GPS/presence is a separate privacy concept.
   assert.equal(
     (await call('active-b', '/presence', {
       fixtureId: fixture.id,
@@ -1340,9 +1359,12 @@ test('active now is private to accepted friends and is not location presence', a
     200
   );
 
-  db.prepare(
-    'UPDATE community_activity SET last_active_at=? WHERE member_id=?'
-  ).run(Date.now() - 10 * 60 * 1000, b);
+  const afterPresence = db.prepare(
+    'SELECT last_active_at FROM community_activity WHERE member_id=?'
+  ).get(b).last_active_at;
+
+  // Presence must not manufacture or refresh online status.
+  assert.equal(afterPresence, beforePresence);
 
   conversations = await call('active-a', '/conversations');
 

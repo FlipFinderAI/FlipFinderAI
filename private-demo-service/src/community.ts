@@ -323,14 +323,19 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
   }
   if (!me.enabled) fail("Enable Community first.", 403);
 
-  await sql(
-    `INSERT INTO community_activity(member_id,last_active_at)
-     VALUES(?,?)
-     ON CONFLICT(member_id) DO UPDATE SET
-       last_active_at=excluded.last_active_at`,
-    me.id,
-    now,
-  ).run();
+  if (path === "/activity" && request.method === "POST") {
+    await sql(
+      `INSERT INTO community_activity(member_id,last_active_at)
+       VALUES(?,?)
+       ON CONFLICT(member_id) DO UPDATE SET
+         last_active_at=excluded.last_active_at`,
+      me.id,
+      now,
+    ).run();
+
+    // Never return the private activity timestamp.
+    return json({ ok: true });
+  }
 
   async function fixtures() {
     if (!env.COMMUNITY_FIXTURES) fail("Verified football data service is not configured.", 503);
