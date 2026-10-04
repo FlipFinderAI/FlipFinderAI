@@ -242,12 +242,9 @@ export default function Messages({
     return (
       <View
         style={{
-          gap: 12,
-          backgroundColor: "#f8f5ec",
-          borderRadius: 18,
+          flex: 1,
+          backgroundColor: "#f4f1e9",
           overflow: "hidden",
-          borderWidth: 1,
-          borderColor: "#ddd6c8",
         }}
       >
         <View
@@ -255,10 +252,11 @@ export default function Messages({
             flexDirection: "row",
             alignItems: "center",
             gap: 12,
-            padding: 14,
+            paddingHorizontal: 14,
+            paddingVertical: 10,
             backgroundColor: "#ffffff",
             borderBottomWidth: 1,
-            borderBottomColor: "#e4ded2",
+            borderBottomColor: "#ece8df",
           }}
         >
           <Pressable
@@ -332,13 +330,18 @@ export default function Messages({
 
         <ScrollView
           style={{
-            minHeight: 260,
-            maxHeight: 430,
+            minHeight: 360,
+            maxHeight: 560,
+            backgroundColor: "#f4f1e9",
           }}
           contentContainerStyle={{
-            padding: 14,
-            gap: 8,
+            flexGrow: 1,
+            justifyContent: messages.length ? "flex-end" : "center",
+            paddingHorizontal: 12,
+            paddingVertical: 16,
+            gap: 7,
           }}
+          keyboardShouldPersistTaps="handled"
           nestedScrollEnabled
         >
           {messages.length === 0 && (
@@ -368,10 +371,8 @@ export default function Messages({
                   borderRadius: 18,
                   paddingHorizontal: 13,
                   paddingVertical: 9,
-                  borderWidth: 1,
-                  borderColor: mine
-                    ? "#c9d9c0"
-                    : "#e1dbcf",
+                  borderWidth: mine ? 0 : 1,
+                  borderColor: "#e1dbcf",
                 }}
               >
                 <Text
@@ -410,10 +411,12 @@ export default function Messages({
             flexDirection: "row",
             alignItems: "flex-end",
             gap: 8,
-            padding: 10,
+            paddingHorizontal: 10,
+            paddingTop: 9,
+            paddingBottom: 11,
             backgroundColor: "#ffffff",
             borderTopWidth: 1,
-            borderTopColor: "#e4ded2",
+            borderTopColor: "#ece8df",
           }}
         >
           <TextInput
@@ -441,12 +444,11 @@ export default function Messages({
             disabled={busy || !body.trim()}
             onPress={() => void run(send)}
             style={({ pressed }) => ({
-              minWidth: 58,
+              width: 44,
               height: 44,
               borderRadius: 22,
               alignItems: "center",
               justifyContent: "center",
-              paddingHorizontal: 14,
               backgroundColor:
                 busy || !body.trim()
                   ? "#d8d4cb"
@@ -460,10 +462,12 @@ export default function Messages({
                   busy || !body.trim()
                     ? "#777168"
                     : "#ffffff",
+                fontSize: 22,
+                lineHeight: 24,
                 fontWeight: "900",
               }}
             >
-              Send
+              ↑
             </Text>
           </Pressable>
         </View>
