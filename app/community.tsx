@@ -3,7 +3,7 @@ import Messages from "@/components/community/Messages";
 import Matchday from "@/components/community/Matchday";
 import { useEffect, useState } from "react";
 import { router, useLocalSearchParams } from "expo-router";
-import { Alert, AppState, Image, ScrollView, Switch, Text, TextInput, View } from "react-native";
+import { Alert, AppState, Image, Pressable, ScrollView, Switch, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as ImagePicker from "expo-image-picker";
@@ -72,6 +72,9 @@ export default function CommunityScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [authMode, setAuthMode] = useState<"signin" | "create">("signin");
+  const [communityTab, setCommunityTab] =
+    useState<"chats" | "supporters" | "map">("chats");
+  const [showCommunitySettings, setShowCommunitySettings] = useState(false);
   const [deletePassword, setDeletePassword] = useState("");
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [unlocked, setUnlocked] = useState(false);
@@ -983,10 +986,245 @@ export default function CommunityScreen() {
     </SafeAreaView>;
   }
 
+  if (active && !showCommunitySettings) {
+    const tabColour = colour || "#17221c";
+    const avatarLetter =
+      state.profile?.displayName?.trim().slice(0, 1).toUpperCase() ||
+      name.trim().slice(0, 1).toUpperCase() ||
+      "?";
+
+    const Tab = ({
+      id,
+      title,
+    }: {
+      id: "chats" | "supporters" | "map";
+      title: string;
+    }) => {
+      const selected = communityTab === id;
+
+      return (
+        <Pressable
+          accessibilityRole="tab"
+          accessibilityState={{ selected }}
+          onPress={() => setCommunityTab(id)}
+          style={{
+            flex: 1,
+            minHeight: 44,
+            alignItems: "center",
+            justifyContent: "center",
+            borderBottomWidth: 3,
+            borderBottomColor: selected ? tabColour : "transparent",
+          }}
+        >
+          <Text
+            style={{
+              color: selected ? tabColour : "#6f756f",
+              fontWeight: selected ? "900" : "700",
+              fontSize: 15,
+            }}
+          >
+            {title}
+          </Text>
+        </Pressable>
+      );
+    };
+
+    return (
+      <SafeAreaView
+        style={{
+          flex: 1,
+          backgroundColor: "#f8f5ec",
+        }}
+      >
+        <View
+          style={{
+            paddingHorizontal: 16,
+            paddingTop: 8,
+            paddingBottom: 4,
+            borderBottomWidth: 1,
+            borderBottomColor: "#e3ded2",
+            backgroundColor: "#f8f5ec",
+          }}
+        >
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 12,
+            }}
+          >
+            {avatarPhoto ? (
+              <Image
+                source={{ uri: avatarPhoto }}
+                accessibilityLabel="Your Community avatar"
+                style={{
+                  width: 46,
+                  height: 46,
+                  borderRadius: 23,
+                  borderWidth: 2,
+                  borderColor: tabColour,
+                }}
+              />
+            ) : (
+              <View
+                accessibilityLabel="Your Community avatar"
+                style={{
+                  width: 46,
+                  height: 46,
+                  borderRadius: 23,
+                  borderWidth: 2,
+                  borderColor: tabColour,
+                  backgroundColor: "#eee9dd",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Text
+                  style={{
+                    color: tabColour,
+                    fontSize: 19,
+                    fontWeight: "900",
+                  }}
+                >
+                  {avatarLetter}
+                </Text>
+              </View>
+            )}
+
+            <View style={{ flex: 1 }}>
+              <Text
+                accessibilityRole="header"
+                style={{
+                  color: tabColour,
+                  fontSize: 24,
+                  fontWeight: "900",
+                }}
+              >
+                Community
+              </Text>
+
+              <Text
+                numberOfLines={1}
+                style={{
+                  color: "#687069",
+                  fontSize: 13,
+                  marginTop: 1,
+                }}
+              >
+                {state.profile?.displayName || name} · {clubName}
+              </Text>
+            </View>
+
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Community settings"
+              onPress={() => setShowCommunitySettings(true)}
+              style={({ pressed }) => ({
+                minWidth: 44,
+                minHeight: 44,
+                borderRadius: 22,
+                alignItems: "center",
+                justifyContent: "center",
+                borderWidth: 1,
+                borderColor: "#d8d3c7",
+                backgroundColor: pressed ? "#ebe6da" : "#ffffff",
+              })}
+            >
+              <Text
+                style={{
+                  color: tabColour,
+                  fontSize: 22,
+                  fontWeight: "900",
+                }}
+              >
+                ⚙
+              </Text>
+            </Pressable>
+          </View>
+
+          <View
+            accessibilityRole="tablist"
+            style={{
+              flexDirection: "row",
+              marginTop: 10,
+            }}
+          >
+            <Tab id="chats" title="Chats" />
+            <Tab id="supporters" title="Supporters" />
+            <Tab id="map" title="Map" />
+          </View>
+        </View>
+
+        <View style={{ flex: 1 }}>
+          {communityTab === "chats" && (
+            <Messages
+              enabled={active}
+              busy={busy}
+              run={run}
+            />
+          )}
+
+          {communityTab === "supporters" && (
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={{
+                padding: 16,
+                paddingBottom: 36,
+                gap: 12,
+              }}
+            >
+              <Friends
+                enabled={active}
+                busy={busy}
+                run={run}
+                experienceActive={openedFromMatchdayExperience}
+              />
+            </ScrollView>
+          )}
+
+          {communityTab === "map" && (
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={{
+                padding: 16,
+                paddingBottom: 36,
+                gap: 12,
+              }}
+            >
+              <Matchday
+                enabled={active && state.preferences.locationVisible}
+                clubId={clubId}
+                busy={busy}
+                run={run}
+              />
+            </ScrollView>
+          )}
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return <SafeAreaView style={{ flex: 1, backgroundColor: "#f8f5ec" }}>
     <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 20, gap: 14 }}>
-      <Action title="Back to Ticket Frame" onPress={() => router.back()} colour={colour} />
-      <Text accessibilityRole="header" style={[styles.title, { color: colour || "#17221c" }]}>COMMUNITY</Text>
+      {active && showCommunitySettings ? (
+        <Action
+          title="Back to Community"
+          onPress={() => setShowCommunitySettings(false)}
+          colour={colour}
+        />
+      ) : (
+        <Action
+          title="Back to Ticket Frame"
+          onPress={() => router.back()}
+          colour={colour}
+        />
+      )}
+      <Text
+        accessibilityRole="header"
+        style={[styles.title, { color: colour || "#17221c" }]}
+      >
+        {active && showCommunitySettings ? "COMMUNITY SETTINGS" : "COMMUNITY"}
+      </Text>
       <Text>{clubName || "Choose a favourite club"} supporters</Text>
       {openedFromMatchdayExperience ? (
         <View
@@ -1281,14 +1519,7 @@ export default function CommunityScreen() {
       {!!state.safetyId && (
         <Text style={styles.copy}>Community Safety ID: {state.safetyId}</Text>
       )}
-      <Matchday enabled={active && state.preferences.locationVisible} clubId={clubId} busy={busy} run={run} />
-      <Friends
-        enabled={active}
-        busy={busy}
-        run={run}
-        experienceActive={openedFromMatchdayExperience}
-      />
-      <Messages enabled={active} busy={busy} run={run} />
+      {/* Social Community lives in the messaging-style Chats / Supporters / Map home. */}
       {/* COMMUNITY_FEATURES */}
       {!!status && <Text accessibilityLiveRegion="polite">{status}</Text>}
     </ScrollView>
