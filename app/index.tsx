@@ -309,6 +309,7 @@ import {
 } from "@/lib/historyArchive";
 import { FOOTBALL_GROUNDS, type FootballGround } from "@/lib/grounds";
 import { TFD_CURRENT_GROUNDS } from "@/lib/tfdCurrentGrounds.generated";
+import { VERIFIED_ADDITIONAL_GROUNDS } from "@/lib/verifiedAdditionalGrounds";
 import * as Location from "expo-location";
 import * as Notifications from "expo-notifications";
 import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
@@ -20013,6 +20014,7 @@ const manualCompetitionFixtures = draftMatch.competition
           (ground) => ground.league !== "Historical",
         ),
         ...TFD_CURRENT_GROUNDS,
+        ...VERIFIED_ADDITIONAL_GROUNDS,
       ]
         .reduce(
           (stadiums, ground) => {

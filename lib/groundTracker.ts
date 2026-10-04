@@ -4,12 +4,14 @@ import { distanceMiles } from "./geoDistance";
 import { FOOTBALL_GROUNDS, type FootballGround } from "./grounds";
 
 import { TFD_CURRENT_GROUNDS } from "./tfdCurrentGrounds.generated";
+import { VERIFIED_ADDITIONAL_GROUNDS } from "./verifiedAdditionalGrounds";
 export const TRACKER_CURRENT_GROUNDS: FootballGround[] = Array.from(
   [
     ...FOOTBALL_GROUNDS.filter(
       (ground) => ground.league !== "Historical",
     ),
     ...TFD_CURRENT_GROUNDS,
+    ...VERIFIED_ADDITIONAL_GROUNDS,
   ].reduce((grounds, ground) => {
     const key = [
       ground.stadium.trim().toLowerCase(),
