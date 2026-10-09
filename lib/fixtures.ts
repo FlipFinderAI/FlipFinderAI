@@ -334,6 +334,10 @@ function sortFixtures(rows: FixtureRow[]): FixtureRow[] {
 }
 
 function withResolvedVenue(row: FixtureRow): FixtureRow {
+  if (isVenueEvidenceConflicted(row.id)) {
+    return { ...row, venue: null };
+  }
+
   const venue =
     reconciledVenueForFixture(row.id) ??
     (isVenueEvidenceConflicted(row.id) ? null : venueForFixture(row));

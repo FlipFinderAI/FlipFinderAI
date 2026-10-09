@@ -59,6 +59,10 @@ const historicalPackReadPromises = new Map<
 >();
 
 function withResolvedVenue(fixture: FixtureRow): FixtureRow {
+  if (isVenueEvidenceConflicted(fixture.id)) {
+    return { ...fixture, venue: null };
+  }
+
   const venue =
     reconciledVenueForFixture(fixture.id) ??
     (isVenueEvidenceConflicted(fixture.id) ? null : venueForFixture(fixture));
