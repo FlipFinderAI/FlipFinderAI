@@ -4,7 +4,7 @@ import * as SQLite from "expo-sqlite";
 
 import type { FixtureRow } from "./fixtures";
 import { venueForFixture } from "./clubGroundMatching";
-import { reconciledVenueForFixture } from "./reconciledStadiums";
+import { reconciledVenueForFixture, isVenueEvidenceConflicted } from "./reconciledStadiums";
 import { clubNamesMatch } from "./ticketText";
 
 const HISTORICAL_SOURCE_VERSION = "fe14b8e3027c953271e9";
@@ -61,7 +61,7 @@ const historicalPackReadPromises = new Map<
 function withResolvedVenue(fixture: FixtureRow): FixtureRow {
   const venue =
     reconciledVenueForFixture(fixture.id) ??
-    venueForFixture(fixture);
+    (isVenueEvidenceConflicted(fixture.id) ? null : venueForFixture(fixture));
   return venue === fixture.venue ? fixture : { ...fixture, venue };
 }
 
