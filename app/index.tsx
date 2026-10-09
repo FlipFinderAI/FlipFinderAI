@@ -4439,30 +4439,6 @@ confidence: ${recognition.confidence}%`,
     }
   }
 
-  async function enqueueRecognition(list: SeasonTicket[]) {
-    for (const ticket of list) {
-      await recogniseAndQueue(ticket);
-    }
-  }
-
-  const incompleteRecognitionQueuedRef = useRef(false);
-  useEffect(() => {
-    if (!storageReady || incompleteRecognitionQueuedRef.current) return;
-    const incomplete = tickets.filter(
-      (ticket) =>
-        Boolean(currentTicketUri(ticket.uri)) &&
-        !isNonMatchTicketType(ticket.ticketType) &&
-        !ticket.homeTeam?.trim() &&
-        !ticket.awayTeam?.trim(),
-    );
-    if (!incomplete.length) return;
-    incompleteRecognitionQueuedRef.current = true;
-    void enqueueRecognition(incomplete);
-    // Run once after persisted tickets have loaded; queue processing writes
-    // the recognised details back into the same ticket records.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [storageReady, tickets]);
-
   function applyRecognisedMatch(
     ticketId: string,
     data: {
