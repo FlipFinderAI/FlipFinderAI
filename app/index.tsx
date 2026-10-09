@@ -112,6 +112,7 @@ import {
   findGroundForClub,
   footballGroundForName,
 } from "@/lib/clubGroundMatching";
+import { verifiedCoordinatesForFixture } from "@/lib/verifiedFixtureStadiumCoordinates";
 import { distanceMiles } from "@/lib/geoDistance";
 import {
   frameAccent,
@@ -4581,7 +4582,16 @@ confidence: ${recognition.confidence}%`,
   ) {
     if (!photoMemoriesEnabled || !record.matchDate || !record.ground) return;
 
-    const ground = footballGroundForName(record.ground);
+    const namedGround = footballGroundForName(record.ground);
+    const verifiedLocation = verifiedCoordinatesForFixture(record.fixtureId);
+    const ground = verifiedLocation
+      ? {
+          ...(namedGround ?? {}),
+          stadium: record.ground,
+          latitude: verifiedLocation.latitude,
+          longitude: verifiedLocation.longitude,
+        }
+      : namedGround;
     if (!ground) return;
 
     try {
@@ -7872,6 +7882,23 @@ confidence: ${recognition.confidence}%`,
       // Resolve the actual playing ground for Auto Add. A neutral FA Cup
       // semi-final/final must never fall back to the home club's stadium.
       const autoAddGroundForFixture = (fixture: FixtureRow) => {
+          const verifiedLocation = verifiedCoordinatesForFixture(fixture.id);
+          if (verifiedLocation) {
+            const existingGround = fixture.venue
+              ? footballGroundForName(fixture.venue)
+              : undefined;
+
+            return {
+              id: verifiedLocation.stadiumId,
+              stadium: fixture.venue ?? existingGround?.stadium ?? "Verified fixture stadium",
+              club: existingGround?.club ?? fixture.homeName,
+              league: existingGround?.league ?? "Historical",
+              address: existingGround?.address ?? "",
+              latitude: verifiedLocation.latitude,
+              longitude: verifiedLocation.longitude,
+            };
+          }
+
         const competition = normaliseFixtureText(fixture.competition ?? "");
         const round = normaliseFixtureText(fixture.round ?? "");
 
@@ -10711,9 +10738,18 @@ const handleTileDrop = (id: string, tx: number, ty: number) => {
     for (const record of attendanceHistory) {
       if (!record.matchDate) continue;
       const homeClub = record.homeAway === "away" ? record.opponent : record.club;
-      const ground =
+      const namedGround =
         (record.ground ? footballGroundForName(record.ground) : undefined) ??
         findGroundForClub(homeClub, record.matchDate);
+      const verifiedLocation = verifiedCoordinatesForFixture(record.fixtureId);
+      const ground = verifiedLocation
+        ? {
+            ...(namedGround ?? {}),
+            stadium: record.ground ?? namedGround?.stadium ?? "Verified stadium",
+            latitude: verifiedLocation.latitude,
+            longitude: verifiedLocation.longitude,
+          }
+        : namedGround;
       if (ground) candidates.set(record.id, {
         descriptor: { recordId: record.id, matchDate: record.matchDate, ground },
         stadiumName: ground.stadium,
@@ -14970,7 +15006,16 @@ Choose one team. Its colours automatically control the Club Colours frame style.
         return;
       }
 
-      const ground = footballGroundForName(record.ground);
+      const namedGround = footballGroundForName(record.ground);
+      const verifiedLocation = verifiedCoordinatesForFixture(record.fixtureId);
+      const ground = verifiedLocation
+        ? {
+            ...(namedGround ?? {}),
+            stadium: record.ground,
+            latitude: verifiedLocation.latitude,
+            longitude: verifiedLocation.longitude,
+          }
+        : namedGround;
       if (!ground) {
         Alert.alert(
           "Stadium location unavailable",
