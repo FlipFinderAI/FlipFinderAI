@@ -1,4 +1,5 @@
 import coordinates from "../data/verifiedFixtureStadiumCoordinates.json";
+import supportedCoordinates from "../data/supportedFixtureStadiumCoordinates.json";
 
 type StadiumCoordinates = {
   stadiumId: string;
@@ -7,6 +8,8 @@ type StadiumCoordinates = {
 };
 
 const fixtureCoordinates = coordinates as Record<string, StadiumCoordinates>;
+const supportedFixtureCoordinates =
+  supportedCoordinates as Record<string, StadiumCoordinates>;
 
 /**
  * Return verified physical stadium coordinates for a fixture.
@@ -19,7 +22,9 @@ export function verifiedCoordinatesForFixture(
 ): StadiumCoordinates | null {
   if (!fixtureId) return null;
 
-  const location = fixtureCoordinates[fixtureId];
+  const location =
+    fixtureCoordinates[fixtureId] ??
+    supportedFixtureCoordinates[fixtureId];
   if (!location) return null;
 
   if (
