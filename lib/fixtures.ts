@@ -1,3 +1,4 @@
+import { reconciledVenueForFixture } from "./reconciledStadiums";
 import matchDatabaseJson from "../data/runtimeMatchDatabase.json";
 import { seasonForDate } from "./seasons";
 import { clubNamesMatch, normaliseFixtureText } from "./ticketText";
@@ -333,7 +334,9 @@ function sortFixtures(rows: FixtureRow[]): FixtureRow[] {
 }
 
 function withResolvedVenue(row: FixtureRow): FixtureRow {
-  const venue = venueForFixture(row);
+  const venue =
+    reconciledVenueForFixture(row.id) ??
+    venueForFixture(row);
   return venue === row.venue ? row : { ...row, venue };
 }
 

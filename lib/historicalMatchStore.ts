@@ -4,12 +4,14 @@ import * as SQLite from "expo-sqlite";
 
 import type { FixtureRow } from "./fixtures";
 import { venueForFixture } from "./clubGroundMatching";
+import { reconciledVenueForFixture } from "./reconciledStadiums";
 import { clubNamesMatch } from "./ticketText";
 
 const HISTORICAL_SOURCE_VERSION = "fe14b8e3027c953271e9";
 const MODERN_HISTORICAL_SOURCE_VERSION = "fe14b8e3027c953271e9";
 
 export const HISTORICAL_PACK_ORDER = [
+    "2024-2026",
     "2015-2023",
   "2007-2014",
 "2000-2006",
@@ -32,6 +34,7 @@ type HistoricalPack = {
 };
 
 const PACK_ASSET_PATHS: Record<HistoricalPackId, string> = {
+  "2024-2026": "../data/history-packs/2024-2026.tfdpack",
   "2015-2023": "../data/history-packs/2015-2023.tfdpack",
   "2007-2014": "../data/history-packs/2007-2014.tfdpack",
   "2000-2006": "../data/history-packs/2000-2006.tfdpack",
@@ -56,7 +59,9 @@ const historicalPackReadPromises = new Map<
 >();
 
 function withResolvedVenue(fixture: FixtureRow): FixtureRow {
-  const venue = venueForFixture(fixture);
+  const venue =
+    reconciledVenueForFixture(fixture.id) ??
+    venueForFixture(fixture);
   return venue === fixture.venue ? fixture : { ...fixture, venue };
 }
 
@@ -72,7 +77,8 @@ function seasonStart(season: string): number | null {
 function packForSeason(season: string): HistoricalPackId | null {
   const year = seasonStart(season);
 
-  if (year == null || year >= 2024) return null;
+  if (year == null || year >= 2027) return null;
+  if (year >= 2024) return "2024-2026";
   if (year >= 2015) return "2015-2023";
   if (year >= 2007) return "2007-2014";
   if (year >= 2000) return "2000-2006";
@@ -123,6 +129,7 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
 function sourceVersionForPack(
   packId: HistoricalPackId,
 ): string {
+  if (packId === "2024-2026") return "6fe396250a26deb1dad8";
   return packId === "2007-2014" || packId === "2015-2023"
     ? MODERN_HISTORICAL_SOURCE_VERSION
     : HISTORICAL_SOURCE_VERSION;
@@ -154,6 +161,9 @@ async function readPack(
   const promise = (async () => {
     const assetModule = (() => {
       switch (packId) {
+          case "2024-2026":
+            return require("../data/history-packs/2024-2026.tfdpack");
+
         case "2015-2023":
           return require("../data/history-packs/2015-2023.tfdpack");
         case "2007-2014":
