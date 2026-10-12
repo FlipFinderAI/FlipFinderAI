@@ -7,6 +7,25 @@ import type { ImageSourcePropType } from "react-native";
  * Metro requires literal require() paths.
  */
 const STADIUM_PHOTOS: Record<string, ImageSourcePropType> = {
+  "st-andrews": require("../assets/stadiums/optimised/st-andrews.webp"),
+  "ewood-park": require("../assets/stadiums/optimised/ewood-park.webp"),
+  "university-of-bolton": require("../assets/stadiums/optimised/university-of-bolton.webp"),
+  "turf-moor": require("../assets/stadiums/optimised/turf-moor.webp"),
+  "cardiff-city-stadium": require("../assets/stadiums/optimised/cardiff-city-stadium.webp"),
+  "the-valley": require("../assets/stadiums/optimised/the-valley.webp"),
+  "pride-park": require("../assets/stadiums/optimised/pride-park.webp"),
+  "riverside": require("../assets/stadiums/optimised/riverside.webp"),
+  "the-den": require("../assets/stadiums/optimised/the-den.webp"),
+  "carrow-road": require("../assets/stadiums/optimised/carrow-road.webp"),
+  "deepdale": require("../assets/stadiums/optimised/deepdale.webp"),
+  "loftus-road": require("../assets/stadiums/optimised/loftus-road.webp"),
+  "hillsborough": require("../assets/stadiums/optimised/hillsborough.webp"),
+  "st-marys": require("../assets/stadiums/optimised/st-marys.webp"),
+  "bet365": require("../assets/stadiums/optimised/bet365.webp"),
+  "the-hawthorns": require("../assets/stadiums/optimised/the-hawthorns.webp"),
+  "london-stadium": require("../assets/stadiums/optimised/london-stadium.webp"),
+  "molineux": require("../assets/stadiums/optimised/molineux.webp"),
+
   "emirates": require("../assets/stadiums/optimised/emirates.webp"),
   "villa-park": require("../assets/stadiums/optimised/villa-park.webp"),
   "gtech": require("../assets/stadiums/optimised/gtech.webp"),

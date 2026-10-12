@@ -9,6 +9,25 @@ export function homeStadiumForClub(
   // Prefer verified current grounds with locally approved stadium photographs.
   // This also avoids historical/alternative IDs such as Goodison Park.
   const photographedGroundIds = new Set([
+    "st-andrews",
+    "ewood-park",
+    "university-of-bolton",
+    "turf-moor",
+    "cardiff-city-stadium",
+    "the-valley",
+    "pride-park",
+    "riverside",
+    "the-den",
+    "carrow-road",
+    "deepdale",
+    "loftus-road",
+    "hillsborough",
+    "st-marys",
+    "bet365",
+    "the-hawthorns",
+    "london-stadium",
+    "molineux",
+
     "emirates", "villa-park", "gtech", "amex",
     "stamford-bridge", "hill-dickinson", "craven-cottage",
     "mkm-stadium", "portman-road", "anfield", "etihad",
