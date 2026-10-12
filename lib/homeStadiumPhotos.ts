@@ -8,6 +8,7 @@ import type { ImageSourcePropType } from "react-native";
  */
 const STADIUM_PHOTOS: Record<string, ImageSourcePropType> = {
   "kassam": require("../assets/stadiums/league 1/kassam.webp"),
+  "current-the-kassam-stadium": require("../assets/stadiums/league 1/kassam.webp"),
   "home-park": require("../assets/stadiums/league 1/home-park.webp"),
   "peninsula-stadium": require("../assets/stadiums/league 1/peninsula-stadium.webp"),
   "moss-lane": require("../assets/stadiums/league 1/moss-lane.webp"),
