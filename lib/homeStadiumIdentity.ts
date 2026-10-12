@@ -9,6 +9,10 @@ export function homeStadiumForClub(
   // Prefer verified current grounds with locally approved stadium photographs.
   // This also avoids historical/alternative IDs such as Goodison Park.
   const photographedGroundIds = new Set([
+    "liberty-stadium",
+    "vicarage-road",
+    "fratton-park",
+
     "st-andrews",
     "ewood-park",
     "university-of-bolton",
