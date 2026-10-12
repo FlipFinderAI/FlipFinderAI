@@ -1,4 +1,5 @@
-import { StyleSheet, Text, View } from "react-native";
+import { Image, StyleSheet, Text, View } from "react-native";
+import { fixtureClubBadgeForName } from "@/lib/fixtureClubBadges";
 
 type FavouriteClubBadgeProps = {
   name: string;
@@ -15,14 +16,25 @@ export default function FavouriteClubBadge({
   borderColor,
   textColor,
 }: FavouriteClubBadgeProps) {
+  const badge = fixtureClubBadgeForName(name);
+
   return (
     <View
       style={[styles.badge, { backgroundColor, borderColor }]}
-      accessibilityLabel={`${name} initials`}
+      accessibilityLabel={badge ? `${name} club badge` : `${name} initials`}
     >
-      <Text style={[styles.fallback, { color: textColor }]}>
-        {initials}
-      </Text>
+      {badge ? (
+        <Image
+          source={badge}
+          resizeMode="contain"
+          style={styles.image}
+          accessible={false}
+        />
+      ) : (
+        <Text style={[styles.fallback, { color: textColor }]}>
+          {initials}
+        </Text>
+      )}
     </View>
   );
 }
@@ -35,6 +47,11 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     alignItems: "center",
     justifyContent: "center",
+    overflow: "hidden",
+  },
+  image: {
+    width: "85%",
+    height: "85%",
   },
   fallback: {
     fontSize: 17,
