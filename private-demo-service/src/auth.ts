@@ -575,6 +575,11 @@ button:disabled { opacity: .5; }
 <h2>Verify your email</h2>
 <p id="message">Press the button to confirm your email address.</p>
 <button id="verify">Verify email</button>
+<p id="return-container" style="display:none">
+  <a id="return-link" href="ticketframe:///community">
+    Open Ticket Frame
+  </a>
+</p>
 </main>
 <script>
 const button = document.getElementById("verify");
@@ -610,8 +615,15 @@ button.addEventListener("click", async () => {
     }
 
     message.textContent =
-      "Email verified successfully. You can return to Ticket Frame Community.";
+      "Email verified successfully. Opening Ticket Frame…";
     button.textContent = "Verified ✓";
+
+    document.getElementById("return-container").style.display = "block";
+
+    // Attempt to reopen Ticket Frame after verification.
+    setTimeout(() => {
+      window.location.href = "ticketframe:///community";
+    }, 900);
   } catch {
     message.textContent =
       "This verification link is invalid or expired. Request another email in Ticket Frame Community.";
