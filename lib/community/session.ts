@@ -1,6 +1,7 @@
 import * as SecureStore from "expo-secure-store";
 
 const SESSION_KEY = "ticket-frame.community-session.v1";
+const ACCOUNT_KEY = "ticket-frame.community-device-account.v1";
 
 export type CommunitySession = {
   token: string;
@@ -58,4 +59,33 @@ export async function saveCommunitySession(
 
 export async function clearCommunitySession(): Promise<void> {
   await SecureStore.deleteItemAsync(SESSION_KEY, OPTIONS);
+}
+
+
+export async function getRememberedCommunityAccount(): Promise<string | null> {
+  try {
+    return await SecureStore.getItemAsync(ACCOUNT_KEY, OPTIONS);
+  } catch {
+    return null;
+  }
+}
+
+export async function rememberCommunityAccount(email: string): Promise<void> {
+  const existing = await getRememberedCommunityAccount();
+
+  if (existing && existing.toLowerCase() !== email.trim().toLowerCase()) {
+    throw new Error(
+      "A different Community account is already registered on this device.",
+    );
+  }
+
+  await SecureStore.setItemAsync(
+    ACCOUNT_KEY,
+    email.trim().toLowerCase(),
+    OPTIONS,
+  );
+}
+
+export async function clearRememberedCommunityAccount(): Promise<void> {
+  await SecureStore.deleteItemAsync(ACCOUNT_KEY, OPTIONS);
 }
