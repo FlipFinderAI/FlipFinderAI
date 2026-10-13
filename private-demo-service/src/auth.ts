@@ -24,6 +24,7 @@ export type CommunityAuthEnv = {
   COMMUNITY_EMAIL?: {
     fetch(request: Request): Promise<Response>;
   };
+  RESEND_API_KEY?: string;
 };
 
 type Account = {
@@ -87,7 +88,7 @@ function normalizeEmail(value: unknown) {
 function validPassword(value: unknown): value is string {
   return (
     typeof value === "string" &&
-    value.length >= 12 &&
+    value.length >= 6 &&
     value.length <= 128
   );
 }
@@ -360,7 +361,7 @@ async function deliverAccountToken(
   email: string,
   purpose: AccountTokenPurpose,
 ) {
-  if (!env.COMMUNITY_EMAIL) return false;
+  if (!env.COMMUNITY_EMAIL && !env.RESEND_API_KEY) return false;
 
   const token = b64url(randomBytes(32));
   const tokenHash = sha256(token);
@@ -371,31 +372,48 @@ async function deliverAccountToken(
       ? VERIFY_EMAIL_MS
       : PASSWORD_RESET_MS);
 
-  await env.DB.batch([
-    env.DB.prepare(
-      `UPDATE community_account_tokens
-       SET used_at=?
-       WHERE account_id=?
-         AND purpose=?
-         AND used_at IS NULL`,
-    ).bind(now, accountId, purpose),
-    env.DB.prepare(
-      `INSERT INTO community_account_tokens(
-        id,account_id,purpose,token_hash,
-        created_at,expires_at,used_at
-      ) VALUES(?,?,?,?,?,?,NULL)`,
-    ).bind(
+  await env.DB.prepare(
+    `INSERT INTO community_account_tokens(
+      id,account_id,purpose,token_hash,
+      created_at,expires_at,used_at
+    ) VALUES(?,?,?,?,?,?,NULL)`,
+  )
+    .bind(
       crypto.randomUUID(),
       accountId,
       purpose,
       tokenHash,
       now,
       expiresAt,
-    ),
-  ]);
+    )
+    .run();
 
   try {
-    const response = await env.COMMUNITY_EMAIL.fetch(
+    if (purpose === "password-reset" && !env.COMMUNITY_EMAIL) {
+      return false;
+    }
+
+    const response = env.RESEND_API_KEY && purpose === "verify-email"
+      ? await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${env.RESEND_API_KEY}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            from: "Ticket Frame Community <verify@handytize.co.uk>",
+            to: [email],
+            subject: "Verify your Ticket Frame Community account",
+            text: [
+              "Verify your Ticket Frame Community email:",
+              "",
+              `https://ticket-frame-private-demo.ticket-frame-community.workers.dev/api/community/auth/verification/page#token=${encodeURIComponent(token)}`,
+              "",
+              "This link expires in 24 hours.",
+            ].join("\n"),
+          }),
+        })
+      : await env.COMMUNITY_EMAIL!.fetch(
       new Request(
         "https:" + "//email.internal/send",
         {
@@ -413,7 +431,11 @@ async function deliverAccountToken(
       ),
     );
 
-    if (response.ok) return true;
+    if (response.ok) {
+      // A successfully accepted email must retain a usable token.
+      // Older tokens expire naturally, avoiding concurrent-send races.
+      return true;
+    }
   } catch {
     // Delivery failure must never expose the raw token.
   }
@@ -505,6 +527,113 @@ export async function communityAuthFetch(
       "",
     );
 
+
+    if (
+      path === "/verification/page" &&
+      request.method === "GET"
+    ) {
+      const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Ticket Frame Community — Verify email</title>
+<style>
+body {
+  margin: 0;
+  background: #f6f4ec;
+  color: #173c2b;
+  font-family: system-ui, sans-serif;
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+}
+main {
+  background: white;
+  border-radius: 18px;
+  padding: 32px;
+  max-width: 420px;
+  margin: 20px;
+  text-align: center;
+}
+button {
+  background: #174a38;
+  color: white;
+  border: 0;
+  border-radius: 10px;
+  padding: 15px 28px;
+  font-weight: bold;
+  cursor: pointer;
+}
+button:disabled { opacity: .5; }
+</style>
+</head>
+<body>
+<main>
+<h1>Ticket Frame Community</h1>
+<h2>Verify your email</h2>
+<p id="message">Press the button to confirm your email address.</p>
+<button id="verify">Verify email</button>
+</main>
+<script>
+const button = document.getElementById("verify");
+const message = document.getElementById("message");
+const params = new URLSearchParams(
+  location.hash.slice(1) || location.search.slice(1)
+);
+const token = params.get("token");
+history.replaceState(null, "", location.pathname);
+
+if (!token) {
+  button.disabled = true;
+  message.textContent = "This verification link is invalid.";
+}
+
+button.addEventListener("click", async () => {
+  button.disabled = true;
+  message.textContent = "Verifying your email…";
+
+  try {
+    const response = await fetch(
+      "/api/community/auth/verification/confirm",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token }),
+        credentials: "omit"
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error("Verification failed");
+    }
+
+    message.textContent =
+      "Email verified successfully. You can return to Ticket Frame Community.";
+    button.textContent = "Verified ✓";
+  } catch {
+    message.textContent =
+      "This verification link is invalid or expired. Request another email in Ticket Frame Community.";
+  }
+});
+</script>
+</body>
+</html>`;
+
+      return new Response(html, {
+        status: 200,
+        headers: {
+          "content-type": "text/html; charset=utf-8",
+          "cache-control": "no-store",
+          "referrer-policy": "no-referrer",
+          "x-content-type-options": "nosniff",
+          "content-security-policy":
+            "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+        },
+      });
+    }
+
     if (path === "/signup" && request.method === "POST") {
       const raw = await request.text();
 
@@ -533,7 +662,7 @@ export async function communityAuthFetch(
         return json(
           {
             error:
-              "Use a password between 12 and 128 characters.",
+              "Use a password between 6 and 128 characters.",
           },
           400,
         );
@@ -576,8 +705,24 @@ export async function communityAuthFetch(
 
       const session = await issueSession(env, id);
 
+      // Attempt verification automatically after successful registration.
+      // Email delivery failure must not prevent account creation.
+      let verificationEmailSent = false;
+
+      try {
+        verificationEmailSent = await deliverAccountToken(
+          env,
+          id,
+          email,
+          "verify-email",
+        );
+      } catch {
+        // Account remains valid; verification can be requested again.
+      }
+
       return json(
         {
+          verificationEmailSent,
           token: session.token,
           expiresAt: session.expiresAt,
           email,
@@ -704,26 +849,60 @@ export async function communityAuthFetch(
         });
       }
 
+      // Enforce a server-side resend cooldown.
+      const latestVerification = await env.DB.prepare(
+        `SELECT created_at
+         FROM community_account_tokens
+         WHERE account_id=?
+           AND purpose='verify-email'
+           AND used_at IS NULL
+         ORDER BY created_at DESC
+         LIMIT 1`,
+      )
+        .bind(account.id)
+        .first<{ created_at: number }>();
+
       if (
-        await allowAuthAction(
-          env,
-          "verify-email",
-          account.email_normalized,
-        )
+        latestVerification &&
+        Date.now() - latestVerification.created_at < 60_000
       ) {
-        await deliverAccountToken(
-          env,
-          account.id,
-          account.email_normalized,
-          "verify-email",
+        return json(
+          { error: "Please wait 60 seconds before requesting another verification email." },
+          429,
+        );
+      }
+
+      const allowed = await allowAuthAction(
+        env,
+        "verify-email",
+        account.email_normalized,
+      );
+
+      if (!allowed) {
+        return json(
+          { error: "Too many verification requests. Please try again later." },
+          429,
+        );
+      }
+
+      const sent = await deliverAccountToken(
+        env,
+        account.id,
+        account.email_normalized,
+        "verify-email",
+      );
+
+      if (!sent) {
+        return json(
+          { error: "Unable to send verification email. Please try again later." },
+          503,
         );
       }
 
       return json({
         ok: true,
         emailVerified: false,
-        message:
-          "If email delivery is available, verification instructions will be sent.",
+        message: "Email sent ✓",
       });
     }
 

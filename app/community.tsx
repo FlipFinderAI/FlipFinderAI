@@ -3,7 +3,7 @@ import Messages from "@/components/community/Messages";
 import Matchday from "@/components/community/Matchday";
 import { useEffect, useState, useRef } from "react";
 import { router, useLocalSearchParams } from "expo-router";
-import { Alert, AppState, Image, Modal, useWindowDimensions, Pressable, ScrollView, Switch, Text, TextInput, View } from "react-native";
+import { Alert, AppState, Image, Modal, useWindowDimensions, Pressable, ScrollView, KeyboardAvoidingView, Platform, Switch, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as ImagePicker from "expo-image-picker";
@@ -269,8 +269,21 @@ export default function CommunityScreen() {
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [status, setStatus] = useState("");
+  const [verificationSending, setVerificationSending] = useState(false);
+  const [verificationSentAt, setVerificationSentAt] = useState(0);
+  const [verificationNow, setVerificationNow] = useState(Date.now());
+
+  useEffect(() => {
+    if (!verificationSentAt) return;
+    const timer = setInterval(() => setVerificationNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [verificationSentAt]);
+
+  const verificationCooldown =
+    Math.max(0, Math.ceil((verificationSentAt + 60000 - verificationNow) / 1000));
   const [session, setSession] = useState<CommunitySession | null>(null);
   const [email, setEmail] = useState("");
+  const [phoneNumber, setPhoneNumber] = useState("");
   const [password, setPassword] = useState("");
   const [authMode, setAuthMode] = useState<"signin" | "create">("signin");
   const [communityTab, setCommunityTab] =
@@ -468,8 +481,8 @@ export default function CommunityScreen() {
       throw new Error("Enter your email address.");
     }
 
-    if (password.length < 12 || password.length > 128) {
-      throw new Error("Use a password between 12 and 128 characters.");
+    if (password.length < 6 || password.length > 128) {
+      throw new Error("Use a password between 6 and 128 characters.");
     }
 
     await AsyncStorage.setItem(
@@ -477,16 +490,24 @@ export default function CommunityScreen() {
       JSON.stringify({ name: displayName, avatar }),
     );
 
-    const next = await communitySignUp(email.trim(), password);
+    const signup = await communitySignUp(email.trim(), password);
     setPassword("");
-    await loadUnlockedCommunity(next);
+    await loadUnlockedCommunity(signup.session);
+
+    if (signup.verificationEmailSent) {
+      const sentAt = Date.now();
+      setVerificationSentAt(sentAt);
+      setVerificationNow(sentAt);
+    }
 
     const capability = await communityUnlockCapability();
     setUnlockCapability(capability);
     setShowSecuritySetup(true);
 
     setStatus(
-      "Community account created. Choose how you want to unlock Community on this iPhone.",
+      signup.verificationEmailSent
+        ? "Account created. Verification email sent — check your inbox and spam folder. Choose how to unlock Community on this iPhone."
+        : "Account created, but the verification email could not be sent. Please request another email. Choose how to unlock Community on this iPhone.",
     );
   }
 
@@ -603,9 +624,51 @@ export default function CommunityScreen() {
     );
   }
 
+  // Refresh email verification when returning from Safari.
+  useEffect(() => {
+    if (!session || session.emailVerified || !serviceConfigured) {
+      return;
+    }
+
+    let refreshing = false;
+
+    const refreshVerification = async () => {
+      if (refreshing) return;
+      refreshing = true;
+
+      try {
+        const refreshed = await communityRestoreSession();
+
+        if (refreshed?.emailVerified) {
+          setSession(refreshed);
+          setStatus("Email verified ✓");
+        }
+      } catch {
+        // Keep the existing session if refresh fails.
+      } finally {
+        refreshing = false;
+      }
+    };
+
+    const subscription = AppState.addEventListener(
+      "change",
+      state => {
+        if (state === "active") {
+          void refreshVerification();
+        }
+      },
+    );
+
+    return () => subscription.remove();
+  }, [session?.emailVerified, session?.email, serviceConfigured]);
+
   async function requestEmailVerification() {
-    const result =
-      await communityRequestEmailVerification();
+    setVerificationSending(true);
+    setStatus("Sending verification email…");
+
+    try {
+      const result =
+        await communityRequestEmailVerification();
 
     if (result.emailVerified) {
       if (session) {
@@ -619,10 +682,15 @@ export default function CommunityScreen() {
       return;
     }
 
-    setStatus(
-      result.message ||
-        "Verification was requested. Email delivery still needs to be configured.",
-    );
+      setVerificationSentAt(Date.now());
+      setVerificationNow(Date.now());
+      setStatus("Email sent ✓ Please check your inbox and spam folder.");
+    } catch (error) {
+      setStatus("Unable to send verification email.");
+      throw error;
+    } finally {
+      setVerificationSending(false);
+    }
   }
 
   async function deleteCommunityAccount() {
@@ -855,8 +923,13 @@ export default function CommunityScreen() {
 
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: "#f8f5ec" }}>
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+        >
         <ScrollView
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
           contentContainerStyle={{
             flexGrow: 1,
             paddingHorizontal: 20,
@@ -872,8 +945,7 @@ export default function CommunityScreen() {
 
           <View
             style={{
-              flex: 1,
-              justifyContent: "center",
+
               width: "100%",
               maxWidth: 520,
               alignSelf: "center",
@@ -1103,6 +1175,20 @@ export default function CommunityScreen() {
               style={[styles.input, { marginBottom: 10 }]}
             />
 
+            {creating ? (
+              <TextInput
+                accessibilityLabel="Phone number optional"
+                placeholder="Phone number (optional)"
+                keyboardType="phone-pad"
+                textContentType="telephoneNumber"
+                autoComplete="tel"
+                value={phoneNumber}
+                onChangeText={setPhoneNumber}
+                maxLength={24}
+                style={[styles.input, { marginBottom: 10 }]}
+              />
+            ) : null}
+
             <TextInput
               accessibilityLabel="Community password"
               placeholder={creating ? "Create password" : "Password"}
@@ -1167,6 +1253,7 @@ export default function CommunityScreen() {
             ) : null}
           </View>
         </ScrollView>
+        </KeyboardAvoidingView>
 
       {pendingAvatar ? (
         <CircularPhotoEditor
@@ -1619,8 +1706,14 @@ export default function CommunityScreen() {
                 Verification is separate from Community eligibility.
               </Text>
               <Action
-                title="Request email verification"
-                disabled={busy}
+                title={
+                  verificationSending
+                    ? "Sending…"
+                    : verificationCooldown > 0
+                      ? `Email sent ✓ (${verificationCooldown}s)`
+                      : "Resend verification email"
+                }
+                disabled={busy || verificationCooldown > 0}
                 onPress={() =>
                   void run(requestEmailVerification)
                 }

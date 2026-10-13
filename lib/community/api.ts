@@ -7,6 +7,7 @@ import {
 } from "./session";
 
 type AuthResponse = {
+  verificationEmailSent?: boolean;
   token: string;
   email: string;
   expiresAt: number;
@@ -108,7 +109,10 @@ export async function communitySignUp(
 
   const session = toSession(result);
   await saveCommunitySession(session);
-  return session;
+  return {
+    session,
+    verificationEmailSent: result.verificationEmailSent === true,
+  };
 }
 
 export async function communitySignIn(
