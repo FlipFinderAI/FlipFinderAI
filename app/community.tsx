@@ -1,13 +1,15 @@
 import Friends from "@/components/community/Friends";
 import Messages from "@/components/community/Messages";
 import Matchday from "@/components/community/Matchday";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { router, useLocalSearchParams } from "expo-router";
-import { Alert, AppState, Image, Pressable, ScrollView, Switch, Text, TextInput, View } from "react-native";
+import { Alert, AppState, Image, Modal, useWindowDimensions, Pressable, ScrollView, Switch, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import Animated, { useAnimatedStyle, useSharedValue } from "react-native-reanimated";
 import { loadAttendanceHistory } from "@/lib/attendanceHistory";
 import { AVATARS, OFF, attendanceSummary, type Avatar, type CommunityState } from "@/lib/community/model";
 import {
@@ -32,6 +34,204 @@ import { Action, styles } from "@/components/community/Controls";
 const DRAFT_KEY = "ticket-frame.community-profile-draft.v1";
 const AVATAR_PHOTO_KEY = "ticket-frame.community-avatar-photo.v1";
 const BIOMETRIC_KEY = "ticket-frame.community-biometric-enabled.v1";
+
+function CircularPhotoEditor({
+  uri,
+  onCancel,
+  onSave,
+}: {
+  uri: string;
+  onCancel: () => void;
+  onSave: (uri: string) => Promise<void>;
+}) {
+  const { width } = useWindowDimensions();
+  const size = Math.min(width - 48, 340);
+  const [dimensions, setDimensions] = useState({ width: 1, height: 1 });
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+
+    Image.getSize(
+      uri,
+      (width, height) => {
+        if (active) setDimensions({ width, height });
+      },
+      () => {
+        if (active) {
+          Alert.alert("Photo error", "Could not read photo dimensions.");
+        }
+      }
+    );
+
+    return () => {
+      active = false;
+    };
+  }, [uri]);
+
+  const scale = useSharedValue(1);
+  const savedScale = useSharedValue(1);
+  const x = useSharedValue(0);
+  const y = useSharedValue(0);
+  const savedX = useSharedValue(0);
+  const savedY = useSharedValue(0);
+
+  const baseScale = Math.max(
+    size / dimensions.width,
+    size / dimensions.height
+  );
+
+  const imageWidth = dimensions.width * baseScale;
+  const imageHeight = dimensions.height * baseScale;
+
+  const clampX = (value: number, zoom: number) =>
+    Math.max(
+      -(imageWidth * zoom - size) / 2,
+      Math.min((imageWidth * zoom - size) / 2, value)
+    );
+
+  const clampY = (value: number, zoom: number) =>
+    Math.max(
+      -(imageHeight * zoom - size) / 2,
+      Math.min((imageHeight * zoom - size) / 2, value)
+    );
+
+  const pan = Gesture.Pan()
+    .onUpdate(e => {
+      const limitX = (imageWidth * scale.value - size) / 2;
+      const limitY = (imageHeight * scale.value - size) / 2;
+      x.value = Math.max(-limitX, Math.min(limitX, savedX.value + e.translationX));
+      y.value = Math.max(-limitY, Math.min(limitY, savedY.value + e.translationY));
+    })
+    .onEnd(() => {
+      savedX.value = x.value;
+      savedY.value = y.value;
+    });
+
+  const pinch = Gesture.Pinch()
+    .onUpdate(e => {
+      const zoom = Math.max(1, Math.min(5, savedScale.value * e.scale));
+      scale.value = zoom;
+      const limitX = (imageWidth * zoom - size) / 2;
+      const limitY = (imageHeight * zoom - size) / 2;
+      x.value = Math.max(-limitX, Math.min(limitX, x.value));
+      y.value = Math.max(-limitY, Math.min(limitY, y.value));
+    })
+    .onEnd(() => {
+      savedScale.value = scale.value;
+      savedX.value = x.value;
+      savedY.value = y.value;
+    });
+
+  const gesture = Gesture.Simultaneous(pan, pinch);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: x.value },
+      { translateY: y.value },
+      { scale: scale.value },
+    ],
+  }));
+
+  async function save() {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const zoom = scale.value;
+      const visibleWidth = size / (baseScale * zoom);
+      const visibleHeight = size / (baseScale * zoom);
+
+      const originX =
+        dimensions.width / 2 -
+        visibleWidth / 2 -
+        x.value / (baseScale * zoom);
+
+      const originY =
+        dimensions.height / 2 -
+        visibleHeight / 2 -
+        y.value / (baseScale * zoom);
+
+      const cropSize = Math.max(
+        1,
+        Math.floor(Math.min(visibleWidth, visibleHeight))
+      );
+
+      const result = await ImageManipulator.manipulateAsync(
+        uri,
+        [
+          {
+            crop: {
+              originX: Math.max(0, Math.min(dimensions.width - cropSize, Math.round(originX))),
+              originY: Math.max(0, Math.min(dimensions.height - cropSize, Math.round(originY))),
+              width: cropSize,
+              height: cropSize,
+            },
+          },
+          { resize: { width: 512, height: 512 } },
+        ],
+        { compress: 0.85, format: ImageManipulator.SaveFormat.JPEG }
+      );
+
+      await onSave(result.uri);
+    } catch (error) {
+      Alert.alert("Photo error", error instanceof Error ? error.message : "Could not crop photo.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal visible animationType="slide" presentationStyle="fullScreen">
+      <SafeAreaView style={{ flex: 1, backgroundColor: "#101510", justifyContent: "center", padding: 24 }}>
+        <Text style={{ color: "white", fontSize: 23, fontWeight: "800", textAlign: "center", marginBottom: 12 }}>
+          Position Your Photo
+        </Text>
+        <Text style={{ color: "#ddd", textAlign: "center", marginBottom: 24 }}>
+          Drag to reposition. Pinch to zoom.
+        </Text>
+
+        <View style={{ width: size, height: size, alignSelf: "center", overflow: "hidden", borderRadius: size / 2, borderWidth: 3, borderColor: "white" }}>
+          <GestureDetector gesture={gesture}>
+            <Animated.View style={{ width: size, height: size, alignItems: "center", justifyContent: "center" }}>
+              <Animated.Image
+                source={{ uri }}
+
+                style={[
+                  { width: imageWidth, height: imageHeight },
+                  animatedStyle,
+                ]}
+              />
+            </Animated.View>
+          </GestureDetector>
+        </View>
+
+        <Text style={{ color: "#aaa", textAlign: "center", marginTop: 18 }}>
+          Everything inside the circle becomes your profile photo.
+        </Text>
+
+        <View style={{ flexDirection: "row", gap: 12, marginTop: 30 }}>
+          <Pressable
+            onPress={onCancel}
+            disabled={saving}
+            style={{ flex: 1, padding: 16, borderRadius: 12, borderWidth: 1, borderColor: "#aaa" }}
+          >
+            <Text style={{ color: "white", textAlign: "center", fontWeight: "700" }}>Cancel</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => void save()}
+            disabled={saving}
+            style={{ flex: 1, padding: 16, borderRadius: 12, backgroundColor: "#e9e3ce" }}
+          >
+            <Text style={{ color: "#17221c", textAlign: "center", fontWeight: "800" }}>
+              {saving ? "Saving..." : "Use Photo"}
+            </Text>
+          </Pressable>
+        </View>
+      </SafeAreaView>
+    </Modal>
+  );
+}
+
 export default function CommunityScreen() {
   const {
     clubId,
@@ -55,6 +255,7 @@ export default function CommunityScreen() {
   // Community private image storage is added. It is no longer shown as the UI avatar.
   const [avatar, setAvatar] = useState<Avatar>("⚽");
   const [avatarPhoto, setAvatarPhoto] = useState<string | null>(null);
+  const [pendingAvatar, setPendingAvatar] = useState<string | null>(null);
   const [biometricEnabled, setBiometricEnabled] = useState(false);
   const [biometricChoiceMade, setBiometricChoiceMade] = useState(false);
   const [showSecuritySetup, setShowSecuritySetup] = useState(false);
@@ -322,15 +523,13 @@ export default function CommunityScreen() {
 
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ["images"],
-      allowsEditing: true,
-      aspect: [1, 1],
+      allowsEditing: false,
       quality: 0.9,
     });
 
     if (result.canceled || !result.assets?.[0]?.uri) return;
 
-    await storeAvatarPhoto(result.assets[0].uri);
-    setStatus("Avatar photo selected.");
+    setPendingAvatar(result.assets[0].uri);
   }
 
   async function takeAvatarPhoto() {
@@ -345,16 +544,14 @@ export default function CommunityScreen() {
 
     const result = await ImagePicker.launchCameraAsync({
       mediaTypes: ["images"],
-      allowsEditing: true,
-      aspect: [1, 1],
+      allowsEditing: false,
       quality: 0.9,
       cameraType: ImagePicker.CameraType.front,
     });
 
     if (result.canceled || !result.assets?.[0]?.uri) return;
 
-    await storeAvatarPhoto(result.assets[0].uri);
-    setStatus("Avatar photo taken.");
+    setPendingAvatar(result.assets[0].uri);
   }
 
   async function removeAvatarPhoto() {
@@ -637,7 +834,19 @@ export default function CommunityScreen() {
             ) : null}
           </View>
         </ScrollView>
-      </SafeAreaView>
+
+      {pendingAvatar ? (
+        <CircularPhotoEditor
+          uri={pendingAvatar}
+          onCancel={() => setPendingAvatar(null)}
+          onSave={async (uri) => {
+            await storeAvatarPhoto(uri);
+            setPendingAvatar(null);
+            setStatus("Community profile photo updated.");
+          }}
+        />
+      ) : null}
+</SafeAreaView>
     );
   }
 
@@ -958,7 +1167,19 @@ export default function CommunityScreen() {
             ) : null}
           </View>
         </ScrollView>
-      </SafeAreaView>
+
+      {pendingAvatar ? (
+        <CircularPhotoEditor
+          uri={pendingAvatar}
+          onCancel={() => setPendingAvatar(null)}
+          onSave={async (uri) => {
+            await storeAvatarPhoto(uri);
+            setPendingAvatar(null);
+            setStatus("Community profile photo updated.");
+          }}
+        />
+      ) : null}
+</SafeAreaView>
     );
   }
 
@@ -1040,7 +1261,19 @@ export default function CommunityScreen() {
           <Text accessibilityLiveRegion="polite">{status}</Text>
         )}
       </ScrollView>
-    </SafeAreaView>;
+
+      {pendingAvatar ? (
+        <CircularPhotoEditor
+          uri={pendingAvatar}
+          onCancel={() => setPendingAvatar(null)}
+          onSave={async (uri) => {
+            await storeAvatarPhoto(uri);
+            setPendingAvatar(null);
+            setStatus("Community profile photo updated.");
+          }}
+        />
+      ) : null}
+</SafeAreaView>;
   }
 
   if (active && !showCommunitySettings) {
@@ -1257,7 +1490,19 @@ export default function CommunityScreen() {
             </ScrollView>
           )}
         </View>
-      </SafeAreaView>
+
+      {pendingAvatar ? (
+        <CircularPhotoEditor
+          uri={pendingAvatar}
+          onCancel={() => setPendingAvatar(null)}
+          onSave={async (uri) => {
+            await storeAvatarPhoto(uri);
+            setPendingAvatar(null);
+            setStatus("Community profile photo updated.");
+          }}
+        />
+      ) : null}
+</SafeAreaView>
     );
   }
 
@@ -1580,5 +1825,17 @@ export default function CommunityScreen() {
       {/* COMMUNITY_FEATURES */}
       {!!status && <Text accessibilityLiveRegion="polite">{status}</Text>}
     </ScrollView>
-  </SafeAreaView>;
+
+      {pendingAvatar ? (
+        <CircularPhotoEditor
+          uri={pendingAvatar}
+          onCancel={() => setPendingAvatar(null)}
+          onSave={async (uri) => {
+            await storeAvatarPhoto(uri);
+            setPendingAvatar(null);
+            setStatus("Community profile photo updated.");
+          }}
+        />
+      ) : null}
+</SafeAreaView>;
 }
