@@ -63,11 +63,7 @@ export async function clearCommunitySession(): Promise<void> {
 
 
 export async function getRememberedCommunityAccount(): Promise<string | null> {
-  try {
-    return await SecureStore.getItemAsync(ACCOUNT_KEY, OPTIONS);
-  } catch {
-    return null;
-  }
+  return SecureStore.getItemAsync(ACCOUNT_KEY, OPTIONS);
 }
 
 export async function rememberCommunityAccount(email: string): Promise<void> {
