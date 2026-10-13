@@ -25,6 +25,11 @@ import {
 } from "@/lib/community/api";
 import type { CommunitySession } from "@/lib/community/session";
 import {
+  getRememberedCommunityAccount,
+  rememberCommunityAccount,
+  clearRememberedCommunityAccount,
+} from "@/lib/community/session";
+import {
   communityUnlockCapability,
   unlockCommunityLocally,
   type CommunityUnlockCapability,
@@ -286,6 +291,7 @@ export default function CommunityScreen() {
   const [phoneNumber, setPhoneNumber] = useState("");
   const [password, setPassword] = useState("");
   const [authMode, setAuthMode] = useState<"signin" | "create">("signin");
+  const [rememberedAccount, setRememberedAccount] = useState<string | null>(null);
   const [communityTab, setCommunityTab] =
     useState<"chats" | "supporters" | "map">("chats");
   const [showCommunitySettings, setShowCommunitySettings] = useState(false);
@@ -392,10 +398,24 @@ export default function CommunityScreen() {
         if (AVATARS.includes(d.avatar)) setAvatar(d.avatar);
       }
       if (serviceConfigured) {
+        const remembered = await getRememberedCommunityAccount();
+        if (cancelled) return;
+
+        setRememberedAccount(remembered);
+        if (remembered) {
+          setEmail(remembered);
+          setAuthMode("signin");
+        }
+
         const restored = await communityRestoreSession();
         if (cancelled) return;
         setSession(restored);
-        if (restored?.email) setEmail(restored.email);
+        if (restored?.email) {
+          await rememberCommunityAccount(restored.email);
+          if (cancelled) return;
+          setRememberedAccount(restored.email.toLowerCase());
+          setEmail(restored.email);
+        }
 
         if (restored) {
           const capability = await communityUnlockCapability();
@@ -452,7 +472,14 @@ export default function CommunityScreen() {
     if (!email.trim()) throw new Error("Enter your registered email address.");
     if (!password) throw new Error("Enter your Community password.");
 
+    const existing = await getRememberedCommunityAccount();
+    if (existing && existing.toLowerCase() !== email.trim().toLowerCase()) {
+      throw new Error("This device already has a Community account. Sign in using the remembered email.");
+    }
+
     const next = await communitySignIn(email.trim(), password);
+    await rememberCommunityAccount(next.email);
+    setRememberedAccount(next.email.toLowerCase());
     setPassword("");
     await loadUnlockedCommunity(next);
 
@@ -490,7 +517,18 @@ export default function CommunityScreen() {
       JSON.stringify({ name: displayName, avatar }),
     );
 
+    const existing = await getRememberedCommunityAccount();
+    if (existing) {
+      setRememberedAccount(existing);
+      setEmail(existing);
+      setAuthMode("signin");
+      throw new Error("A Community account is already registered on this device. Please sign in.");
+    }
+
     const signup = await communitySignUp(email.trim(), password);
+    await rememberCommunityAccount(signup.session.email);
+    setRememberedAccount(signup.session.email.toLowerCase());
+    setAuthMode("signin");
     setPassword("");
     await loadUnlockedCommunity(signup.session);
 
@@ -729,6 +767,11 @@ export default function CommunityScreen() {
       serverNow: 0,
     });
 
+    await clearRememberedCommunityAccount();
+    setRememberedAccount(null);
+    setEmail("");
+    setAuthMode("signin");
+
     setStatus(
       "Your Community account and associated Community data have been deleted.",
     );
@@ -918,8 +961,16 @@ export default function CommunityScreen() {
     );
   }
 
+  if (serviceConfigured && !loaded) {
+    return (
+      <SafeAreaView style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
+        <Text>Loading Community account...</Text>
+      </SafeAreaView>
+    );
+  }
+
   if (serviceConfigured && !session) {
-    const creating = authMode === "create";
+    const creating = authMode === "create" && !rememberedAccount;
 
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: "#f8f5ec" }}>
@@ -1015,6 +1066,7 @@ export default function CommunityScreen() {
                 SIGN IN
               </Text>
 
+              {!rememberedAccount && (
               <Text
                 accessibilityRole="button"
                 onPress={() => {
@@ -1040,6 +1092,7 @@ export default function CommunityScreen() {
               >
                 CREATE ACCOUNT
               </Text>
+              )}
             </View>
 
             <Text style={[styles.heading, { textAlign: "center" }]}>
