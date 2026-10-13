@@ -1,3 +1,6 @@
+const COMMUNITY_RELEASE_ENABLED = true;
+
+import { NearbyPlaces } from "@/components/NearbyPlaces";
 /* eslint-disable react-hooks/immutability */
 import { router } from "expo-router";
 import { Platform } from "react-native";
@@ -9,6 +12,7 @@ import {
   AppState,
   Dimensions,
   Image,
+  ImageBackground,
     Keyboard,
   Linking,
   Modal,
@@ -54,6 +58,7 @@ import {
 } from "../lib/ticketOrdering";
 import FirstFrameCelebration from "@/components/onboarding/FirstFrameCelebration";
 import DemoMode from "@/components/demo/DemoMode";
+import MatchdayHub from "@/components/fixtures/MatchdayHub";
 import FavouriteClubBadge from "@/components/club/FavouriteClubBadge";
 import DraggableGridTile, { type TileRect } from "@/components/frames/DraggableGridTile";
 import SeasonFrameExport from "@/components/frames/SeasonFrameExport";
@@ -112,6 +117,8 @@ import {
   findGroundForClub,
   footballGroundForName,
 } from "@/lib/clubGroundMatching";
+import { homeStadiumForClub } from "@/lib/homeStadiumIdentity";
+import { stadiumPhotoForId } from "@/lib/homeStadiumPhotos";
 import { verifiedCoordinatesForFixture } from "@/lib/verifiedFixtureStadiumCoordinates";
 import { distanceMiles } from "@/lib/geoDistance";
 import {
@@ -314,6 +321,7 @@ import { VERIFIED_ADDITIONAL_GROUNDS } from "@/lib/verifiedAdditionalGrounds";
 import * as Location from "expo-location";
 import * as Notifications from "expo-notifications";
 import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
+import { ticketImageSignature, ticketImageSimilarity } from "@/lib/ticketDuplicateImage";
 import { Picker } from "@react-native-picker/picker";
 import {
   BACKUP_REMINDER_TICKET_COUNT,
@@ -2616,7 +2624,6 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
     useState<string | null>(null);
   const [matchdayFinder, setMatchdayFinder] =
     useState<MatchdayFinderKind | null>(null);
-  const [matchdayVenueQuery, setMatchdayVenueQuery] = useState("");
 
   const [historyStadiumMode, setHistoryStadiumMode] =
     useState<"list" | "map">("list");
@@ -2638,47 +2645,6 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
     distanceMiles: number;
   } | null>(null);
 
-  useEffect(() => {
-    const placesModule = ParkingSearchModule;
-    if (
-      (matchdayFinder !== "pub" && matchdayFinder !== "restaurant") ||
-      !matchdaySearchOrigin ||
-      !placesModule?.searchPlacesQuery ||
-      matchdayVenueQuery.trim().length < 2
-    ) return;
-    const kind = matchdayFinder;
-    const query = matchdayVenueQuery.trim();
-    const timer = setTimeout(() => {
-      setNearbyVenuePanel({
-        groundId: matchdaySearchOrigin.groundId,
-        kind,
-        loading: true,
-        error: false,
-        items: [],
-        distanceFrom: "current",
-      });
-      void placesModule.searchPlacesQuery(
-        matchdaySearchOrigin.latitude,
-        matchdaySearchOrigin.longitude,
-        kind,
-        query,
-      ).then((items) => {
-        setNearbyVenuePanel({
-          groundId: matchdaySearchOrigin.groundId,
-          kind,
-          loading: false,
-          error: false,
-          items: items.slice(0, 5),
-          distanceFrom: "current",
-        });
-      }).catch(() => {
-        setNearbyVenuePanel((current) => current?.kind === kind
-          ? { ...current, loading: false, error: true }
-          : current);
-      });
-    }, 350);
-    return () => clearTimeout(timer);
-  }, [matchdayFinder, matchdaySearchOrigin, matchdayVenueQuery]);
 
   useEffect(() => {
     if (!storageReady) return;
@@ -3377,7 +3343,7 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
     distanceFrom: "stadium" | "current" = "stadium",
   ) {
     const cacheKey = `${distanceFrom}:${ground.id}`;
-    const cached = parkingCache[cacheKey] ?? parkingCache[ground.id];
+    const cached = distanceFrom === "stadium" ? (parkingCache[cacheKey] ?? parkingCache[ground.id]) : undefined;
     setParkingPanel({
       groundId: ground.id,
       loading: !cached?.length,
@@ -3396,15 +3362,15 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
       ]);
       if (!nearby.length) throw new Error("no nearby parking mapped");
       const closest = nearby.slice(0, 3);
-      setParkingCache((current) => ({ ...current, [cacheKey]: closest }));
+      if (distanceFrom === "stadium") setParkingCache((current) => ({ ...current, [cacheKey]: closest }));
       setParkingPanel((current) =>
-        current?.groundId === ground.id
+        current?.groundId === ground.id && current.distanceFrom === distanceFrom
           ? { groundId: ground.id, loading: false, error: false, items: closest, distanceFrom }
           : current,
       );
     } catch {
       setParkingPanel((current) =>
-        current?.groundId === ground.id
+        current?.groundId === ground.id && current.distanceFrom === distanceFrom
           ? {
               groundId: ground.id,
               loading: false,
@@ -3417,57 +3383,12 @@ const [clubSearch, setClubSearch] = useState("");const [openLeague, setOpenLeagu
     }
   }
 
-  async function loadNearbyVenues(
-    ground: FootballGround,
-    kind: NearbyVenueKind,
-    distanceFrom: "stadium" | "current" = "stadium",
-  ) {
-    const cacheKey = `${kind}:${distanceFrom}:${ground.id}`;
-    const cached = nearbyVenueCache[cacheKey];
-    setNearbyVenuePanel({
-      groundId: ground.id,
-      kind,
-      loading: !cached?.length,
-      error: false,
-      items: cached?.slice(0, 3) ?? [],
-      distanceFrom,
-    });
-    try {
-      if (!ParkingSearchModule?.searchPlaces)
-        throw new Error("Apple Maps place search unavailable");
-      const nearby = (await ParkingSearchModule.searchPlaces(
-        ground.latitude,
-        ground.longitude,
-        kind,
-      ))
-        .sort((a, b) => a.distanceMiles - b.distanceMiles)
-        .slice(0, 5);
-      if (!nearby.length) throw new Error("no nearby venues mapped");
-      setNearbyVenueCache((current) => ({ ...current, [cacheKey]: nearby }));
-      setNearbyVenuePanel((current) =>
-        current?.groundId === ground.id && current.kind === kind
-          ? { groundId: ground.id, kind, loading: false, error: false, items: nearby, distanceFrom }
-          : current,
-      );
-    } catch {
-      setNearbyVenuePanel((current) =>
-        current?.groundId === ground.id && current.kind === kind
-          ? {
-              groundId: ground.id,
-              kind,
-              loading: false,
-              error: !cached?.length,
-              items: cached?.slice(0, 5) ?? [],
-              distanceFrom,
-            }
-          : current,
-      );
-    }
-  }
 
   useEffect(() => {
     const upcoming = seasonFixtures.find(
-      (r) => r.season === CURRENT_SEASON && !isFixturePlayed(r),
+      (r) => r.season === CURRENT_SEASON &&
+      !isFixturePlayed(r) &&
+      !/^(POSTPONED|P-P|PP|PST)$/i.test(r.status.trim()),
     );
     let live = true;
     let cancelled = false;
@@ -5728,17 +5649,36 @@ confidence: ${recognition.confidence}%`,
         try {
           // The Share Extension copied the supplied screenshot file directly
           // into the App Group. Crop from that high-quality source.
+          const walletTimingStart = Date.now();
+          console.log("[wallet-timing] processing started");
+
           await new Promise((resolve) => setTimeout(resolve, 250));
 
+          const visionStart = Date.now();
           const visionCrop = await detectWalletTicketBounds(
             pendingScreenshot.uri,
           );
 
+          console.log(
+            "[wallet-timing] Vision:",
+            Date.now() - visionStart,
+            "ms",
+            "found:",
+            Boolean(visionCrop),
+          );
+
+          const fallbackStart = Date.now();
           const fallbackCrop = visionCrop
             ? null
             : await autoCropTicketScreenshot(
                 pendingScreenshot.uri,
               );
+
+          console.log(
+            "[wallet-timing] fallback:",
+            Date.now() - fallbackStart,
+            "ms",
+          );
 
           const edited = await openNativeCropper(
             pendingScreenshot.uri,
@@ -5831,7 +5771,20 @@ confidence: ${recognition.confidence}%`,
             },
           );
 
+          console.log(
+            "[wallet-timing] before recognition:",
+            Date.now() - walletTimingStart,
+            "ms (includes crop screen)",
+          );
+
+          const recognitionStart = Date.now();
           const queued = await recogniseAndQueue(ticket);
+
+          console.log(
+            "[wallet-timing] recognition and fixture matching:",
+            Date.now() - recognitionStart,
+            "ms",
+          );
 
           if (!queued) {
             ticketReviewResolversRef.current.delete(ticket.id);
@@ -9192,6 +9145,59 @@ Accept only if these photos are from this match. Choose Another Match for anothe
           continue;
         }
 
+        // DUPLICATE_IMAGE_GUARD_START
+        // Compare before creating another saved ticket record.
+        // Similarity is advisory: legitimate additional seats remain allowed.
+        const incomingSignature = await ticketImageSignature(savedUri);
+
+        if (incomingSignature) {
+          let possibleDuplicate = false;
+
+          for (const existing of tickets) {
+            if (!existing.uri) continue;
+
+            const existingUri = currentTicketUri(existing.uri);
+            if (!existingUri) continue;
+
+            const existingSignature = await ticketImageSignature(existingUri);
+            if (!existingSignature) continue;
+
+            if (
+              ticketImageSimilarity(incomingSignature, existingSignature) >= 0.94
+            ) {
+              possibleDuplicate = true;
+              break;
+            }
+          }
+
+          if (possibleDuplicate) {
+            const decision = await new Promise<"skip" | "keep">((resolve) =>
+              Alert.alert(
+                "Possible duplicate ticket",
+                "This image looks similar to a ticket already saved. " +
+                  "Skip it, or keep both if these are genuinely different tickets.",
+                [
+                  {
+                    text: "Skip Import",
+                    onPress: () => resolve("skip"),
+                  },
+                  {
+                    text: "Keep Both",
+                    onPress: () => resolve("keep"),
+                  },
+                ],
+                { cancelable: false },
+              ),
+            );
+
+            if (decision === "skip") {
+              recognitionImageUrisRef.current.delete(ticketId);
+              continue;
+            }
+          }
+        }
+        // DUPLICATE_IMAGE_GUARD_END
+
         const ticket: SeasonTicket = {
           id: ticketId,
           fingerprint,
@@ -10188,6 +10194,9 @@ const homeWalletTickets = tickets.filter(
     a.id.localeCompare(b.id)
   );
 });
+
+
+
 
 const homeWalletOpenTicket = homeWalletOpenTicketId
   ? homeWalletTickets.find(
@@ -11475,11 +11484,20 @@ useEffect(() => {
 
   // V3.9.2 — THE one Next Match card (shared by Home and Fixtures). Same
   // data pipeline (seasonFixtures via loadFixtures) and identical visuals.
-  const renderNextMatchCard = (match: FixtureRow | null) => {
+  const renderNextMatchCard = (match: FixtureRow | null, homePresentation = false) => {
     if (!match) return null;
+    const favouriteHomeStadium = homePresentation
+      ? homeStadiumForClub(favouriteClub.id, favouriteClub.name)
+      : null;
+    const favouriteHomeStadiumPhoto = homePresentation
+      ? stadiumPhotoForId(favouriteHomeStadium?.id)
+      : null;
     const isHome = clubNamesMatch(match.homeName, favouriteClub.name);
     const targetClub = isHome ? favouriteClub.name : match.homeName;
     const matchGround = findGroundForClub(targetClub);
+    const nextMatchStadiumPhoto = homePresentation
+      ? stadiumPhotoForId(matchGround?.id)
+      : null;
     const openDirections = () => {
       const ground = matchGround;
       if (!ground) {
@@ -11560,7 +11578,10 @@ useEffect(() => {
         Alert.alert("Ground not found", `No stadium saved for ${targetClub}.`);
         return;
       }
-      if (parkingPanel?.groundId === matchGround.id) {
+      if (
+        parkingPanel?.groundId === matchGround.id &&
+        parkingPanel.distanceFrom === "stadium"
+      ) {
         setParkingPanel(null);
         return;
       }
@@ -11568,6 +11589,44 @@ useEffect(() => {
       setNearbyVenuePanel(null);
       void loadParkingForGround(matchGround);
     };
+    const openParkingNearMe = async () => {
+      if (!matchGround) {
+        Alert.alert("Ground not found", "Select a football ground first.");
+        return;
+      }
+
+      try {
+        const permission = await Location.requestForegroundPermissionsAsync();
+
+        if (!permission.granted) {
+          Alert.alert(
+            "Location access needed",
+            "Allow location access to find car parks near you."
+          );
+          return;
+        }
+
+        const position = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+
+        const origin = {
+          ...matchGround,
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+        };
+
+        setMatchdayFinder(null);
+        setNearbyVenuePanel(null);
+        void loadParkingForGround(origin, "current");
+      } catch {
+        Alert.alert(
+          "Location unavailable",
+          "Unable to obtain your current location. Please try again."
+        );
+      }
+    };
+
     const openNearby = (kind: NearbyVenueKind) => {
       if (!matchGround) {
         Alert.alert("Ground not found", `No stadium saved for ${targetClub}.`);
@@ -11586,7 +11645,7 @@ useEffect(() => {
       setVisitedPubId(null);
       setVisitedPubAudience(null);
       setVisitedPubLocation(null);
-      void loadNearbyVenues(matchGround, kind);
+      setNearbyVenuePanel({ groundId: matchGround.id, kind, loading: false, error: false, items: [], distanceFrom: "stadium" });
     };
     const openVenueGoogle = (venue: NearbyVenueResult) => {
       const coordinates = `${venue.latitude},${venue.longitude}`;
@@ -11657,12 +11716,55 @@ useEffect(() => {
       );
     };
     const openGroundView = () => {
+      Alert.alert(
+        "Choose a stadium",
+        "Which team's stadium would you like to view?",
+        [
+          { text: "Cancel", style: "cancel" },
+          ...[
+            { name: match.homeName, side: "Home" },
+            { name: match.awayName, side: "Away" },
+          ].map(({ name, side }) => ({
+            text: `${name} (${side})`,
+            onPress: () => {
+              const ground = homeStadiumForClub(null, name) ?? findGroundForClub(name);
+              if (!ground) {
+                Alert.alert("Ground not found", `No verified stadium saved for ${name}.`);
+                return;
+              }
+              openGoogleSearch(`${ground.stadium}, ${name}`);
+            },
+          })),
+        ]
+      );
+    };
+    const openWalkingRoute = () => {
       if (!matchGround) {
-        Alert.alert("Ground not found", `No stadium saved for ${targetClub}.`);
+        Alert.alert(
+          "Matchday stadium unavailable",
+          `No verified matchday stadium saved for ${targetClub}.`
+        );
         return;
       }
-      openGoogleSearch(`${matchGround.stadium}, ${targetClub}`);
+
+      const destination = encodeURIComponent(
+        `${matchGround.stadium}, ${targetClub}`
+      );
+
+      const url =
+        `https://www.google.com/maps/dir/?api=1` +
+        `&destination=${destination}` +
+        `&travelmode=walking` +
+        `&dir_action=navigate`;
+
+      void Linking.openURL(url).catch(() => {
+        Alert.alert(
+          "Google Maps unavailable",
+          "Could not open walking directions."
+        );
+      });
     };
+
     const opponentName = isHome ? match.awayName : match.homeName;
     const matchdayExperience = matchdayExperiences.find(
       (item) => item.matchId === String(match.id),
@@ -11827,14 +11929,12 @@ useEffect(() => {
       if (!matchdayExperience?.captureEnabled || !matchGround) return;
       if (matchdayFinder === kind && !refresh) {
         setMatchdayFinder(null);
-        setMatchdayVenueQuery("");
-        setMatchdaySearchOrigin(null);
+          setMatchdaySearchOrigin(null);
         setParkingPanel(null);
         setNearbyVenuePanel(null);
         return;
       }
       setMatchdayFinder(kind);
-      setMatchdayVenueQuery("");
       setMatchdaySearchOrigin(null);
       setParkingPanel(null);
       setNearbyVenuePanel(null);
@@ -11860,7 +11960,7 @@ useEffect(() => {
         groundId: matchGround.id,
       });
       if (kind === "carPark") void loadParkingForGround(origin, "current");
-      else void loadNearbyVenues(origin, kind, "current");
+      else setNearbyVenuePanel({ groundId: matchGround.id, kind, loading: false, error: false, items: [], distanceFrom: "current" });
     };
     const checkInMatchdayVenue = (venue: NearbyVenueResult, kind: MatchdayFinderKind) => {
       if (!matchdayExperience?.captureEnabled) return;
@@ -11891,15 +11991,55 @@ useEffect(() => {
     };
     return (
       <>
+      {homePresentation && Platform.OS === "ios" ? (
+        <MatchdayHub
+          match={match}
+          clubs={clubs}
+          tickets={tickets}
+          favouriteClub={favouriteClub}
+          directionsGroundId={matchGround?.id}
+          canNavigate={installedNavigationApps.checked && (installedNavigationApps.waze || installedNavigationApps.google)}
+          onDirections={openDirections}
+        />
+      ) : (
       <View
         style={[
           s.nextMatchCard,
-          {
-            borderColor: favouriteClub.primary,
-            backgroundColor: `${favouriteClub.primary}14`,
-          },
+          homePresentation
+            ? {
+                marginTop: 0,
+                marginBottom: 0,
+                  width: "100%",
+                  alignSelf: "stretch",
+                borderColor: favouriteClub.secondary,
+                backgroundColor: "#fffdf8",
+                borderTopLeftRadius: 20,
+                borderTopRightRadius: 20,
+                  borderBottomLeftRadius: 20,
+                  borderBottomRightRadius: 20,
+                  overflow: "hidden",
+              }
+            : {
+                borderColor: favouriteClub.primary,
+                backgroundColor: `${favouriteClub.primary}14`,
+              },
         ]}
       >
+        {homePresentation && nextMatchStadiumPhoto ? (
+          <View
+            pointerEvents="none"
+            style={StyleSheet.absoluteFill}
+          >
+            <ImageBackground
+              source={nextMatchStadiumPhoto}
+              resizeMode="cover"
+              style={{
+                flex: 1,
+                opacity: 0.15,
+              }}
+            />
+          </View>
+        ) : null}
         <Text
           style={[
             s.nextMatchKicker,
@@ -11990,26 +12130,160 @@ useEffect(() => {
           </Text>
         </Pressable>
         ) : null}
+      </View>
+      )}
+      <View
+        style={homePresentation
+          ? {
+              marginTop: 0,
+              marginBottom: 16,
+                width: "100%",
+                alignSelf: "stretch",
+              borderRadius: 20,
+                overflow: "hidden",
+              borderWidth: 2,
+              borderColor: favouriteClub.secondary,
+              backgroundColor: favouriteClub.primary,
+              padding: 16,
+            }
+          : {
+              marginTop: 0,
+            }}
+      >
+        {homePresentation && favouriteHomeStadiumPhoto ? (
+          <View
+            pointerEvents="none"
+            style={StyleSheet.absoluteFill}
+          >
+            <ImageBackground
+              source={favouriteHomeStadiumPhoto}
+              resizeMode="cover"
+              style={{
+                flex: 1,
+                opacity: 0.90,
+              }}
+            />
+          </View>
+        ) : null}
+        {homePresentation ? (
+          <View style={{ marginBottom: 14 }}>
+            
+            <Text
+              style={{
+                fontSize: 25,
+                fontWeight: "900",
+                color: readableTextColour(favouriteClub.primary),
+                backgroundColor: favouriteClub.primary,
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+                borderRadius: 12,
+                overflow: "hidden",
+                marginBottom: 12,
+              }}
+            >
+              MATCHDAY MODE
+            </Text>
+
+            <Text
+              style={{
+                fontSize: 13,
+                fontWeight: "700",
+                color: "#ffffff", backgroundColor: "rgba(0,35,85,0.78)", paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8, overflow: "hidden",
+                marginBottom: 12,
+              }}
+            >
+              Everything you need for your matchday
+            </Text>
+
+            {/* MATCHDAY MODE SHORTCUTS */}
+            <View
+              style={{
+                flexDirection: "row",
+                flexWrap: "wrap",
+                justifyContent: "space-between",
+                rowGap: 7,
+              }}
+            >
+              {([
+                ["Stadium", "business-outline", openGroundView],
+                ["Pubs", "beer-outline", () => openNearby("pub")],
+                ["Parking", "car-outline", openParking],
+                ["Restaurants", "restaurant-outline", () => openNearby("restaurant")],
+                ["Stations", "train-outline", () => openNearby("station")],
+                ["Route", "navigate-outline", openWalkingRoute],
+                ["Fan Moments", "people-outline", startMatchdayExperience],
+              ] as const).map(([label, icon, action]) => (
+                <Pressable
+                  key={label}
+                  onPress={action}
+                  accessibilityRole="button"
+                  accessibilityLabel={label}
+                  style={({ pressed }) => ({
+                    width: "23%",
+                    minHeight: 62,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderRadius: 12,
+                    backgroundColor: favouriteClub.primary,
+                    paddingHorizontal: 3,
+                    paddingVertical: 7,
+                    opacity: pressed ? 0.7 : 1,
+                  })}
+                >
+                  <Ionicons
+                    name={icon}
+                    size={21}
+                    color={readableTextColour(favouriteClub.primary)}
+                  />
+                  <Text
+                    numberOfLines={2}
+                    style={{
+                      marginTop: 4,
+                      fontSize: 10,
+                      fontWeight: "900",
+                      textAlign: "center",
+                      color: readableTextColour(favouriteClub.primary),
+                    }}
+                  >
+                    {label}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          </View>
+        ) : null}
+
+
         <Pressable
           onPress={startMatchdayExperience}
+          accessibilityRole="button"
+          accessibilityLabel={matchdayExperience ? "Continue Matchday" : "Start Matchday"}
           style={({ pressed }) => ({
-            marginTop: 14,
-            width: "100%",
-            borderRadius: 14,
-            borderWidth: 2,
-            borderColor: favouriteClub.primary,
-            backgroundColor: favouriteClub.primary,
-            paddingHorizontal: 16,
-            paddingVertical: 14,
-            opacity: pressed ? 0.72 : 1,
+            marginTop: 12,
+            marginBottom: 4,
+            alignSelf: "center",
+            minWidth: "68%",
+            minHeight: 48,
+            borderRadius: 24,
+            borderWidth: 1,
+            borderColor: "#d9a900",
+            backgroundColor: favouriteClub.secondary,
+            paddingHorizontal: 20,
+            paddingVertical: 12,
+            alignItems: "center",
+            justifyContent: "center",
+            opacity: pressed ? 0.75 : 1,
           })}
-          accessibilityLabel="Open Matchday Experience"
         >
-          <Text style={{ textAlign: "center", fontSize: 17, fontWeight: "900", color: readableTextColour(favouriteClub.primary) }}>
-            MATCHDAY EXPERIENCE
-          </Text>
-          <Text style={{ textAlign: "center", marginTop: 4, fontSize: 11, fontWeight: "700", color: readableTextColour(favouriteClub.primary) }}>
-            {matchdayExperience ? "Continue your matchday" : "Save places, photos and videos from your day"}
+          <Text
+            style={{
+              textAlign: "center",
+              fontSize: 15,
+              fontWeight: "900",
+              color: readableTextColour(favouriteClub.secondary),
+            }}
+          >
+            {matchdayExperience ? "CONTINUE MATCHDAY  ›" : "START MATCHDAY  ›"}
           </Text>
         </Pressable>
 
@@ -12054,7 +12328,7 @@ useEffect(() => {
                   Matchday Experience information will only be kept if you attend the match.
                 </Text>
 
-                {Platform.OS === "ios" ? (
+                {Platform.OS === "ios" && COMMUNITY_RELEASE_ENABLED ? (
                   <Pressable
                     accessibilityRole="button"
                     accessibilityLabel="Open Community for this Matchday Experience"
@@ -12145,45 +12419,17 @@ useEffect(() => {
                     ))}
                   </View>
                 ) : null}
-                {(matchdayFinder === "pub" || matchdayFinder === "restaurant") && nearbyVenuePanel?.distanceFrom === "current" ? (
-                  <View style={{ marginTop: 10, borderTopWidth: 1, borderTopColor: `${favouriteClub.primary}33`, paddingTop: 9 }}>
-                    <Text style={{ fontSize: 12, fontWeight: "900", color: "#17221c", marginBottom: 6 }}>{matchdayFinder === "pub" ? "PUBS" : "RESTAURANTS"} NEAR YOU</Text>
-                    <TextInput
-                      value={matchdayVenueQuery}
-                      onChangeText={setMatchdayVenueQuery}
-                      placeholder={matchdayFinder === "pub" ? "Search pub name or area" : "Try Pizza Express or Pizza Express Watford Road"}
-                      autoCorrect
-                      autoCapitalize="words"
-                      returnKeyType="search"
-                      clearButtonMode="while-editing"
-                      accessibilityLabel={`Search for a ${matchdayFinder}`}
-                      style={{
-                        borderWidth: 1,
-                        borderColor: favouriteClub.primary,
-                        borderRadius: 9,
-                        paddingHorizontal: 10,
-                        paddingVertical: 9,
-                        marginBottom: 8,
-                        color: "#17221c",
-                        backgroundColor: "#ffffff",
-                      }}
-                    />
-                    {nearbyVenuePanel.loading ? <Text style={s.weatherLine}>Finding nearby places…</Text> : nearbyVenuePanel.error ? (
-                      <Pressable onPress={() => openGoogleSearch(matchdayVenueQuery.trim() || `${matchdayFinder}s near me`)}><Text style={{ fontSize: 12, fontWeight: "800", color: visibleInkOnCream(favouriteClub.primary) }}>Results unavailable · Search Maps</Text></Pressable>
-                    ) : nearbyVenuePanel.items.slice(0, 5).map((venue) => (
-                      <View key={venue.id} style={{ paddingVertical: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: "#ded8ca" }}>
-                        <Text style={{ fontSize: 13, fontWeight: "800", color: "#17221c" }}>{venue.name} · {venue.distanceMiles.toFixed(1)} miles</Text>
-                        {venue.address ? <Text style={s.weatherLine}>{venue.address}</Text> : null}
-                        {venue.cuisine ? <Text style={s.weatherLine}>Cuisine: {venue.cuisine}</Text> : null}
-                        <Pressable onPress={() => openVenueGoogle(venue)} style={{ marginTop: 6, borderWidth: 1, borderColor: favouriteClub.primary, borderRadius: 8, padding: 7 }}>
-                          <Text style={{ textAlign: "center", fontSize: 11, fontWeight: "900", color: visibleInkOnCream(favouriteClub.primary) }}>NAVIGATE HERE</Text>
-                        </Pressable>
-                        <Pressable onPress={() => checkInMatchdayVenue(venue, matchdayFinder)} style={{ marginTop: 6, borderWidth: 1, borderColor: favouriteClub.primary, borderRadius: 8, padding: 7 }}>
-                          <Text style={{ textAlign: "center", fontSize: 11, fontWeight: "900", color: visibleInkOnCream(favouriteClub.primary) }}>CHECK IN TO {matchdayFinder === "pub" ? "PUB" : "RESTAURANT"}</Text>
-                        </Pressable>
-                      </View>
-                    ))}
-                  </View>
+                {(matchdayFinder === "pub" || matchdayFinder === "restaurant") && matchdaySearchOrigin && matchGround && nearbyVenuePanel?.distanceFrom === "current" ? (
+                  <NearbyPlaces
+                    key={`${matchGround.id}:${matchdayFinder}:${matchdaySearchOrigin.latitude}:${matchdaySearchOrigin.longitude}`}
+                    kind={matchdayFinder} ground={matchGround} colour={favouriteClub.primary}
+                    currentOnly initialOrigin={matchdaySearchOrigin}
+                    onNavigate={openVenueGoogle}
+                    onClose={() => { setNearbyVenuePanel(null); setMatchdayFinder(null); }}
+                    renderExtra={(venue) => <Pressable onPress={() => checkInMatchdayVenue(venue, matchdayFinder)} style={{ padding: 8 }}>
+                      <Text style={{ fontWeight: "900" }}>CHECK IN TO {matchdayFinder === "pub" ? "PUB" : "RESTAURANT"}</Text>
+                    </Pressable>}
+                  />
                 ) : null}
               </>
             ) : null}
@@ -12191,7 +12437,9 @@ useEffect(() => {
         ) : null}
 
       </View>
-      <View>
+      <View style={homePresentation && !parkingPanel && !nearbyVenuePanel ? { display: "none" } : undefined}>
+        {!homePresentation ? (
+          <>
         <Text style={[s.helpText, { marginTop: 12, marginBottom: 0, fontWeight: "800" }]}>STADIUM INFORMATION</Text>
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
           <Pressable
@@ -12223,18 +12471,71 @@ useEffect(() => {
             <Text style={{ fontSize: 12, fontWeight: "800", color: visibleInkOnCream(favouriteClub.primary) }}>View Stadium</Text>
           </Pressable>
         </View>
-        {matchGround && parkingPanel?.groundId === matchGround.id && parkingPanel.distanceFrom !== "current" ? (
+          </>
+        ) : null}
+        {matchGround && parkingPanel?.groundId === matchGround.id && matchdayFinder !== "carPark" ? (
           <View style={{ marginTop: 10, borderTopWidth: 1, borderTopColor: `${favouriteClub.primary}33`, paddingTop: 8 }}>
-            <Text style={{ fontSize: 12, fontWeight: "900", color: "#17221c", marginBottom: 6 }}>
-              NEARBY CAR PARKS · DISTANCE TO STADIUM
+            <Text style={{ fontSize: 14, fontWeight: "900", color: "#17221c", marginBottom: 8 }}>
+              {parkingPanel.distanceFrom === "current"
+                ? "CAR PARKS · NEAREST TO YOUR PHONE"
+                : "CAR PARKS · NEAREST TO FOOTBALL GROUND"}
             </Text>
-            <Pressable onPress={() => { setParkingPanel(null); setMatchdayFinder(null); }} accessibilityLabel="Close car parks">
-              <Text style={{ fontSize: 12, fontWeight: "900", color: visibleInkOnCream(favouriteClub.primary), marginBottom: 6 }}>CLOSE</Text>
-            </Pressable>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
+              {([
+                {
+                  title: "Nearest to ground",
+                  action: () => {
+                    if (parkingPanel.distanceFrom === "current") {
+                      void loadParkingForGround(matchGround, "stadium");
+                    }
+                  },
+                  selected: parkingPanel.distanceFrom !== "current",
+                },
+                {
+                  title: parkingPanel.distanceFrom === "current"
+                    ? "Refresh phone location"
+                    : "Nearest to me",
+                  action: () => { void openParkingNearMe(); },
+                  selected: parkingPanel.distanceFrom === "current",
+                },
+                {
+                  title: "Close",
+                  action: () => {
+                    setParkingPanel(null);
+                    setMatchdayFinder(null);
+                  },
+                  selected: false,
+                },
+              ]).map((button) => (
+                <Pressable
+                  key={button.title}
+                  accessibilityRole="button"
+                  accessibilityLabel={button.title}
+                  accessibilityState={{ selected: button.selected }}
+                  onPress={button.action}
+                  style={{
+                    padding: 9,
+                    borderWidth: 1,
+                    borderColor: favouriteClub.primary,
+                    borderRadius: 8,
+                    backgroundColor: button.selected ? "#e6efe8" : "#fff",
+                  }}
+                >
+                  <Text style={{
+                    color: "#17221c",
+                    fontWeight: "700",
+                    fontSize: 12,
+                  }}>
+                    {button.title}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+
             {parkingPanel.loading ? (
               <Text style={s.weatherLine}>Finding the three closest car parks…</Text>
             ) : parkingPanel.error ? (
-              <Pressable onPress={() => openGoogleSearch(`car parks near ${matchGround.stadium}, ${targetClub}`)}>
+              <Pressable onPress={() => openGoogleSearch(parkingPanel.distanceFrom === "current" ? "car parks near me" : `car parks near ${matchGround.stadium}, ${targetClub}`)}>
                 <Text style={{ fontSize: 12, fontWeight: "800", color: visibleInkOnCream(favouriteClub.primary) }}>
                   Results unavailable · Search Google Maps
                 </Text>
@@ -12266,42 +12567,12 @@ useEffect(() => {
           </View>
         ) : null}
         {matchGround && nearbyVenuePanel?.groundId === matchGround.id && nearbyVenuePanel.distanceFrom !== "current" ? (
-          <View style={{ marginTop: 10, borderTopWidth: 1, borderTopColor: `${favouriteClub.primary}33`, paddingTop: 8 }}>
-            <Text style={{ fontSize: 12, fontWeight: "900", color: "#17221c", marginBottom: 6 }}>
-              {nearbyVenuePanel.kind === "pub" ? "NEARBY PUBS" : "NEARBY RESTAURANTS"} · DISTANCE TO STADIUM
-            </Text>
-            <Pressable onPress={() => { setNearbyVenuePanel(null); setMatchdayFinder(null); }} accessibilityLabel="Close nearby places">
-              <Text style={{ fontSize: 12, fontWeight: "900", color: visibleInkOnCream(favouriteClub.primary), marginBottom: 6 }}>CLOSE</Text>
-            </Pressable>
-            {nearbyVenuePanel.loading ? (
-              <Text style={s.weatherLine}>Finding nearby places…</Text>
-            ) : nearbyVenuePanel.error ? (
-              <Pressable onPress={() => openGoogleSearch(`${nearbyVenuePanel.kind}s near ${matchGround.stadium}, ${targetClub}`)}>
-                <Text style={{ fontSize: 12, fontWeight: "800", color: visibleInkOnCream(favouriteClub.primary) }}>
-                  Results unavailable · Search Google Maps
-                </Text>
-              </Pressable>
-            ) : (
-              nearbyVenuePanel.items.map((venue) => (
-                <View key={venue.id} style={{ paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: "#ded8ca" }}>
-                  <Text style={{ fontSize: 13, fontWeight: "800", color: "#17221c" }}>
-                    {venue.name} · {venue.distanceMiles.toFixed(1)} miles
-                  </Text>
-                  {venue.cuisine ? (
-                    <Text style={s.weatherLine}>Cuisine: {venue.cuisine}</Text>
-                  ) : null}
-                  <Pressable
-                    onPress={() => openVenueGoogle(venue)}
-                    style={{ alignSelf: "flex-start", marginTop: 6, borderWidth: 1, borderColor: favouriteClub.primary, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 }}
-                    accessibilityLabel={`Navigate to ${venue.name} with Google Maps`}
-                  >
-                    <Text style={{ fontSize: 11, fontWeight: "900", color: visibleInkOnCream(favouriteClub.primary) }}>Google Maps</Text>
-                  </Pressable>
-                  {nearbyVenuePanel.distanceFrom === "current" && matchdayExperience ? (
-                    <Pressable onPress={() => checkInMatchdayVenue(venue, nearbyVenuePanel.kind)} style={{ alignSelf: "stretch", marginTop: 7, borderWidth: 1, borderColor: favouriteClub.primary, borderRadius: 8, padding: 7 }}>
-                      <Text style={{ textAlign: "center", fontSize: 11, fontWeight: "900", color: visibleInkOnCream(favouriteClub.primary) }}>CHECK IN TO {nearbyVenuePanel.kind === "pub" ? "PUB" : "RESTAURANT"}</Text>
-                    </Pressable>
-                  ) : null}
+          <NearbyPlaces
+            key={`${matchGround.id}:${nearbyVenuePanel.kind}:stadium`}
+            kind={nearbyVenuePanel.kind} ground={matchGround} colour={favouriteClub.primary}
+            onNavigate={openVenueGoogle}
+            onClose={() => { setNearbyVenuePanel(null); setMatchdayFinder(null); }}
+            renderExtra={(venue) => <>
                   {nearbyVenuePanel.kind === "pub" ? (
                     <View style={{ marginTop: 8 }}>
                       <Pressable
@@ -12353,10 +12624,8 @@ useEffect(() => {
                       ) : null}
                     </View>
                   ) : null}
-                </View>
-              ))
-            )}
-          </View>
+            </>}
+          />
         ) : null}
       </View>
       </>
@@ -12373,6 +12642,7 @@ useEffect(() => {
     (fixture) =>
       fixture.season === CURRENT_SEASON &&
       !isFixturePlayed(fixture) &&
+      !/^(POSTPONED|P-P|PP|PST)$/i.test(fixture.status.trim()) &&
       Boolean(fixture.date) &&
       fixture.date! >= new Date().toLocaleDateString("en-CA") &&
       isFavouriteClubFixture(fixture),
@@ -13671,6 +13941,13 @@ Choose one team. Its colours automatically control the Club Colours frame style.
             );
             const displayAttended =
               attended || fixtureHasPhoto || fixtureHasVideo;
+            // Attendance confirmation requires a recorded result.
+            // A past fixture date alone does not establish completion.
+            const canConfirmFixtureAttendance =
+              fixture.homeScore != null &&
+              fixture.awayScore != null &&
+              /^\d{4}-\d{2}-\d{2}$/.test(fixture.date) &&
+              fixture.date <= new Date().toLocaleDateString("en-CA");
             const photosExpanded =
               expandedSeasonPhotoFixtureKey === fixtureKey;
             const fixtureResult =
@@ -13757,9 +14034,10 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                         ✓ ATTENDED
                       </Text>
                     </Pressable>
-                  ) : (
+                  ) : canConfirmFixtureAttendance ? (
                     <Pressable
-                      onPress={() =>
+                      onPress={() => {
+                        if (!canConfirmFixtureAttendance) return;
                         Alert.alert(
                           "Confirm attendance?",
                           `Confirm that you attended ${homeFixturesProfile.club} v ${fixture.opponent}. Seat details are not required.`,
@@ -13797,8 +14075,8 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                               },
                             },
                           ],
-                        )
-                      }
+                        );
+                      }}
                       style={({ pressed }) => ({
                         borderWidth: 1.5,
                         borderColor: favouriteClub.primary,
@@ -13819,7 +14097,7 @@ Choose one team. Its colours automatically control the Club Colours frame style.
                         I ATTENDED
                       </Text>
                     </Pressable>
-                  )}
+                  ) : null}
                   {fixtureHasPhoto || fixtureHasVideo ? (
                   <Pressable
                     hitSlop={8}
@@ -23932,9 +24210,34 @@ const renderGroundRow = (
             {
               backgroundColor: favouriteClub.primary,
               borderBottomColor: favouriteClub.secondary,
+              marginBottom: Platform.OS === "ios" ? 0 : s.homeHero.marginBottom,
             },
           ]}
         >
+          {stadiumPhotoForId(
+            homeStadiumForClub(
+              favouriteClub.id,
+              favouriteClub.name
+            )?.id
+          ) ? (
+            <View
+              pointerEvents="none"
+              style={StyleSheet.absoluteFill}
+            >
+              <ImageBackground
+                source={
+                  stadiumPhotoForId(
+                    homeStadiumForClub(
+                      favouriteClub.id,
+                      favouriteClub.name
+                    )?.id
+                  )!
+                }
+                resizeMode="cover"
+                style={{ flex: 1, opacity: 0.65 }}
+              />
+            </View>
+          ) : null}
           <View style={s.homeHeroTop}>
             <View style={s.clubBadgeShell}>
               <FavouriteClubBadge
@@ -24012,41 +24315,129 @@ const renderGroundRow = (
           </Pressable>
         </View>
 
-        {favouriteClub.id !== PLACEHOLDER_CLUB_ID
-          ? renderNextMatchCard(verifiedNextFavouriteFixture)
-          : null}
-
+        {favouriteClub.id !== PLACEHOLDER_CLUB_ID &&
+        verifiedNextFavouriteFixture ? (
           <View
-            style={[
-              s.collectionCard,
+            style={{
+              marginTop: Platform.OS === "ios" ? 0 : 14,
+              marginBottom: 0,
+              marginHorizontal: -16,
+            }}
+          >
+
+            {Platform.OS !== "ios" ? (
+            <View
+              style={{
+                backgroundColor: favouriteClub.primary,
+                borderRadius: 18,
+                paddingHorizontal: 18,
+                paddingVertical: 14,
+                marginBottom: 4,
+              }}
+            >
+              <Text
+                style={{
+                  fontSize: 11,
+                  fontWeight: "900",
+                  letterSpacing: 2,
+                  color: readableTextColour(favouriteClub.primary),
+                }}
+              >
+                YOUR NEXT FIXTURE
+              </Text>
+
+              <Text
+                style={{
+                  fontSize: 28,
+                  fontWeight: "900",
+                  color: favouriteClub.secondary,
+                  marginTop: 5,
+                }}
+              >
+                MATCHDAY HUB
+              </Text>
+            </View>
+            ) : null}
+
+            {Platform.OS !== "ios" && homeStadiumForClub(favouriteClub.id, favouriteClub.name) ? (
+              <View
+                style={{
+                  backgroundColor: favouriteClub.primary,
+                  paddingHorizontal: 18,
+                  paddingBottom: 12,
+                }}
+              >
+                <Text
+                  style={{
+                    color: readableTextColour(favouriteClub.primary),
+                    fontSize: 12,
+                    fontWeight: "800",
+                  }}
+                >
+                  HOME STADIUM · {
+                    homeStadiumForClub(
+                      favouriteClub.id,
+                      favouriteClub.name
+                    )?.stadium
+                  }
+                </Text>
+              </View>
+            ) : null}
+
+            {renderNextMatchCard(
+              verifiedNextFavouriteFixture,
+              true
+            )}
+
+          </View>
+        ) : null}
+
+        {Platform.OS === "ios" && COMMUNITY_RELEASE_ENABLED && (
+          <Pressable
+            accessibilityRole="button"
+            style={({ pressed }) => [
+              s.finish,
               {
+                width: "100%",
+                marginTop: (parkingPanel?.groundId === findGroundForClub(clubNamesMatch(verifiedNextFavouriteFixture?.homeName ?? "", favouriteClub.name) ? favouriteClub.name : (verifiedNextFavouriteFixture?.homeName ?? ""))?.id && parkingPanel != null) || (nearbyVenuePanel?.groundId === findGroundForClub(clubNamesMatch(verifiedNextFavouriteFixture?.homeName ?? "", favouriteClub.name) ? favouriteClub.name : (verifiedNextFavouriteFixture?.homeName ?? ""))?.id && nearbyVenuePanel?.distanceFrom !== "current") ? 24 : -12,
+                marginBottom: 2,
+                backgroundColor: favouriteClub.secondary,
                 borderColor: favouriteClub.primary,
-                paddingVertical: 8,
-                marginBottom: 10,
+                opacity: pressed ? 0.72 : 1,
+                transform: [{ scale: pressed ? 0.985 : 1 }],
               },
             ]}
-        >
-          <View style={{ flex: 1 }}>
-            <Text
-              style={[
-                s.collectionCount,
-                { color: visibleInkOnCream(favouriteClub.primary) },
-              ]}
-            >
-              {homeViewMode === "wallet" ? homeWalletTickets.length : homeDisplayTickets.length}{" "}
-              {(homeViewMode === "wallet" ? homeWalletTickets.length : homeDisplayTickets.length) === 1 ? "item" : "items"} shown
-            </Text>
-          </View>
-
-          <View
-            style={[
-              s.collectionIcon,
-              { backgroundColor: favouriteClub.primary },
-            ]}
+            onPress={() => router.push({ pathname: "/community", params: {
+              clubId: favouriteClub.id, clubName: favouriteClub.name,
+              colour: visibleInkOnCream(favouriteClub.primary),
+            } })}
           >
-            <Ionicons name="ticket-outline" size={22} color="#ffffff" />
-          </View>
-        </View>
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 12,
+              }}
+            >
+              <Ionicons
+                name="people"
+                size={28}
+                color={favouriteClub.primary}
+              />
+              <Text
+                style={[
+                  s.finishText,
+                  { color: favouriteClub.primary },
+                ]}
+              >
+                COMMUNITY
+              </Text>
+            </View>
+          </Pressable>
+        )}
+
+
         <View
           style={{
             width: "100%",
@@ -24054,6 +24445,7 @@ const renderGroundRow = (
             alignItems: "center",
             justifyContent: "space-between",
             gap: 8,
+            marginTop: 6,
             marginBottom: 8,
           }}
         >
@@ -24126,19 +24518,39 @@ const renderGroundRow = (
           </View>
         </View>
 
-        <View style={s.homePickerWrap}>
-          <Picker
-            style={s.homePicker}
-            itemStyle={s.homePickerItem}
-            selectedValue={homeTicketSeason}
-            onValueChange={(value) => setHomeTicketSeason(String(value))}
+
+          <View
+            style={[
+              s.collectionCard,
+              {
+                borderColor: favouriteClub.primary,
+                paddingVertical: 8,
+                marginBottom: 2,
+              },
+            ]}
+        >
+          <View style={{ flex: 1 }}>
+            <Text
+              style={[
+                s.collectionCount,
+                { color: visibleInkOnCream(favouriteClub.primary) },
+              ]}
+            >
+              {homeViewMode === "wallet" ? homeWalletTickets.length : homeDisplayTickets.length}{" "}
+              {(homeViewMode === "wallet" ? homeWalletTickets.length : homeDisplayTickets.length) === 1 ? "item" : "items"} shown
+            </Text>
+          </View>
+
+          <View
+            style={[
+              s.collectionIcon,
+              { backgroundColor: favouriteClub.primary },
+            ]}
           >
-            <Picker.Item label="All Tickets" value="All Tickets" />
-            {(homeViewMode === "wallet" ? homeWalletSeasonOptions : homeSeasonOptions).map((season) => (
-              <Picker.Item key={season} label={season} value={season} />
-            ))}
-          </Picker>
+            <Ionicons name="ticket-outline" size={22} color="#ffffff" />
+          </View>
         </View>
+
         {homeViewMode === "frame" ? (
         <GestureDetector gesture={homeFramePinchGesture}>
           <View
@@ -24473,6 +24885,20 @@ const renderGroundRow = (
         </View>
       )}
 
+        <View style={s.homePickerWrap}>
+          <Picker
+            style={s.homePicker}
+            itemStyle={s.homePickerItem}
+            selectedValue={homeTicketSeason}
+            onValueChange={(value) => setHomeTicketSeason(String(value))}
+          >
+            <Picker.Item label="All Tickets" value="All Tickets" />
+            {(homeViewMode === "wallet" ? homeWalletSeasonOptions : homeSeasonOptions).map((season) => (
+              <Picker.Item key={season} label={season} value={season} />
+            ))}
+          </Picker>
+        </View>
+
         {tickets.length > 0 && (
           <View style={{ width: "100%", marginTop: 10 }}>
             <Text style={[s.helpText, { fontWeight: "800", marginBottom: 6, display: "none" }]}>
@@ -24542,7 +24968,8 @@ const renderGroundRow = (
                   borderColor: visibleInkOnCream(favouriteClub.primary),
                   opacity: pressed ? 0.62 : 1,
                   transform: [{ scale: pressed ? 0.98 : 1 }],
-                  marginBottom: 14,
+                  marginTop: -12,
+                  marginBottom: 38,
                 },
               ]}
               onPress={() => {
@@ -24555,49 +24982,7 @@ const renderGroundRow = (
             </Pressable>
           </View>
         )}
-        {Platform.OS === "ios" && (
-          <Pressable
-            accessibilityRole="button"
-            style={({ pressed }) => [
-              s.finish,
-              {
-                width: "100%",
-                marginBottom: 24,
-                backgroundColor: favouriteClub.secondary,
-                borderColor: favouriteClub.primary,
-                opacity: pressed ? 0.72 : 1,
-                transform: [{ scale: pressed ? 0.985 : 1 }],
-              },
-            ]}
-            onPress={() => router.push({ pathname: "/community", params: {
-              clubId: favouriteClub.id, clubName: favouriteClub.name,
-              colour: visibleInkOnCream(favouriteClub.primary),
-            } })}
-          >
-            <View
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 12,
-              }}
-            >
-              <Ionicons
-                name="people"
-                size={28}
-                color={favouriteClub.primary}
-              />
-              <Text
-                style={[
-                  s.finishText,
-                  { color: favouriteClub.primary },
-                ]}
-              >
-                COMMUNITY
-              </Text>
-            </View>
-          </Pressable>
-        )}
+
       </ScrollView>
       {bottomNav()}
 
@@ -24881,7 +25266,7 @@ const s = StyleSheet.create({
     backgroundColor: "#ffffff",
     alignItems: "center",
     justifyContent: "center",
-    padding: 6,
+    padding: 0,
   },
   homeBrand: {
     color: "#ffffff",
