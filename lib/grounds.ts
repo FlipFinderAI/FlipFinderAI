@@ -161,6 +161,8 @@ export const FOOTBALL_GROUNDS: FootballGround[] = [
   { id: "st-mirren-park", stadium: "St Mirren Park", club: "St Mirren", league: "Scottish Premiership", address: "Greenhill Road, Paisley PA3 1RU", latitude: 55.85, longitude: -4.421 },
   { id: "tynecastle", stadium: "Tynecastle Park", club: "Heart of Midlothian", league: "Scottish Premiership", address: "McLeod Street, Edinburgh EH11 2NL", latitude: 55.94, longitude: -3.235 },
 
+  { id: "mcdiarmid-park", stadium: "McDiarmid Park", club: "St Johnstone", league: "Scottish Premiership", address: "McDiarmid Park, Perth PH1 2SJ", latitude: 56.409686, longitude: -3.476928 },
+
   // Scottish Championship
   { id: "new-broomfield", stadium: "New Broomfield", club: "Airdrieonians", league: "Scottish League One", address: "Airdrie ML6 0NX", latitude: 55.869, longitude: -3.971 },
   { id: "gayfield", stadium: "Gayfield Park", club: "Arbroath", league: "Scottish Championship", address: "Gayfield, Arbroath DD11 1QB", latitude: 56.559, longitude: -2.574 },
