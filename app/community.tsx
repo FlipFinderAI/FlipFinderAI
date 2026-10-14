@@ -1983,6 +1983,35 @@ export default function CommunityScreen() {
         <Text>Save your profile with your current favourite club before using Community.</Text>
       )}
 
+      <Text style={styles.heading}>Accept All Community Settings</Text>
+      <Text style={styles.copy}>
+        Enable Community, matchday information, grounds visited,
+        matchday location and photo sharing together.
+        Your 16+ declaration must still be selected manually.
+      </Text>
+      <Switch
+        accessibilityLabel="Accept All Community Settings"
+        value={
+          state.preferences.enabled &&
+          state.preferences.shareGames &&
+          state.preferences.shareGrounds &&
+          state.preferences.locationVisible &&
+          state.preferences.photoSharing
+        }
+        disabled={busy || !connected || (!needsSetup && !sameClub)}
+        onValueChange={acceptAll =>
+          void run(() =>
+            privacy({
+              enabled: acceptAll,
+              shareGames: acceptAll,
+              shareGrounds: acceptAll,
+              locationVisible: acceptAll,
+              photoSharing: acceptAll,
+            })
+          )
+        }
+      />
+
       <Text>Join Community — off by default</Text>
       <Switch
         accessibilityLabel="Join Community"
