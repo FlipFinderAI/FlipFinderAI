@@ -1920,6 +1920,23 @@ export default function CommunityScreen() {
 
       <Text style={styles.heading}>Community & Privacy</Text>
 
+      <View style={{ gap: 8, paddingVertical: 12 }}>
+        <Text style={styles.heading}>Over 18 Verification</Text>
+        <Text style={styles.copy}>
+          Ticket Frame Community is for adults aged 18 or over.
+          Junior Apple Accounts and users under 18 cannot access Community.
+        </Text>
+        <Text style={styles.copy}>
+          {session?.communityEligible
+            ? "Community eligibility confirmed by the service."
+            : "Verification pending. Community remains locked until eligibility is confirmed."}
+        </Text>
+        <Text style={styles.copy}>
+          Age verification cannot be completed by switching on a setting.
+          Apple age-range checks and server-side verification are required.
+        </Text>
+      </View>
+
       {!sameClub && state.profile && (
         <Text>Save your profile with your current favourite club before using Community.</Text>
       )}
