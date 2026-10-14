@@ -15,6 +15,20 @@ export default function CommunityMap({ enabled, busy, colour, avatarPhoto, avata
   const [mode, setMode] = useState<"normal" | "cartoon" | "satellite">("normal");
   const [panelOpen, setPanelOpen] = useState(false);
   const [layersOpen, setLayersOpen] = useState(false);
+  const [placesOpen, setPlacesOpen] = useState(false);
+  const [selectedPlaceCategory, setSelectedPlaceCategory] = useState<string | null>(null);
+
+  const placeCategories = [
+    { id: "stadiums", icon: "⚽", label: "Stadiums" },
+    { id: "pubs", icon: "🍺", label: "Pubs" },
+    { id: "restaurants", icon: "🍽️", label: "Restaurants" },
+    { id: "cafes", icon: "☕", label: "Cafés" },
+    { id: "parking", icon: "🅿️", label: "Parking" },
+    { id: "parks", icon: "🌳", label: "Parks" },
+    { id: "stations", icon: "🚉", label: "Stations" },
+    { id: "hotels", icon: "🏨", label: "Hotels" },
+  ] as const;
+
   const mapRef = useRef<any>(null);
   const [myLocation, setMyLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [locating, setLocating] = useState(false);
@@ -242,6 +256,105 @@ export default function CommunityMap({ enabled, busy, colour, avatarPhoto, avata
         <Text style={{ fontSize: 25 }}>📍</Text>
       </Pressable>
 
+
+
+      {/* Floating places toolbar. Real POI data will be connected separately. */}
+      <View style={{
+        position: "absolute",
+        bottom: panelOpen ? 320 : 12,
+        left: 12,
+        right: 12,
+        alignItems: "flex-start",
+      }}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Places and points of interest"
+          accessibilityState={{ expanded: placesOpen }}
+          onPress={() => setPlacesOpen(value => !value)}
+          style={{
+            width: 52,
+            height: 52,
+            borderRadius: 26,
+            backgroundColor: "#ffffff",
+            borderWidth: 1,
+            borderColor: "#dddddd",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Text style={{ fontSize: 25 }}>📍</Text>
+        </Pressable>
+
+        {placesOpen && (
+          <View style={{
+            marginTop: 8,
+            width: "100%",
+            backgroundColor: "#ffffff",
+            borderRadius: 18,
+            paddingVertical: 10,
+            borderWidth: 1,
+            borderColor: "#dddddd",
+          }}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{
+                paddingHorizontal: 10,
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              {placeCategories.map(category => {
+                const selected = selectedPlaceCategory === category.id;
+
+                return (
+                  <Pressable
+                    key={category.id}
+                    accessibilityRole="button"
+                    accessibilityLabel={category.label}
+                    accessibilityState={{ selected }}
+                    onPress={() => setSelectedPlaceCategory(
+                      selected ? null : category.id
+                    )}
+                    style={{
+                      minWidth: 70,
+                      minHeight: 65,
+                      borderRadius: 14,
+                      paddingHorizontal: 8,
+                      alignItems: "center",
+                      justifyContent: "center",
+                      backgroundColor: selected ? accent : "#f5f5f5",
+                    }}
+                  >
+                    <Text style={{ fontSize: 25 }}>{category.icon}</Text>
+                    <Text style={{
+                      fontSize: 10,
+                      fontWeight: "800",
+                      color: selected ? "#ffffff" : "#17221c",
+                    }}>
+                      {category.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+
+            {selectedPlaceCategory && (
+              <Text
+                accessibilityLiveRegion="polite"
+                style={{
+                  paddingHorizontal: 14,
+                  paddingTop: 8,
+                  color: "#687069",
+                  fontSize: 12,
+                }}
+              >
+                Nearby places are not connected yet. No locations are being invented.
+              </Text>
+            )}
+          </View>
+        )}
+      </View>
 
       <View style={{
         position: "absolute",
