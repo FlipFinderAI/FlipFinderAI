@@ -144,132 +144,14 @@ export function buildTfdClubRegistry(
     entry.row[`${side}Id`] ?? null;
 
   const providerResolvedId = (entry, side) => {
-    const providerId =
-      providerIdFor(entry, side);
-
     const key = providerTeamKey(
       entry.provider,
-      providerId,
+      providerIdFor(entry, side),
     );
 
-    if (!key) return null;
-
-    const resolvedId =
-      providerRefs.get(key) ?? null;
-
-    if (!resolvedId) return null;
-
-    const name =
-      entry.row[`${side}Name`];
-
-    const resolvedClub =
-      clubs.get(resolvedId);
-
-    /*
-     * A persisted provider reference can become stale if an
-     * earlier build attached that provider team to a similarly
-     * named but distinct club.
-     *
-     * Keep the persisted reference when its permanent display
-     * name is still a safe exact match. Otherwise, only re-home
-     * it when exactly one other permanent club has a safe exact
-     * display-name/alias match and no conflicting ID for this
-     * provider.
-     *
-     * This repairs stale provider links without merging clubs.
-     */
-    if (
-      !name ||
-      !resolvedClub?.displayName ||
-      safeExactName(
-        resolvedClub.displayName,
-        name,
-      )
-    ) {
-      return resolvedId;
-    }
-
-    const candidates = [
-      ...clubs.values(),
-    ].filter((club) => {
-      if (club.id === resolvedId) {
-        return false;
-      }
-
-      if (
-        club.displayName &&
-        teamLevel(club.displayName) !==
-          teamLevel(name)
-      ) {
-        return false;
-      }
-
-      const names = [
-        club.displayName,
-        ...club.aliases,
-      ].filter(Boolean);
-
-      if (
-        !names.some((candidateName) =>
-          safeExactName(
-            candidateName,
-            name,
-          ),
-        )
-      ) {
-        return false;
-      }
-
-      const existingProviderId =
-        club.providerRefs.get(
-          entry.provider,
-        );
-
-      return (
-        !existingProviderId ||
-        existingProviderId ===
-          String(providerId)
-      );
-    });
-
-    if (candidates.length !== 1) {
-      return resolvedId;
-    }
-
-    const replacement =
-      candidates[0];
-
-    const staleProviderId =
-      resolvedClub.providerRefs.get(
-        entry.provider,
-      );
-
-    if (
-      staleProviderId ===
-      String(providerId)
-    ) {
-      resolvedClub.providerRefs.delete(
-        entry.provider,
-      );
-    }
-
-    providerRefs.set(
-      key,
-      replacement.id,
-    );
-
-    replacement.providerRefs.set(
-      entry.provider,
-      String(providerId),
-    );
-
-    console.log(
-      `TFD provider identity repaired: ` +
-      `${entry.provider} ${providerId} | ` +
-      `${name} | ${resolvedId} -> ${replacement.id}`,
-    );
-
-    return replacement.id;
+    return key
+      ? providerRefs.get(key) ?? null
+      : null;
   };
 
   const attach = (entry, side, clubId) => {
