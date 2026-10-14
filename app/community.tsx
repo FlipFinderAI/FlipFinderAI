@@ -2335,7 +2335,7 @@ export default function CommunityScreen() {
         key={session?.email || "signed-out"}
         accountKey={session?.email || ""}
         preferences={state.preferences}
-        disabled={busy || !connected || (!needsSetup && !sameClub)}
+        disabled={busy || !connected}
         onChange={privacy}
         run={run}
       />
