@@ -473,6 +473,44 @@ export function buildTfdClubRegistry(
         }
       }
 
+      /*
+       * A previous fixture may contain an old/incorrect club ID.
+       * Only let it re-home a permanent provider-team reference
+       * when another linked provider independently resolves this
+       * side to the same historic club.
+       *
+       * A stale provider reference therefore cannot corroborate
+       * itself and cannot bounce between two historic identities.
+       */
+      const historicLinkCorroborated =
+        Boolean(
+          trustedHistoricClubId &&
+          historicClubId === trustedHistoricClubId &&
+          linkedEntries.some((linkedEntry) => {
+            const linkedName =
+              linkedEntry.row[`${side}Name`];
+
+            if (
+              !linkedName ||
+              teamLevel(linkedName) !==
+                teamLevel(previousName) ||
+              !safeExactName(
+                previousName,
+                linkedName,
+              )
+            ) {
+              return false;
+            }
+
+            return (
+              providerResolvedId(
+                linkedEntry,
+                side,
+              ) === historicClubId
+            );
+          }),
+        );
+
       for (const entry of linkedEntries) {
         const entryName =
           entry.row[`${side}Name`];
@@ -495,6 +533,7 @@ export function buildTfdClubRegistry(
            * This does not merge clubs and does not use fuzzy names.
            */
           if (
+            historicLinkCorroborated &&
             trustedHistoricClubId &&
             historicClubId === trustedHistoricClubId &&
             safeExactName(previousName, entryName)
