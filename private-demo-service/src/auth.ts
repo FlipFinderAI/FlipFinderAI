@@ -668,6 +668,43 @@ button.addEventListener("click", async () => {
         );
       }
 
+      const username =
+        typeof data.username === "string"
+          ? data.username.trim().replace(/^@/, "")
+          : "";
+
+      if (!/^[A-Za-z0-9_]{3,20}$/.test(username)) {
+        return json({
+          error: "Username must be 3–20 letters, numbers or underscores.",
+        }, 400);
+      }
+
+      const firstName =
+        typeof data.firstName === "string" ? data.firstName.trim() : "";
+
+      const surname =
+        typeof data.surname === "string" ? data.surname.trim() : "";
+
+      if (
+        !firstName || firstName.length > 80 ||
+        !surname || surname.length > 80
+      ) {
+        return json({
+          error: "Enter your first name and surname.",
+        }, 400);
+      }
+
+      const phone =
+        typeof data.phoneNumber === "string"
+          ? data.phoneNumber.trim().replace(/[\\s()-]/g, "")
+          : "";
+
+      if (!/^\\+[1-9][0-9]{7,14}$/.test(phone)) {
+        return json({
+          error: "Enter a phone number with country code, such as +447123456789.",
+        }, 400);
+      }
+
       const email = normalizeEmail(data.email);
 
       if (!email) {
@@ -706,21 +743,35 @@ button.addEventListener("click", async () => {
       const now = Date.now();
       const passwordHash = hashPassword(data.password);
 
-      await env.DB.prepare(
-        `INSERT INTO community_accounts(
-          id,email_normalized,password_hash,
-          email_verified,community_eligible,is_child,
-          status,created_at,updated_at
-        ) VALUES(?,?,?,0,0,NULL,'active',?,?)`,
-      )
-        .bind(
-          id,
-          email,
-          passwordHash,
-          now,
-          now,
-        )
-        .run();
+      try {
+        await env.DB.batch([
+          env.DB.prepare(
+            `INSERT INTO community_accounts(
+              id,email_normalized,password_hash,
+              email_verified,community_eligible,is_child,
+              status,created_at,updated_at
+            ) VALUES(?,?,?,0,0,NULL,'active',?,?)`
+          ).bind(id, email, passwordHash, now, now),
+
+          env.DB.prepare(
+            `INSERT INTO community_usernames(
+              account_id,username,created_at,updated_at
+            ) VALUES(?,?,?,?)`
+          ).bind(id, username, now, now),
+
+          env.DB.prepare(
+            `INSERT INTO community_signup_details(
+              account_id,first_name,surname,phone_e164,
+              created_at,updated_at
+            ) VALUES(?,?,?,?,?,?)`
+          ).bind(id, firstName, surname, phone, now, now),
+        ]);
+      } catch (error) {
+        console.error("Community signup transaction failed", error);
+        return json({
+          error: "Account could not be created. Check your email and username, then try again.",
+        }, 409);
+      }
 
       const session = await issueSession(env, id);
 
@@ -1253,6 +1304,24 @@ button.addEventListener("click", async () => {
       return json({
         ok: true,
         deleted: true,
+      });
+    }
+
+    if (path === "/username/me" && request.method === "GET") {
+      const identity = await verifyCommunitySession(request, env);
+
+      if (!identity) {
+        return json({ error: "Sign in required." }, 401);
+      }
+
+      const record = await env.DB.prepare(
+        `SELECT username FROM community_usernames
+         WHERE account_id=? LIMIT 1`
+      ).bind(identity.accountId).first<{ username: string }>();
+
+      return json({
+        username: record?.username ?? null,
+        registered: Boolean(record),
       });
     }
 
