@@ -1256,6 +1256,82 @@ button.addEventListener("click", async () => {
       });
     }
 
+    if (path === "/marketing" && request.method === "GET") {
+      const identity = await verifyCommunitySession(request, env);
+      if (!identity) return json({ error: "Sign in required." }, 401);
+
+      const record = await env.DB.prepare(
+        `SELECT email_sms_consent, consent_recorded_at, consent_withdrawn_at
+         FROM community_marketing_contacts
+         WHERE account_id=?
+         LIMIT 1`
+      ).bind(identity.accountId).first<{
+        email_sms_consent: number;
+        consent_recorded_at: number | null;
+        consent_withdrawn_at: number | null;
+      }>();
+
+      return json({
+        emailSmsMarketing: record?.email_sms_consent === 1,
+        consentRecordedAt: record?.consent_recorded_at ?? null,
+        consentWithdrawnAt: record?.consent_withdrawn_at ?? null,
+      });
+    }
+
+    if (path === "/marketing" && request.method === "POST") {
+      const identity = await verifyCommunitySession(request, env);
+      if (!identity) return json({ error: "Sign in required." }, 401);
+
+      const data = await readSmallJson(request);
+      if (typeof data?.emailSmsMarketing !== "boolean") {
+        return json({ error: "Invalid marketing preference." }, 400);
+      }
+
+      const now = Date.now();
+      const consent = data.emailSmsMarketing;
+      const version = "community-marketing-v1";
+
+      const account = await env.DB.prepare(
+        `SELECT email_normalized FROM community_accounts
+         WHERE id=? AND status='active' LIMIT 1`
+      ).bind(identity.accountId).first<{ email_normalized: string }>();
+
+      if (!account) return json({ error: "Account not found." }, 404);
+
+      await env.DB.prepare(
+        `INSERT INTO community_marketing_contacts (
+           id, account_id, email_normalized, email_sms_consent,
+           consent_recorded_at, consent_withdrawn_at,
+           consent_source, consent_version, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(account_id) DO UPDATE SET
+           email_normalized=excluded.email_normalized,
+           email_sms_consent=excluded.email_sms_consent,
+           consent_recorded_at=excluded.consent_recorded_at,
+           consent_withdrawn_at=excluded.consent_withdrawn_at,
+           consent_source=excluded.consent_source,
+           consent_version=excluded.consent_version,
+           updated_at=excluded.updated_at`
+      ).bind(
+        crypto.randomUUID(),
+        identity.accountId,
+        account.email_normalized,
+        consent ? 1 : 0,
+        consent ? now : null,
+        consent ? null : now,
+        "community-privacy-settings",
+        version,
+        now,
+        now
+      ).run();
+
+      return json({
+        emailSmsMarketing: consent,
+        consentRecordedAt: consent ? now : null,
+        consentWithdrawnAt: consent ? null : now,
+      });
+    }
+
     if (path === "/session" && request.method === "GET") {
       const identity =
         await verifyCommunitySession(request, env);
