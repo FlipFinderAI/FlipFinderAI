@@ -699,7 +699,7 @@ button.addEventListener("click", async () => {
           ? data.phoneNumber.trim().replace(/[\\s()-]/g, "")
           : "";
 
-      if (!/^\\+[1-9][0-9]{7,14}$/.test(phone)) {
+      if (!/^\+[1-9][0-9]{7,14}$/.test(phone)) {
         return json({
           error: "Enter a phone number with country code, such as +447123456789.",
         }, 400);

@@ -701,7 +701,7 @@ export default function CommunityScreen() {
 
     const formattedPhone = phoneNumber.trim().replace(/[^+0-9]/g, "");
 
-    if (!new RegExp("^\\+[1-9][0-9]{7,14}$").test(formattedPhone)) {
+    if (!/^\+[1-9][0-9]{7,14}$/.test(formattedPhone)) {
       throw new Error("Enter your phone number with country code, for example +447123456789.");
     }
 
