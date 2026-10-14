@@ -43,7 +43,7 @@ RCT_EXTERN_METHOD(searchPlacesQuery:(nonnull NSNumber *)latitude
 
 RCT_EXPORT_VIEW_PROPERTY(stadiums, NSArray)
 RCT_EXPORT_VIEW_PROPERTY(mapType, NSString)
-RCT_EXPORT_VIEW_PROPERTY(onSelect, RCTBubblingEventBlock)
+RCT_EXPORT_VIEW_PROPERTY(onStadiumSelect, RCTBubblingEventBlock)
 RCT_EXPORT_VIEW_PROPERTY(showUserLocation, BOOL)
 RCT_EXPORT_VIEW_PROPERTY(userLatitude, NSNumber)
 RCT_EXPORT_VIEW_PROPERTY(userLongitude, NSNumber)

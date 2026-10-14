@@ -19157,7 +19157,7 @@ const manualCompetitionFixtures = draftMatch.competition
                       style={{ flex: 1 }}
                       stadiums={stadiumMapRows}
                       mapType={historyStadiumMapType}
-                      onSelect={(event: any) => {
+                      onStadiumSelect={(event: any) => {
                         const stadiumName = event?.nativeEvent?.name;
 
                         if (typeof stadiumName === "string" && stadiumName) {
@@ -19277,7 +19277,7 @@ const manualCompetitionFixtures = draftMatch.competition
                         style={{ flex: 1 }}
                         stadiums={stadiumMapRows}
                         mapType={historyStadiumMapType}
-                        onSelect={(event: any) => {
+                        onStadiumSelect={(event: any) => {
                           const stadiumName = event?.nativeEvent?.name;
 
                           if (
@@ -20613,7 +20613,7 @@ const renderGroundRow = (
                     userLatitude={userCoords?.latitude}
                     userLongitude={userCoords?.longitude}
                     locateNonce={groundMapLocateNonce}
-                    onSelect={(event: any) => {
+                    onStadiumSelect={(event: any) => {
                       const stadiumName = event?.nativeEvent?.name;
 
                       if (
@@ -20768,7 +20768,7 @@ const renderGroundRow = (
                     userLatitude={userCoords?.latitude}
                     userLongitude={userCoords?.longitude}
                     locateNonce={groundMapLocateNonce}
-                      onSelect={(event: any) => {
+                      onStadiumSelect={(event: any) => {
                         const stadiumName = event?.nativeEvent?.name;
 
                         if (

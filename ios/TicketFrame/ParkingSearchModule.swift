@@ -866,7 +866,7 @@ final class HistoryStadiumMapView:
     }
   }
 
-  @objc var onSelect: RCTBubblingEventBlock?
+  @objc var onStadiumSelect: RCTBubblingEventBlock?
 
   @objc var showUserLocation: Bool = false {
     didSet {
@@ -1044,7 +1044,7 @@ final class HistoryStadiumMapView:
       return
     }
 
-    onSelect?([
+    onStadiumSelect?([
       "name": stadium.stadiumName,
     ])
   }
