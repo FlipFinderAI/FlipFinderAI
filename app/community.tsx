@@ -42,6 +42,51 @@ const DRAFT_KEY = "ticket-frame.community-profile-draft.v1";
 const AVATAR_PHOTO_KEY = "ticket-frame.community-avatar-photo.v1";
 const COMMUNITY_BACKGROUND_KEY = "ticket-frame.community-background.v1";
 const COMMUNITY_BACKGROUND_PHOTO_KEY = "ticket-frame.community-background-photo.v1";
+
+type CommunityBackgroundChoice = "club" | "mine" | "none";
+
+function CommunityBackgroundImage({
+  choice,
+  clubPhoto,
+  personalPhoto,
+}: {
+  choice: CommunityBackgroundChoice;
+  clubPhoto: ReturnType<typeof stadiumPhotoForId>;
+  personalPhoto: string | null;
+}) {
+  const source =
+    choice === "club"
+      ? clubPhoto
+      : choice === "mine" && personalPhoto
+        ? { uri: personalPhoto }
+        : null;
+
+  if (!source) return null;
+
+  return (
+    <View
+      pointerEvents="none"
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      style={{
+        position: "absolute",
+        top: 0,
+        right: 0,
+        bottom: 0,
+        left: 0,
+        width: "100%",
+        height: "100%",
+      }}
+    >
+      <Image
+        source={source}
+        resizeMode="cover"
+        style={{ width: "100%", height: "100%" }}
+      />
+    </View>
+  );
+}
+
 const BIOMETRIC_KEY = "ticket-frame.community-biometric-enabled.v1";
 
 function CircularPhotoEditor({
