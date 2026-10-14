@@ -588,6 +588,52 @@ export default function CommunityScreen() {
     setAvatarPhoto(dataUri);
   }
 
+  async function selectCommunityBackground(
+    choice: "club" | "none"
+  ) {
+    await AsyncStorage.setItem(COMMUNITY_BACKGROUND_KEY, choice);
+    setCommunityBackground(choice);
+  }
+
+  async function chooseCommunityBackgroundPhoto() {
+    const permission =
+      await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+    if (!permission.granted) {
+      throw new Error("Photo access is needed to choose a Community background.");
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      allowsEditing: false,
+      quality: 0.9,
+    });
+
+    if (result.canceled || !result.assets?.[0]?.uri) return;
+
+    const prepared = await ImageManipulator.manipulateAsync(
+      result.assets[0].uri,
+      [{ resize: { width: 1080 } }],
+      {
+        compress: 0.65,
+        format: ImageManipulator.SaveFormat.JPEG,
+        base64: true,
+      }
+    );
+
+    if (!prepared.base64) {
+      throw new Error("Could not prepare the Community background photo.");
+    }
+
+    const dataUri = `data:image/jpeg;base64,${prepared.base64}`;
+
+    await AsyncStorage.setItem(COMMUNITY_BACKGROUND_PHOTO_KEY, dataUri);
+    await AsyncStorage.setItem(COMMUNITY_BACKGROUND_KEY, "mine");
+
+    setCommunityBackgroundPhoto(dataUri);
+    setCommunityBackground("mine");
+  }
+
   async function chooseAvatarPhoto() {
     const permission =
       await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -1943,6 +1989,34 @@ export default function CommunityScreen() {
       {!!state.safetyId && (
         <Text style={styles.copy}>Community Safety ID: {state.safetyId}</Text>
       )}
+      <Text style={styles.heading}>Community Background</Text>
+
+      <Text style={styles.copy}>
+        Choose the background for your signed-in Community screen.
+        Your sign-in screen will always show your club stadium.
+      </Text>
+
+      <Action
+        title={communityBackground === "club" ? "✓ Club Photo" : "Club Photo"}
+        disabled={busy}
+        onPress={() => void run(() => selectCommunityBackground("club"))}
+        colour={colour}
+      />
+
+      <Action
+        title={communityBackground === "mine" ? "✓ My Photo" : "My Photo"}
+        disabled={busy}
+        onPress={() => void run(chooseCommunityBackgroundPhoto)}
+        colour={colour}
+      />
+
+      <Action
+        title={communityBackground === "none" ? "✓ No Photo" : "No Photo"}
+        disabled={busy}
+        onPress={() => void run(() => selectCommunityBackground("none"))}
+        colour={colour}
+      />
+
       {serviceConfigured && session && (
         <View style={{ gap: 8 }}>
           <Text style={styles.heading}>Community account</Text>
