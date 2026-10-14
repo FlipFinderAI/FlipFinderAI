@@ -56,7 +56,7 @@ export default function MatchdayHub({ match, clubs, tickets, favouriteClub, dire
 
   useEffect(() => {
     const refresh = () => setNow(Date.now());
-    const timer = setInterval(refresh, 1000);
+    const timer = setInterval(refresh, 15000);
     const subscription = AppState.addEventListener("change", (state) => { if (state === "active") refresh(); });
     return () => { clearInterval(timer); subscription.remove(); };
   }, []);

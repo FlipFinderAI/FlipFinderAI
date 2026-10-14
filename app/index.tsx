@@ -336,6 +336,7 @@ import {
   getMatchDatabaseGeneratedAt,
   findBundledLeagueForClub,
   getRecentBundledClubFixtures,
+  getBundledClubFixtures,
   getBundledCompetitionNamesForSeason,
   getBundledCompetitionFixtures,
   fetchTeamFixtures,
@@ -6242,7 +6243,18 @@ confidence: ${recognition.confidence}%`,
           );
           savedClubValidRef.current = savedClubValid;
           if (savedClubValid && savedClub) {
+            // Restore the verified current-season fixture cache alongside
+            // the saved club, without waiting for asynchronous loading.
+            const immediateFixtures = getBundledClubFixtures(
+              savedClub.name,
+              savedClub.league,
+              CURRENT_SEASON,
+            );
+            const immediateClubKey = `${normaliseFixtureText(savedClub.name)}|${savedClub.league}|${CURRENT_SEASON}`;
             setFavouriteClub(savedClub);
+            setSeasonFixtures(immediateFixtures);
+            verifiedFixtureClubRef.current = immediateClubKey;
+            setVerifiedFixtureClubKey(immediateClubKey);
             if (storedClub?.name !== savedClub.name) {
               console.warn(
                 `[recovery] repaired favourite club ${storedClub?.name ?? "(missing)"} -> ${savedClub.name}`,
@@ -11346,7 +11358,7 @@ const handleTileDrop = (id: string, tx: number, ty: number) => {
 
     const fixtureTimer = setTimeout(() => {
       void loadFixtures();
-    }, 250);
+    }, 0);
 
     return () => clearTimeout(fixtureTimer);
   }, [activeTab, loadFixtures, matchCheckInEnabled]);

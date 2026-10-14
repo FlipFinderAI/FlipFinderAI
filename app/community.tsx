@@ -100,6 +100,13 @@ const autoUnlockKey = (email: string) => "ticket-frame.community-auto-unlock.v1:
 
 const BIOMETRIC_KEY = "ticket-frame.community-biometric-enabled.v1";
 
+type CommunityLoginMode = "stay" | "biometric" | "password";
+
+const loginModeKey = (email: string) =>
+  "ticket-frame.community-login-mode.v1:" + email.trim().toLowerCase();
+
+
+
 function CircularPhotoEditor({
   uri,
   onCancel,
@@ -330,6 +337,9 @@ export default function CommunityScreen() {
   const [biometricEnabled, setBiometricEnabled] = useState(false);
   const [biometricChoiceMade, setBiometricChoiceMade] = useState(false);
   const [automaticSignIn, setAutomaticSignIn] = useState(false);
+
+  const [loginMode, setLoginMode] = useState<CommunityLoginMode>("password");
+
   const [needsSetup, setNeedsSetup] = useState(true);
   const [age16Declared, setAge16Declared] = useState(false);
   const [summary, setSummary] = useState({ gamesAttended: 0, groundsVisited: [] as string[] });
@@ -386,10 +396,7 @@ export default function CommunityScreen() {
     label: "Biometrics",
   });
   const serviceConfigured = communityAvailable();
-  const connected =
-    serviceConfigured &&
-    unlocked &&
-    Boolean(session?.communityEligible);
+  const connected = serviceConfigured && unlocked && Boolean(session?.emailVerified) && Boolean(session?.communityEligible);
   const sameClub = state.profile?.clubId === clubId;
   const active = connected && sameClub && state.preferences.enabled;
 
@@ -501,6 +508,7 @@ export default function CommunityScreen() {
         const restored = await communityRestoreSession();
         if (cancelled) return;
         setSession(restored);
+        setAge16Declared(Boolean(restored?.communityEligible));
         if (restored?.email) {
           await rememberCommunityAccount(restored.email);
           if (cancelled) return;
@@ -509,6 +517,9 @@ export default function CommunityScreen() {
           const savedAutomatic = await AsyncStorage.getItem(autoUnlockKey(restored.email));
           if (cancelled) return;
           setAutomaticSignIn(savedAutomatic === "1");
+          const restoredMode = await getCommunityLoginMode(restored.email);
+          if (cancelled) return;
+          setLoginMode(restoredMode);
         }
 
         if (restored) {
@@ -521,9 +532,52 @@ export default function CommunityScreen() {
       .finally(() => { if (!cancelled) setLoaded(true); });
     return () => { cancelled = true; };
   }, [serviceConfigured]);
+
+  async function getCommunityLoginMode(
+    accountEmail: string
+  ): Promise<CommunityLoginMode> {
+    const stored = await AsyncStorage.getItem(loginModeKey(accountEmail));
+
+    if (
+      stored === "stay" ||
+      stored === "biometric" ||
+      stored === "password"
+    ) {
+      return stored;
+    }
+
+    const legacy = await AsyncStorage.getItem(BIOMETRIC_KEY);
+
+    return legacy === "1" ? "biometric" : "password";
+  }
+
+  async function selectCommunityLoginMode(
+    nextMode: CommunityLoginMode
+  ) {
+    if (!session?.email) {
+      throw new Error("Sign in before changing your login method.");
+    }
+
+    if (nextMode === "biometric" && !unlockCapability.available) {
+      throw new Error("Face ID or Touch ID is unavailable.");
+    }
+
+    await AsyncStorage.setItem(loginModeKey(session.email), nextMode);
+
+    setLoginMode(nextMode);
+    setStatus(
+      nextMode === "stay"
+        ? "Stay Signed In selected."
+        : nextMode === "biometric"
+          ? "Biometric login selected."
+          : "Password Every Time selected."
+    );
+  }
+
   async function loadUnlockedCommunity(next: CommunitySession, generation = lockGeneration.current) {
     // Keep protected content locked until both the server and local setup state load.
     setSession(next);
+    setAge16Declared(Boolean(next.communityEligible));
 
     // The server is authoritative for permanent Community usernames.
     setRegisteredUsername("");
@@ -562,8 +616,9 @@ export default function CommunityScreen() {
     setBiometricChoiceMade(choiceMade);
     setBiometricEnabled(savedMethod === "1");
     setAutomaticSignIn(savedAutomatic === "1");
+    setLoginMode(await getCommunityLoginMode(next.email));
     setNeedsSetup(!complete);
-    setShowCommunitySettings(!complete);
+    setShowCommunitySettings(!complete || !next.communityEligible);
     setCommunityTab("chats");
     if (generation === lockGeneration.current) setUnlocked(true);
   }
@@ -587,10 +642,41 @@ export default function CommunityScreen() {
   }
 
   useEffect(() => {
-    if (!automaticSignIn || !foreground || !loaded || !session || unlocked || busy || !biometricEnabled || !unlockCapability.available || attemptedAutomaticUnlock.current) return;
-    attemptedAutomaticUnlock.current = true;
-    void run(unlockWithDevice);
-  }, [automaticSignIn, foreground, loaded, session, unlocked, busy, biometricEnabled, unlockCapability.available]);
+    if (
+      !foreground ||
+      !loaded ||
+      !session ||
+      unlocked ||
+      busy ||
+      attemptedAutomaticUnlock.current
+    ) return;
+
+    if (loginMode === "stay") {
+      attemptedAutomaticUnlock.current = true;
+      const generation = lockGeneration.current;
+      void run(async () => {
+        await loadUnlockedCommunity(session, generation);
+      });
+      return;
+    }
+
+    if (
+      loginMode === "biometric" &&
+      unlockCapability.available
+    ) {
+      attemptedAutomaticUnlock.current = true;
+      void run(unlockWithDevice);
+    }
+  }, [
+    loginMode,
+    automaticSignIn,
+    foreground,
+    loaded,
+    session,
+    unlocked,
+    busy,
+    unlockCapability.available
+  ]);
 
   async function unlockWithPassword() {
     const generation = lockGeneration.current;
@@ -751,6 +837,8 @@ export default function CommunityScreen() {
     await AsyncStorage.setItem(setupKey(signup.session.email), "pending");
     await AsyncStorage.setItem(BIOMETRIC_KEY, "");
     await AsyncStorage.setItem(autoUnlockKey(signup.session.email), "0");
+    await AsyncStorage.setItem(loginModeKey(signup.session.email), "stay");
+    setLoginMode("stay");
     await loadUnlockedCommunity(signup.session, generation);
 
     if (signup.verificationEmailSent) {
@@ -1082,13 +1170,15 @@ export default function CommunityScreen() {
       if (nextState === "background") {
         lockGeneration.current += 1;
         attemptedAutomaticUnlock.current = false;
-        setUnlocked(false);
+        if (loginMode !== "stay") {
+          setUnlocked(false);
+        }
         setPassword("");
       }
     });
 
     return () => subscription.remove();
-  }, [session]);
+  }, [session, loginMode]);
 
   async function saveProfile() {
     if (!name.trim() || name.trim().length > 40) throw new Error("Choose a display name of 1–40 characters.");
@@ -1573,7 +1663,7 @@ export default function CommunityScreen() {
 
         <Text>{session.email}</Text>
 
-        {biometricEnabled && unlockCapability.available && (
+        {loginMode === "biometric" && unlockCapability.available && (
           <Action
             title={`Unlock with ${unlockCapability.label}`}
             disabled={busy}
@@ -1650,6 +1740,10 @@ export default function CommunityScreen() {
         return <Pressable key={id} accessibilityRole="tab" accessibilityState={{ selected, disabled: busy }}
           disabled={busy}
           onPress={() => {
+            if (!session?.communityEligible || !session?.emailVerified || needsSetup) {
+              setShowCommunitySettings(true);
+              return;
+            }
             setShowCommunitySettings(id === "settings");
             if (id !== "settings") setCommunityTab(id);
           }}
@@ -1659,6 +1753,34 @@ export default function CommunityScreen() {
           </Text>
         </Pressable>;
       })}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Ticket Frame Home"
+        disabled={busy}
+        onPress={() => {
+          if (router.canGoBack()) {
+            router.back();
+          } else {
+            router.replace("/");
+          }
+        }}
+        style={{
+          flex: 1,
+          minHeight: 52,
+          alignItems: "center",
+          justifyContent: "center",
+          borderTopWidth: 3,
+          borderTopColor: "transparent",
+        }}
+      >
+        <Text style={{
+          color: "#17221c",
+          fontWeight: "900",
+          fontSize: 13,
+        }}>
+          Home
+        </Text>
+      </Pressable>
     </View>
   ) : null;
 
@@ -2169,8 +2291,8 @@ export default function CommunityScreen() {
           <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
             <Switch
               accessibilityLabel="I confirm I am aged 16 or over"
-              value={age16Declared}
-              disabled={busy}
+              value={Boolean(session?.communityEligible) || age16Declared}
+              disabled={busy || Boolean(session?.communityEligible)}
               onValueChange={setAge16Declared}
             />
             <Text style={[styles.copy, { flex: 1 }]}>
@@ -2273,37 +2395,38 @@ export default function CommunityScreen() {
       )}
       {session && (
         <View style={{ gap: 10 }}>
-          <Text style={styles.heading}>Future Sign-in Method</Text>
+          <Text style={styles.heading}>Community Login Security</Text>
           <Text style={styles.copy}>
-            Choose how to unlock Community on this iPhone. Your Community password
-            remains available if biometrics are unavailable or cancelled.
+            Choose how this account unlocks Community on this iPhone.
+            Your age eligibility and privacy preferences remain unchanged.
+          </Text>
+          <Action
+            title={`${loginMode === "stay" ? "✓ " : ""}Stay Signed In (No Extra Lock)`}
+            disabled={busy}
+            onPress={() => void run(() => selectCommunityLoginMode("stay"))}
+            colour={colour}
+          />
+          <Text style={styles.copy}>
+            No extra unlock while your saved session remains valid.
           </Text>
           {unlockCapability.available ? (
             <Action
-              title={`${biometricChoiceMade && biometricEnabled ? "✓ " : ""}Use ${unlockCapability.label}${unlockCapability.label === "Touch ID" ? " (fingerprint)" : ""}`}
+              title={`${loginMode === "biometric" ? "✓ " : ""}${unlockCapability.label}`}
               disabled={busy}
-              onPress={() => void run(() => finishSecuritySetup(true))}
+              onPress={() => void run(() => selectCommunityLoginMode("biometric"))}
               colour={colour}
             />
-          ) : <Text>Face ID or Touch ID is not currently available.</Text>}
+          ) : (
+            <Text style={styles.copy}>
+              Face ID or Touch ID is unavailable on this device.
+            </Text>
+          )}
           <Action
-            title={`${biometricChoiceMade && !biometricEnabled ? "✓ " : ""}Use Community Password`}
+            title={`${loginMode === "password" ? "✓ " : ""}Password Every Time`}
             disabled={busy}
-            onPress={() => void run(() => finishSecuritySetup(false))}
+            onPress={() => void run(() => selectCommunityLoginMode("password"))}
             colour={colour}
           />
-          <Text style={styles.heading}>Automatic sign-in</Text>
-          <Text style={styles.copy}>
-            Open Community, confirm with {unlockCapability.label === "Touch ID" ? "your fingerprint" : unlockCapability.label},
-            and go straight to Chats. You will not need to revisit Settings.
-          </Text>
-          <Switch accessibilityLabel="Automatic sign-in" value={automaticSignIn && biometricEnabled}
-            disabled={busy || !biometricEnabled || !unlockCapability.available}
-            onValueChange={setAutomaticSignIn} />
-          {!biometricEnabled && <Text style={styles.copy}>
-            Choose Face ID or Touch ID above to enable automatic sign-in.
-            With Community Password selected, enter your password when you return.
-          </Text>}
             <>
               <Text style={styles.copy}>
                 Your profile and privacy choices are saved together below.
