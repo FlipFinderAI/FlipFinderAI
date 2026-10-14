@@ -1083,6 +1083,11 @@ export default function CommunityScreen() {
 
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: "#f8f5ec" }}>
+        <CommunityBackgroundImage
+          choice={communityBackground}
+          clubPhoto={communityClubPhoto}
+          personalPhoto={communityBackgroundPhoto}
+        />
         <KeyboardAvoidingView
           style={{ flex: 1 }}
           behavior={Platform.OS === "ios" ? "padding" : undefined}
