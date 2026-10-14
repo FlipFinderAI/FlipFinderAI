@@ -400,7 +400,7 @@ export default function CommunityScreen() {
   const serviceConfigured = communityAvailable();
   const connected = serviceConfigured && unlocked && Boolean(session?.emailVerified) && Boolean(session?.communityEligible);
   const sameClub = state.profile?.clubId === clubId;
-  const active = connected && sameClub && state.preferences.enabled;
+  const active = connected && state.preferences.enabled;
   const mapSharing = useMapSharing(active, state.preferences, session?.email || "");
 
   // "Active now" means the supporter is genuinely using Community
