@@ -766,6 +766,30 @@ export async function fetchLeagueTable(
 
   const reconciledRows = reconcileDuplicateTableRows(rows, tableFixtures);
 
+  // Southampton: four-point deduction in the 2026/27 Championship.
+  // Recalculate from results so a hosted update cannot deduct twice.
+  if (
+    leagueLabel.trim().toLowerCase() === "championship" &&
+    season === "2026-2027"
+  ) {
+    const southampton = reconciledRows.find(
+      (row) => canonicalClubName(row.name) === "southampton",
+    );
+
+    if (southampton) {
+      southampton.points =
+        southampton.win * 3 + southampton.draw - 4;
+
+      reconciledRows.sort(
+        (a, b) =>
+          b.points - a.points ||
+          b.goalDifference - a.goalDifference ||
+          b.goalsFor - a.goalsFor ||
+          a.name.localeCompare(b.name),
+      );
+    }
+  }
+
   return { rows: reconciledRows, season };
 }
 
