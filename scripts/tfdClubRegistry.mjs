@@ -438,9 +438,12 @@ export function buildTfdClubRegistry(
       const key =
         historicNameKey(previousName);
 
-      let historicClubId =
+      const trustedHistoricClubId =
         previousMatch[`${side}ClubId`] ??
         null;
+
+      let historicClubId =
+        trustedHistoricClubId;
 
       if (
         historicClubId &&
@@ -479,6 +482,90 @@ export function buildTfdClubRegistry(
           teamLevel(entryName) ===
             teamLevel(previousName)
         ) {
+          /*
+           * A source already linked to a previous canonical TFD
+           * fixture is stronger evidence than a stale persisted
+           * provider-team reference.
+           *
+           * Only repair the provider reference when:
+           * - the previous fixture already has a permanent club ID;
+           * - that permanent ID still exists;
+           * - the provider team name is a safe exact match.
+           *
+           * This does not merge clubs and does not use fuzzy names.
+           */
+          if (
+            trustedHistoricClubId &&
+            historicClubId === trustedHistoricClubId &&
+            safeExactName(previousName, entryName)
+          ) {
+            const providerId =
+              providerIdFor(entry, side);
+
+            const providerKey =
+              providerTeamKey(
+                entry.provider,
+                providerId,
+              );
+
+            const staleClubId =
+              providerKey
+                ? providerRefs.get(providerKey) ?? null
+                : null;
+
+            if (
+              providerKey &&
+              staleClubId &&
+              staleClubId !== historicClubId
+            ) {
+              const staleClub =
+                clubs.get(staleClubId);
+
+              const historicClub =
+                clubs.get(historicClubId);
+
+              const historicProviderId =
+                historicClub?.providerRefs.get(
+                  entry.provider,
+                );
+
+              if (
+                historicClub &&
+                (
+                  !historicProviderId ||
+                  historicProviderId ===
+                    String(providerId)
+                )
+              ) {
+                if (
+                  staleClub?.providerRefs.get(
+                    entry.provider,
+                  ) === String(providerId)
+                ) {
+                  staleClub.providerRefs.delete(
+                    entry.provider,
+                  );
+                }
+
+                providerRefs.set(
+                  providerKey,
+                  historicClubId,
+                );
+
+                historicClub.providerRefs.set(
+                  entry.provider,
+                  String(providerId),
+                );
+
+                console.log(
+                  `TFD previous-match provider link repaired: ` +
+                  `${entry.provider} ${providerId} | ` +
+                  `${entryName} | ${staleClubId} -> ${historicClubId}`,
+                );
+              }
+            }
+          }
+
           attach(
             entry,
             side,
