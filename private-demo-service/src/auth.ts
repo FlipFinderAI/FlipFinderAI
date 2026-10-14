@@ -1256,6 +1256,78 @@ button.addEventListener("click", async () => {
       });
     }
 
+    if (path === "/username" && request.method === "GET") {
+      const identity = await verifyCommunitySession(request, env);
+      if (!identity) return json({ error: "Sign in required." }, 401);
+
+      const requested = (url.searchParams.get("username") || "").trim();
+      const username = requested.replace(/^@/, "");
+
+      if (!/^[A-Za-z0-9_]{3,20}$/.test(username)) {
+        return json({
+          error: "Username must be 3–20 letters, numbers or underscores.",
+        }, 400);
+      }
+
+      const existing = await env.DB.prepare(
+        `SELECT account_id FROM community_usernames
+         WHERE username=? COLLATE NOCASE LIMIT 1`
+      ).bind(username).first<{ account_id: string }>();
+
+      return json({
+        username,
+        available: !existing || existing.account_id === identity.accountId,
+        yours: existing?.account_id === identity.accountId,
+      });
+    }
+
+    if (path === "/username" && request.method === "POST") {
+      const identity = await verifyCommunitySession(request, env);
+      if (!identity) return json({ error: "Sign in required." }, 401);
+
+      const data = await readSmallJson(request);
+      const requested =
+        typeof data?.username === "string" ? data.username.trim() : "";
+      const username = requested.replace(/^@/, "");
+
+      if (!/^[A-Za-z0-9_]{3,20}$/.test(username)) {
+        return json({
+          error: "Username must be 3–20 letters, numbers or underscores.",
+        }, 400);
+      }
+
+      const current = await env.DB.prepare(
+        `SELECT username FROM community_usernames
+         WHERE account_id=? LIMIT 1`
+      ).bind(identity.accountId).first<{ username: string }>();
+
+      if (current) {
+        if (current.username.toLowerCase() === username.toLowerCase()) {
+          return json({ username: current.username, registered: true });
+        }
+
+        return json({
+          error: "This account already has a username.",
+        }, 409);
+      }
+
+      const now = Date.now();
+
+      try {
+        await env.DB.prepare(
+          `INSERT INTO community_usernames
+           (account_id, username, created_at, updated_at)
+           VALUES (?, ?, ?, ?)`
+        ).bind(identity.accountId, username, now, now).run();
+      } catch {
+        return json({
+          error: "Username is unavailable. Please choose another.",
+        }, 409);
+      }
+
+      return json({ username, registered: true });
+    }
+
     if (path === "/marketing" && request.method === "GET") {
       const identity = await verifyCommunitySession(request, env);
       if (!identity) return json({ error: "Sign in required." }, 401);
