@@ -358,6 +358,8 @@ export default function CommunityScreen() {
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [unlocked, setUnlocked] = useState(false);
   const attemptedAutomaticUnlock = useRef(false);
+  const lockGeneration = useRef(0);
+  const [foreground, setForeground] = useState(AppState.currentState === "active");
   const [unlockCapability, setUnlockCapability] = useState<CommunityUnlockCapability>({
     available: false,
     label: "Biometrics",
@@ -495,7 +497,7 @@ export default function CommunityScreen() {
       .finally(() => { if (!cancelled) setLoaded(true); });
     return () => { cancelled = true; };
   }, [serviceConfigured]);
-  async function loadUnlockedCommunity(next: CommunitySession) {
+  async function loadUnlockedCommunity(next: CommunitySession, generation = lockGeneration.current) {
     // Keep protected content locked until both the server and local setup state load.
     setSession(next);
     const current = next.communityEligible
@@ -521,10 +523,11 @@ export default function CommunityScreen() {
     setNeedsSetup(!complete);
     setShowCommunitySettings(!complete);
     setCommunityTab("chats");
-    setUnlocked(true);
+    if (generation === lockGeneration.current) setUnlocked(true);
   }
 
   async function unlockWithDevice() {
+    const generation = lockGeneration.current;
     const success = await unlockCommunityLocally();
 
     if (!success) {
@@ -537,27 +540,29 @@ export default function CommunityScreen() {
     }
 
     if (!session) return;
-    await loadUnlockedCommunity(session);
+    await loadUnlockedCommunity(session, generation);
     setStatus(`Community unlocked with ${unlockCapability.label}.`);
   }
 
   useEffect(() => {
-    if (!loaded || !session || unlocked || busy || !biometricEnabled || !unlockCapability.available || attemptedAutomaticUnlock.current) return;
+    if (!foreground || !loaded || !session || unlocked || busy || !biometricEnabled || !unlockCapability.available || attemptedAutomaticUnlock.current) return;
     attemptedAutomaticUnlock.current = true;
     void run(unlockWithDevice);
-  }, [loaded, session, unlocked, busy, biometricEnabled, unlockCapability.available]);
+  }, [foreground, loaded, session, unlocked, busy, biometricEnabled, unlockCapability.available]);
 
   async function unlockWithPassword() {
+    const generation = lockGeneration.current;
     if (!session) return;
     if (!password) throw new Error("Enter your Community password.");
 
     const next = await communitySignIn(session.email, password);
     setPassword("");
-    await loadUnlockedCommunity(next);
+    await loadUnlockedCommunity(next, generation);
     setStatus("Community unlocked.");
   }
 
   async function signIn() {
+    const generation = lockGeneration.current;
     if (!email.trim()) throw new Error("Enter your registered email address.");
     if (!password) throw new Error("Enter your Community password.");
 
@@ -570,7 +575,7 @@ export default function CommunityScreen() {
     await rememberCommunityAccount(next.email);
     setRememberedAccount(next.email.toLowerCase());
     setPassword("");
-    await loadUnlockedCommunity(next);
+    await loadUnlockedCommunity(next, generation);
 
     const capability = await communityUnlockCapability();
     setUnlockCapability(capability);
@@ -584,6 +589,7 @@ export default function CommunityScreen() {
   }
 
   async function signUp() {
+    const generation = lockGeneration.current;
     const displayName = name.trim();
 
     if (!displayName || displayName.length > 40) {
@@ -618,7 +624,7 @@ export default function CommunityScreen() {
     setPassword("");
     await AsyncStorage.setItem(setupKey(signup.session.email), "pending");
     await AsyncStorage.setItem(BIOMETRIC_KEY, "");
-    await loadUnlockedCommunity(signup.session);
+    await loadUnlockedCommunity(signup.session, generation);
 
     if (signup.verificationEmailSent) {
       const sentAt = Date.now();
@@ -927,7 +933,10 @@ export default function CommunityScreen() {
 
   useEffect(() => {
     const subscription = AppState.addEventListener("change", nextState => {
-      if (nextState === "background" && session) {
+      setForeground(nextState === "active");
+      if (nextState === "background") {
+        lockGeneration.current += 1;
+        attemptedAutomaticUnlock.current = false;
         setUnlocked(false);
         setPassword("");
       }
