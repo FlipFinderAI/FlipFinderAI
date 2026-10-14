@@ -601,6 +601,10 @@ export default function CommunityScreen() {
     const generation = lockGeneration.current;
     const displayName = name.trim();
 
+    if (!age16Declared) {
+      throw new Error("Confirm that you are aged 16 or over.");
+    }
+
     if (!displayName || displayName.length > 40) {
       throw new Error("Choose a Community name of 1–40 characters.");
     }
@@ -626,7 +630,7 @@ export default function CommunityScreen() {
       throw new Error("A Community account is already registered on this device. Please sign in.");
     }
 
-    const signup = await communitySignUp(email.trim(), password);
+    const signup = await communitySignUp(email.trim(), password, age16Declared);
     await rememberCommunityAccount(signup.session.email);
     setRememberedAccount(signup.session.email.toLowerCase());
     setAuthMode("signin");
@@ -1348,13 +1352,27 @@ export default function CommunityScreen() {
               style={[styles.input, { marginBottom: 14 }]}
             />
 
+            {creating && (
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 14 }}>
+                <Switch
+                  accessibilityLabel="I confirm I am aged 16 or over"
+                  value={age16Declared}
+                  disabled={busy}
+                  onValueChange={setAge16Declared}
+                />
+                <Text style={[styles.copy, { flex: 1 }]}>
+                  I confirm that I am aged 16 or over.
+                </Text>
+              </View>
+            )}
+
             <Action
               title={creating ? "Create Community account" : "Sign in"}
               disabled={
                 busy ||
                 !email.trim() ||
                 !password ||
-                (creating && !name.trim())
+                (creating && (!name.trim() || !age16Declared))
               }
               onPress={() =>
                 void run(creating ? signUp : signIn)

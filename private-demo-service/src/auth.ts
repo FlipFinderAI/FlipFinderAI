@@ -661,6 +661,13 @@ button.addEventListener("click", async () => {
         return json({ error: "Invalid request." }, 400);
       }
 
+      if (data.age16Declared !== true) {
+        return json(
+          { error: "You must confirm that you are aged 16 or over to create a Community account." },
+          403,
+        );
+      }
+
       const email = normalizeEmail(data.email);
 
       if (!email) {

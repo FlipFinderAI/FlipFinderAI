@@ -98,12 +98,13 @@ function toSession(result: AuthResponse): CommunitySession {
 export async function communitySignUp(
   email: string,
   password: string,
+  age16Declared: boolean,
 ) {
   const result = await requestJson<AuthResponse>(
     "/api/community/auth/signup",
     {
       method: "POST",
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, age16Declared }),
     },
   );
 
