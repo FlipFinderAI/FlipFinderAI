@@ -83,13 +83,15 @@ function CommunityBackgroundImage({
         resizeMode="cover"
         style={{ width: "100%", height: "100%" }}
       />
-      <View style={{ position: "absolute", top: 0, right: 0, bottom: 0, left: 0, backgroundColor: "rgba(248,245,236,0.76)" }} />
+      <View style={{ position: "absolute", top: 0, right: 0, bottom: 0, left: 0, backgroundColor: "rgba(248,245,236,0.62)" }} />
     </View>
   );
 }
 
 const SETUP_KEY = "ticket-frame.community-setup.v1:";
 const setupKey = (email: string) => SETUP_KEY + email.trim().toLowerCase();
+
+const autoUnlockKey = (email: string) => "ticket-frame.community-auto-unlock.v1:" + email.trim().toLowerCase();
 
 const BIOMETRIC_KEY = "ticket-frame.community-biometric-enabled.v1";
 
@@ -322,6 +324,7 @@ export default function CommunityScreen() {
     useState<string | null>(null);
   const [biometricEnabled, setBiometricEnabled] = useState(false);
   const [biometricChoiceMade, setBiometricChoiceMade] = useState(false);
+  const [automaticSignIn, setAutomaticSignIn] = useState(false);
   const [needsSetup, setNeedsSetup] = useState(true);
   const [summary, setSummary] = useState({ gamesAttended: 0, groundsVisited: [] as string[] });
   const [state, setState] = useState<CommunityState>({
@@ -485,6 +488,9 @@ export default function CommunityScreen() {
           if (cancelled) return;
           setRememberedAccount(restored.email.toLowerCase());
           setEmail(restored.email);
+          const savedAutomatic = await AsyncStorage.getItem(autoUnlockKey(restored.email));
+          if (cancelled) return;
+          setAutomaticSignIn(savedAutomatic === "1");
         }
 
         if (restored) {
@@ -503,9 +509,10 @@ export default function CommunityScreen() {
     const current = next.communityEligible
       ? await communityRequest<CommunityState>("/me")
       : { profile: null, preferences: OFF, safetyId: null, serverNow: 0 };
-    const [savedSetup, savedMethod] = await Promise.all([
+    const [savedSetup, savedMethod, savedAutomatic] = await Promise.all([
       AsyncStorage.getItem(setupKey(next.email)),
       AsyncStorage.getItem(BIOMETRIC_KEY),
+      AsyncStorage.getItem(autoUnlockKey(next.email)),
     ]);
     const choiceMade = savedMethod === "1" || savedMethod === "0";
     // A pending marker takes precedence over a profile saved partway through setup.
@@ -520,6 +527,7 @@ export default function CommunityScreen() {
     }
     setBiometricChoiceMade(choiceMade);
     setBiometricEnabled(savedMethod === "1");
+    setAutomaticSignIn(savedAutomatic === "1");
     setNeedsSetup(!complete);
     setShowCommunitySettings(!complete);
     setCommunityTab("chats");
@@ -545,10 +553,10 @@ export default function CommunityScreen() {
   }
 
   useEffect(() => {
-    if (!foreground || !loaded || !session || unlocked || busy || !biometricEnabled || !unlockCapability.available || attemptedAutomaticUnlock.current) return;
+    if (!automaticSignIn || !foreground || !loaded || !session || unlocked || busy || !biometricEnabled || !unlockCapability.available || attemptedAutomaticUnlock.current) return;
     attemptedAutomaticUnlock.current = true;
     void run(unlockWithDevice);
-  }, [foreground, loaded, session, unlocked, busy, biometricEnabled, unlockCapability.available]);
+  }, [automaticSignIn, foreground, loaded, session, unlocked, busy, biometricEnabled, unlockCapability.available]);
 
   async function unlockWithPassword() {
     const generation = lockGeneration.current;
@@ -624,6 +632,7 @@ export default function CommunityScreen() {
     setPassword("");
     await AsyncStorage.setItem(setupKey(signup.session.email), "pending");
     await AsyncStorage.setItem(BIOMETRIC_KEY, "");
+    await AsyncStorage.setItem(autoUnlockKey(signup.session.email), "0");
     await loadUnlockedCommunity(signup.session, generation);
 
     if (signup.verificationEmailSent) {
@@ -953,7 +962,7 @@ export default function CommunityScreen() {
       JSON.stringify({ name: name.trim(), avatar }),
     );
     if (connected) {
-      setState(await communityRequest<CommunityState>("/profile", { displayName: name.trim(), avatar, clubId, ...summary }));
+      await communityRequest<CommunityState>("/profile", { displayName: name.trim(), avatar, clubId, ...summary });
       setStatus("Public profile saved. Any previous matchday visibility has ended.");
     } else setStatus("Profile draft saved on this iPhone. Nothing has been shared.");
   }
@@ -961,18 +970,19 @@ export default function CommunityScreen() {
     if (!session || !connected) throw new Error("Community eligibility must be confirmed before finishing setup.");
     if (!biometricChoiceMade) throw new Error("Choose your future sign-in method.");
     await saveProfile();
-    // Privacy choices are saved by their controls. Confirm the server accepted them
-    // before marking setup complete; never opt a supporter in automatically.
-    const current = await communityRequest<CommunityState>("/me");
+    // First-time privacy choices remain local until the profile exists. Only mark
+    // setup complete after the service has saved both profile and privacy.
+    const current = await communityRequest<CommunityState>("/preferences", state.preferences);
     if (!current.profile || current.profile.clubId !== clubId) {
       throw new Error("Save your public profile before finishing setup.");
     }
+    await AsyncStorage.setItem(autoUnlockKey(session.email), automaticSignIn && biometricEnabled ? "1" : "0");
     await AsyncStorage.setItem(setupKey(session.email), "complete");
     setState(current);
     setNeedsSetup(false);
     setShowCommunitySettings(false);
     setCommunityTab("chats");
-    setStatus("Community setup complete.");
+    setStatus("Community settings saved.");
   }
 
   async function privacy(patch: Partial<CommunityState["preferences"]>) {
@@ -985,6 +995,10 @@ export default function CommunityScreen() {
       preferences.photoSharing = false;
     }
 
+    if (needsSetup) {
+      setState(current => ({ ...current, preferences }));
+      return;
+    }
     setState(await communityRequest<CommunityState>("/preferences", preferences));
     setStatus("Community privacy choices saved. Matchday presence has ended.");
   }
@@ -1067,7 +1081,7 @@ export default function CommunityScreen() {
                   right: 0,
                   bottom: 0,
                   left: 0,
-                  backgroundColor: "rgba(0,0,0,0.60)",
+                  backgroundColor: "rgba(0,0,0,0.48)",
                 }}
               />
 
@@ -1876,7 +1890,6 @@ export default function CommunityScreen() {
       </View>
       <Text>{summary.gamesAttended} games attended · {summary.groundsVisited.length} grounds visited</Text>
 
-      <Action title={connected ? "Save public profile" : "Save profile draft"} disabled={busy || !loaded} onPress={() => void run(saveProfile)} colour={colour} />
       <Text style={styles.heading}>Community Background</Text>
 
       <Text style={styles.copy}>
@@ -1915,7 +1928,7 @@ export default function CommunityScreen() {
       <Switch
         accessibilityLabel="Join Community"
         value={state.preferences.enabled}
-        disabled={busy || !connected || !sameClub}
+        disabled={busy || !connected || (!needsSetup && !sameClub)}
         onValueChange={enabled => void run(() => privacy({ enabled }))}
       />
 
@@ -1923,7 +1936,7 @@ export default function CommunityScreen() {
       <Switch
         accessibilityLabel="Share games attended"
         value={state.preferences.shareGames}
-        disabled={busy || !active}
+        disabled={busy || !connected || !state.preferences.enabled || (!needsSetup && !sameClub)}
         onValueChange={shareGames => void run(() => privacy({ shareGames }))}
       />
 
@@ -1931,7 +1944,7 @@ export default function CommunityScreen() {
       <Switch
         accessibilityLabel="Share grounds visited"
         value={state.preferences.shareGrounds}
-        disabled={busy || !active}
+        disabled={busy || !connected || !state.preferences.enabled || (!needsSetup && !sameClub)}
         onValueChange={shareGrounds => void run(() => privacy({ shareGrounds }))}
       />
 
@@ -1939,7 +1952,7 @@ export default function CommunityScreen() {
       <Switch
         accessibilityLabel="Matchday location visibility"
         value={state.preferences.locationVisible}
-        disabled={busy || !active}
+        disabled={busy || !connected || !state.preferences.enabled || (!needsSetup && !sameClub)}
         onValueChange={locationVisible => void run(() => privacy({ locationVisible }))}
       />
 
@@ -1947,7 +1960,7 @@ export default function CommunityScreen() {
       <Switch
         accessibilityLabel="Eligible matchday photo sharing"
         value={state.preferences.photoSharing}
-        disabled={busy || !active}
+        disabled={busy || !connected || !state.preferences.enabled || (!needsSetup && !sameClub)}
         onValueChange={photoSharing => void run(() => privacy({ photoSharing }))}
       />
 
@@ -1976,7 +1989,7 @@ export default function CommunityScreen() {
           </Text>
           {unlockCapability.available ? (
             <Action
-              title={`${biometricChoiceMade && biometricEnabled ? "✓ " : ""}Use ${unlockCapability.label}`}
+              title={`${biometricChoiceMade && biometricEnabled ? "✓ " : ""}Use ${unlockCapability.label}${unlockCapability.label === "Touch ID" ? " (fingerprint)" : ""}`}
               disabled={busy}
               onPress={() => void run(() => finishSecuritySetup(true))}
               colour={colour}
@@ -1988,16 +2001,26 @@ export default function CommunityScreen() {
             onPress={() => void run(() => finishSecuritySetup(false))}
             colour={colour}
           />
-          {needsSetup && (
+          <Text style={styles.heading}>Automatic sign-in</Text>
+          <Text style={styles.copy}>
+            Open Community, confirm with {unlockCapability.label === "Touch ID" ? "your fingerprint" : unlockCapability.label},
+            and go straight to Chats. You will not need to revisit Settings.
+          </Text>
+          <Switch accessibilityLabel="Automatic sign-in" value={automaticSignIn && biometricEnabled}
+            disabled={busy || !biometricEnabled || !unlockCapability.available}
+            onValueChange={setAutomaticSignIn} />
+          {!biometricEnabled && <Text style={styles.copy}>
+            Choose Face ID or Touch ID above to enable automatic sign-in.
+            With Community Password selected, enter your password when you return.
+          </Text>}
             <>
               <Text style={styles.copy}>
-                Save your profile, choose your background and privacy options,
-                then choose your future sign-in method. Joining Community is optional.
+                Your profile and privacy choices are saved together below.
+                Joining Community is optional.
               </Text>
-              <Action title="Finish Setup" disabled={busy || !connected || !biometricChoiceMade}
+              <Action title={needsSetup ? "Finish Setup" : "Save Settings & Open Chats"} disabled={busy || !connected || !biometricChoiceMade}
                 onPress={() => void run(finishSetup)} colour={colour} />
             </>
-          )}
         </View>
       )}
 
