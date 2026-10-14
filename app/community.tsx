@@ -87,6 +87,9 @@ function CommunityBackgroundImage({
   );
 }
 
+const SETUP_KEY = "ticket-frame.community-setup.v1:";
+const setupKey = (email: string) => SETUP_KEY + email.trim().toLowerCase();
+
 const BIOMETRIC_KEY = "ticket-frame.community-biometric-enabled.v1";
 
 function CircularPhotoEditor({
@@ -318,7 +321,7 @@ export default function CommunityScreen() {
     useState<string | null>(null);
   const [biometricEnabled, setBiometricEnabled] = useState(false);
   const [biometricChoiceMade, setBiometricChoiceMade] = useState(false);
-  const [showSecuritySetup, setShowSecuritySetup] = useState(false);
+  const [needsSetup, setNeedsSetup] = useState(true);
   const [summary, setSummary] = useState({ gamesAttended: 0, groundsVisited: [] as string[] });
   const [state, setState] = useState<CommunityState>({
     profile: null,
@@ -491,17 +494,32 @@ export default function CommunityScreen() {
     return () => { cancelled = true; };
   }, [serviceConfigured]);
   async function loadUnlockedCommunity(next: CommunitySession) {
+    // Keep protected content locked until both the server and local setup state load.
     setSession(next);
-    setUnlocked(true);
-
-    if (next.communityEligible) {
-      const current = await communityRequest<CommunityState>("/me");
-      setState(current);
-      if (current.profile) {
-        setName(current.profile.displayName);
-        setAvatar(current.profile.avatar);
-      }
+    const current = next.communityEligible
+      ? await communityRequest<CommunityState>("/me")
+      : { profile: null, preferences: OFF, safetyId: null, serverNow: 0 };
+    const [savedSetup, savedMethod] = await Promise.all([
+      AsyncStorage.getItem(setupKey(next.email)),
+      AsyncStorage.getItem(BIOMETRIC_KEY),
+    ]);
+    const choiceMade = savedMethod === "1" || savedMethod === "0";
+    // A pending marker takes precedence over a profile saved partway through setup.
+    // Preserve established profiles when upgrading from the previous workflow.
+    const complete = Boolean(current.profile) &&
+      (savedSetup === "complete" || (savedSetup === null && choiceMade));
+    await AsyncStorage.setItem(setupKey(next.email), complete ? "complete" : "pending");
+    setState(current);
+    if (current.profile) {
+      setName(current.profile.displayName);
+      setAvatar(current.profile.avatar);
     }
+    setBiometricChoiceMade(choiceMade);
+    setBiometricEnabled(savedMethod === "1");
+    setNeedsSetup(!complete);
+    setShowCommunitySettings(!complete);
+    setCommunityTab("chats");
+    setUnlocked(true);
   }
 
   async function unlockWithDevice() {
@@ -549,9 +567,6 @@ export default function CommunityScreen() {
     const capability = await communityUnlockCapability();
     setUnlockCapability(capability);
 
-    if (!biometricChoiceMade) {
-      setShowSecuritySetup(true);
-    }
 
     if (next.communityEligible) {
       setStatus("Signed in to Community.");
@@ -593,6 +608,8 @@ export default function CommunityScreen() {
     setRememberedAccount(signup.session.email.toLowerCase());
     setAuthMode("signin");
     setPassword("");
+    await AsyncStorage.setItem(setupKey(signup.session.email), "pending");
+    await AsyncStorage.setItem(BIOMETRIC_KEY, "");
     await loadUnlockedCommunity(signup.session);
 
     if (signup.verificationEmailSent) {
@@ -603,12 +620,12 @@ export default function CommunityScreen() {
 
     const capability = await communityUnlockCapability();
     setUnlockCapability(capability);
-    setShowSecuritySetup(true);
+
 
     setStatus(
       signup.verificationEmailSent
-        ? "Account created. Verification email sent — check your inbox and spam folder. Choose how to unlock Community on this iPhone."
-        : "Account created, but the verification email could not be sent. Please request another email. Choose how to unlock Community on this iPhone.",
+        ? "Account created. Verification email sent — check your inbox and spam folder. Complete your Community Settings to get started."
+        : "Account created, but the verification email could not be sent. Please request another email. Complete your Community Settings to get started.",
     );
   }
 
@@ -742,7 +759,7 @@ export default function CommunityScreen() {
 
     setBiometricEnabled(useBiometrics);
     setBiometricChoiceMade(true);
-    setShowSecuritySetup(false);
+
 
     setStatus(
       useBiometrics
@@ -923,6 +940,24 @@ export default function CommunityScreen() {
       setStatus("Public profile saved. Any previous matchday visibility has ended.");
     } else setStatus("Profile draft saved on this iPhone. Nothing has been shared.");
   }
+  async function finishSetup() {
+    if (!session || !connected) throw new Error("Community eligibility must be confirmed before finishing setup.");
+    if (!biometricChoiceMade) throw new Error("Choose your future sign-in method.");
+    await saveProfile();
+    // Privacy choices are saved by their controls. Confirm the server accepted them
+    // before marking setup complete; never opt a supporter in automatically.
+    const current = await communityRequest<CommunityState>("/me");
+    if (!current.profile || current.profile.clubId !== clubId) {
+      throw new Error("Save your public profile before finishing setup.");
+    }
+    await AsyncStorage.setItem(setupKey(session.email), "complete");
+    setState(current);
+    setNeedsSetup(false);
+    setShowCommunitySettings(false);
+    setCommunityTab("chats");
+    setStatus("Community setup complete.");
+  }
+
   async function privacy(patch: Partial<CommunityState["preferences"]>) {
     const preferences = { ...state.preferences, ...patch };
 
@@ -936,140 +971,6 @@ export default function CommunityScreen() {
     setState(await communityRequest<CommunityState>("/preferences", preferences));
     setStatus("Community privacy choices saved. Matchday presence has ended.");
   }
-  if (
-    serviceConfigured &&
-    session &&
-    unlocked &&
-    showSecuritySetup
-  ) {
-    return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: "#f8f5ec" }}>
-        <ScrollView
-          contentContainerStyle={{
-            flexGrow: 1,
-            justifyContent: "center",
-            padding: 20,
-          }}
-        >
-          <View
-            style={{
-              width: "100%",
-              maxWidth: 520,
-              alignSelf: "center",
-              gap: 14,
-            }}
-          >
-            <Text
-              accessibilityRole="header"
-              style={[
-                styles.title,
-                {
-                  color: colour || "#17221c",
-                  textAlign: "center",
-                  fontSize: 30,
-                },
-              ]}
-            >
-              COMMUNITY
-            </Text>
-
-            {avatarPhoto ? (
-              <Image
-                source={{ uri: avatarPhoto }}
-                accessibilityLabel="Your Community avatar"
-                style={{
-                  width: 112,
-                  height: 112,
-                  borderRadius: 56,
-                  borderWidth: 3,
-                  borderColor: colour || "#17221c",
-                  alignSelf: "center",
-                }}
-              />
-            ) : null}
-
-            <Text
-              style={[
-                styles.heading,
-                {
-                  textAlign: "center",
-                  marginTop: 8,
-                },
-              ]}
-            >
-              Future Community login
-            </Text>
-
-            <Text
-              style={[
-                styles.copy,
-                {
-                  textAlign: "center",
-                  marginBottom: 6,
-                },
-              ]}
-            >
-              Choose how you want to unlock Community on this iPhone.
-              Your Community password is never saved on the phone.
-            </Text>
-
-            {unlockCapability.available ? (
-              <Action
-                title={`Use ${unlockCapability.label}`}
-                disabled={busy}
-                onPress={() =>
-                  void run(() => finishSecuritySetup(true))
-                }
-                colour={colour}
-              />
-            ) : (
-              <Text
-                style={[
-                  styles.copy,
-                  {
-                    textAlign: "center",
-                  },
-                ]}
-              >
-                Face ID or Touch ID is not currently available.
-              </Text>
-            )}
-
-            <Action
-              title="Use Community Password"
-              disabled={busy}
-              onPress={() =>
-                void run(() => finishSecuritySetup(false))
-              }
-              colour={colour}
-            />
-
-            {!!status ? (
-              <Text
-                accessibilityLiveRegion="polite"
-                style={{ textAlign: "center" }}
-              >
-                {status}
-              </Text>
-            ) : null}
-          </View>
-        </ScrollView>
-
-      {pendingAvatar ? (
-        <CircularPhotoEditor
-          uri={pendingAvatar}
-          onCancel={() => setPendingAvatar(null)}
-          onSave={async (uri) => {
-            await storeAvatarPhoto(uri);
-            setPendingAvatar(null);
-            setStatus("Community profile photo updated.");
-          }}
-        />
-      ) : null}
-</SafeAreaView>
-    );
-  }
-
   if (serviceConfigured && !loaded) {
     return (
       <SafeAreaView style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
@@ -1576,7 +1477,7 @@ export default function CommunityScreen() {
 </SafeAreaView>;
   }
 
-  if (active && !showCommunitySettings) {
+  if (connected && sameClub && !needsSetup && !showCommunitySettings) {
     const tabColour = colour || "#17221c";
     const avatarLetter =
       state.profile?.displayName?.trim().slice(0, 1).toUpperCase() ||
@@ -1746,6 +1647,9 @@ export default function CommunityScreen() {
         </View>
 
         <View style={{ flex: 1 }}>
+          {!active && <Text style={[styles.copy, { padding: 20 }]}>
+            Community is off. Open Settings and turn on Join Community when you are ready.
+          </Text>}
           {communityTab === "chats" && (
             <Messages
               enabled={active}
@@ -1808,7 +1712,7 @@ export default function CommunityScreen() {
 
   return <SafeAreaView style={{ flex: 1, backgroundColor: "#f8f5ec" }}>
     <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 20, gap: 14 }}>
-      {active && showCommunitySettings ? (
+      {connected && !needsSetup && showCommunitySettings ? (
         <Action
           title="Back to Community"
           onPress={() => setShowCommunitySettings(false)}
@@ -1825,7 +1729,7 @@ export default function CommunityScreen() {
         accessibilityRole="header"
         style={[styles.title, { color: colour || "#17221c" }]}
       >
-        {active && showCommunitySettings ? "COMMUNITY SETTINGS" : "COMMUNITY"}
+        {session ? "COMMUNITY SETTINGS" : "COMMUNITY"}
       </Text>
       <Text>{clubName || "Choose a favourite club"} supporters</Text>
       {openedFromMatchdayExperience ? (
@@ -1977,6 +1881,34 @@ export default function CommunityScreen() {
       <Text>{summary.gamesAttended} games attended · {summary.groundsVisited.length} grounds visited</Text>
 
       <Action title={connected ? "Save public profile" : "Save profile draft"} disabled={busy || !loaded} onPress={() => void run(saveProfile)} colour={colour} />
+      <Text style={styles.heading}>Community Background</Text>
+
+      <Text style={styles.copy}>
+        Choose the background for your signed-in Community screen.
+        Your sign-in screen will always show your club stadium.
+      </Text>
+
+      <Action
+        title={communityBackground === "club" ? "✓ Club Photo" : "Club Photo"}
+        disabled={busy}
+        onPress={() => void run(() => selectCommunityBackground("club"))}
+        colour={colour}
+      />
+
+      <Action
+        title={communityBackground === "mine" ? "✓ My Photo" : "My Photo"}
+        disabled={busy}
+        onPress={() => void run(chooseCommunityBackgroundPhoto)}
+        colour={colour}
+      />
+
+      <Action
+        title={communityBackground === "none" ? "✓ No Photo" : "No Photo"}
+        disabled={busy}
+        onPress={() => void run(() => selectCommunityBackground("none"))}
+        colour={colour}
+      />
+
       <Text style={styles.heading}>Community & Privacy</Text>
 
       {!sameClub && state.profile && (
@@ -2039,33 +1971,39 @@ export default function CommunityScreen() {
       {!!state.safetyId && (
         <Text style={styles.copy}>Community Safety ID: {state.safetyId}</Text>
       )}
-      <Text style={styles.heading}>Community Background</Text>
-
-      <Text style={styles.copy}>
-        Choose the background for your signed-in Community screen.
-        Your sign-in screen will always show your club stadium.
-      </Text>
-
-      <Action
-        title={communityBackground === "club" ? "✓ Club Photo" : "Club Photo"}
-        disabled={busy}
-        onPress={() => void run(() => selectCommunityBackground("club"))}
-        colour={colour}
-      />
-
-      <Action
-        title={communityBackground === "mine" ? "✓ My Photo" : "My Photo"}
-        disabled={busy}
-        onPress={() => void run(chooseCommunityBackgroundPhoto)}
-        colour={colour}
-      />
-
-      <Action
-        title={communityBackground === "none" ? "✓ No Photo" : "No Photo"}
-        disabled={busy}
-        onPress={() => void run(() => selectCommunityBackground("none"))}
-        colour={colour}
-      />
+      {session && (
+        <View style={{ gap: 10 }}>
+          <Text style={styles.heading}>Future Sign-in Method</Text>
+          <Text style={styles.copy}>
+            Choose how to unlock Community on this iPhone. Your Community password
+            remains available if biometrics are unavailable or cancelled.
+          </Text>
+          {unlockCapability.available ? (
+            <Action
+              title={`${biometricChoiceMade && biometricEnabled ? "✓ " : ""}Use ${unlockCapability.label}`}
+              disabled={busy}
+              onPress={() => void run(() => finishSecuritySetup(true))}
+              colour={colour}
+            />
+          ) : <Text>Face ID or Touch ID is not currently available.</Text>}
+          <Action
+            title={`${biometricChoiceMade && !biometricEnabled ? "✓ " : ""}Use Community Password`}
+            disabled={busy}
+            onPress={() => void run(() => finishSecuritySetup(false))}
+            colour={colour}
+          />
+          {needsSetup && (
+            <>
+              <Text style={styles.copy}>
+                Save your profile, choose your background and privacy options,
+                then choose your future sign-in method. Joining Community is optional.
+              </Text>
+              <Action title="Finish Setup" disabled={busy || !connected || !biometricChoiceMade}
+                onPress={() => void run(finishSetup)} colour={colour} />
+            </>
+          )}
+        </View>
+      )}
 
       {serviceConfigured && session && (
         <View style={{ gap: 8 }}>
