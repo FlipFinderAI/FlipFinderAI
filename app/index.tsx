@@ -12224,7 +12224,7 @@ useEffect(() => {
                     alignItems: "center",
                     justifyContent: "center",
                     borderRadius: 12,
-                    backgroundColor: `${favouriteClub.primary}80`,
+                    backgroundColor: `${favouriteClub.primary}70`,
                     paddingHorizontal: 3,
                     paddingVertical: 7,
                     opacity: pressed ? 0.7 : 1,
