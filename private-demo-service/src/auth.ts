@@ -1496,6 +1496,48 @@ button.addEventListener("click", async () => {
       });
     }
 
+    if (path === "/eligibility/confirm" && request.method === "POST") {
+      const identity = await verifyCommunitySession(request, env);
+      if (!identity?.accountId) {
+        return json({ error: "Sign in required." }, 401);
+      }
+
+      if (identity.emailVerified !== true) {
+        return json({ error: "Verify your email first." }, 403);
+      }
+
+      const data = await readSmallJson(request);
+      if (data?.age16Declared !== true) {
+        return json({ error: "Confirm that you are aged 16 or over." }, 400);
+      }
+
+      const now = Date.now();
+      await env.DB.prepare(
+        `UPDATE community_accounts
+         SET community_eligible=1,is_child=0,updated_at=?
+         WHERE id=?
+           AND status='active'
+           AND email_verified=1
+           AND is_child IS NULL
+           AND community_eligible=0`
+      ).bind(now, identity.accountId).run();
+
+      const account = await env.DB.prepare(
+        `SELECT community_eligible,is_child
+         FROM community_accounts
+         WHERE id=? AND status='active' LIMIT 1`
+      ).bind(identity.accountId).first<{
+        community_eligible: number;
+        is_child: number | null;
+      }>();
+
+      if (!account || account.community_eligible !== 1 || account.is_child !== 0) {
+        return json({ error: "Community eligibility cannot be confirmed for this account." }, 403);
+      }
+
+      return json({ ok: true, communityEligible: true });
+    }
+
     if (path === "/session" && request.method === "GET") {
       const identity =
         await verifyCommunitySession(request, env);

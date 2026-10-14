@@ -141,6 +141,26 @@ export async function communitySignIn(
   return session;
 }
 
+export async function communityConfirmEligibility() {
+  const stored = await getCommunitySession();
+  if (!stored) throw new Error("Please sign in again.");
+
+  await requestJson<{ ok: boolean; communityEligible: boolean }>(
+    "/api/community/auth/eligibility/confirm",
+    {
+      method: "POST",
+      headers: { authorization: `Bearer ${stored.token}` },
+      body: JSON.stringify({ age16Declared: true }),
+    },
+  );
+
+  const refreshed = await communityRestoreSession();
+  if (!refreshed?.communityEligible || !refreshed.emailVerified) {
+    throw new Error("Community eligibility has not been confirmed.");
+  }
+  return refreshed;
+}
+
 export async function communityRestoreSession() {
   const stored = await getCommunitySession();
   if (!stored) return null;

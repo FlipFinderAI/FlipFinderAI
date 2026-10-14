@@ -22,6 +22,7 @@ import {
   communityRegisterUsername,
   communityGetRegisteredUsername,
   communityRestoreSession,
+  communityConfirmEligibility,
   communitySignIn,
   communitySignOut,
   communitySignUp,
@@ -1107,10 +1108,25 @@ export default function CommunityScreen() {
         "Please verify your email address before entering Community Chats."
       );
     }
-    if (!session || !connected) throw new Error("Community eligibility must be confirmed before finishing setup.");
+    if (!session || !unlocked) throw new Error("Unlock Community before finishing setup.");
     if (!age16Declared) throw new Error("Confirm that you are aged 16 or over.");
-    if (!biometricChoiceMade) throw new Error("Choose your future sign-in method.");
-    await saveProfile();
+
+    const confirmed = session.communityEligible
+      ? session
+      : await communityConfirmEligibility();
+
+    setSession(confirmed);
+
+    if (!name.trim() || name.trim().length > 40) {
+      throw new Error("Choose a display name of 1–40 characters.");
+    }
+    if (!clubId || !clubName || clubName === "Your Club") {
+      throw new Error("Choose your favourite club on Home first.");
+    }
+
+    await communityRequest<CommunityState>("/profile", {
+      displayName: name.trim(), avatar, clubId, ...summary,
+    });
     // First-time privacy choices remain local until the profile exists. Only mark
     // setup complete after the service has saved both profile and privacy.
     const current = await communityRequest<CommunityState>("/preferences", state.preferences);
@@ -2293,7 +2309,7 @@ export default function CommunityScreen() {
                 Your profile and privacy choices are saved together below.
                 Joining Community is optional.
               </Text>
-              <Action title={needsSetup ? "Finish Setup" : "Save Settings & Open Chats"} disabled={busy || !connected || !session?.emailVerified || !biometricChoiceMade || !age16Declared}
+              <Action title={needsSetup ? "Finish Setup" : "Save Settings & Open Chats"} disabled={busy || !unlocked || !session?.emailVerified || !age16Declared}
                 onPress={() => void run(finishSetup)} colour={colour} />
             </>
         </View>
