@@ -7,6 +7,7 @@ import type { ImageSourcePropType } from "react-native";
  * Metro requires literal require() paths.
  */
 const STADIUM_PHOTOS: Record<string, ImageSourcePropType> = {
+  "boundary-park": require("../assets/stadiums/league 2/boundary-park.webp"),
   "kassam": require("../assets/stadiums/league 1/kassam.webp"),
   "current-the-kassam-stadium": require("../assets/stadiums/league 1/kassam.webp"),
   "home-park": require("../assets/stadiums/league 1/home-park.webp"),
