@@ -12035,7 +12035,7 @@ useEffect(() => {
               resizeMode="cover"
               style={{
                 flex: 1,
-                opacity: 0.15,
+                opacity: 0.35,
               }}
             />
           </View>
@@ -12224,7 +12224,7 @@ useEffect(() => {
                     alignItems: "center",
                     justifyContent: "center",
                     borderRadius: 12,
-                    backgroundColor: favouriteClub.primary,
+                    backgroundColor: `${favouriteClub.primary}99`,
                     paddingHorizontal: 3,
                     paddingVertical: 7,
                     opacity: pressed ? 0.7 : 1,
