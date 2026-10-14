@@ -24,7 +24,24 @@ function run(name, args) {
         const build = spawn(process.execPath, ["scripts/buildMatchDatabase.mjs"], {
           cwd: process.cwd(), stdio: "inherit",
         });
-        build.on("exit", (buildCode) => buildCode === 0 ? buildResolve() : buildReject(new Error("TFD build failed")));
+        build.on("exit", (buildCode) => {
+        if (buildCode !== 0) {
+          buildReject(new Error("TFD build failed"));
+          return;
+        }
+
+        const repair = spawn(
+          process.execPath,
+          ["scripts/repairEuropeanScores.mjs"],
+          { cwd: process.cwd(), stdio: "inherit" },
+        );
+
+        repair.on("exit", (repairCode) =>
+          repairCode === 0
+            ? buildResolve()
+            : buildReject(new Error("European score repair failed")),
+        );
+      });
       }));
       buildQueue.then(() => resolve({ name, ok: true })).catch(() => resolve({ name, ok: false }));
     });
