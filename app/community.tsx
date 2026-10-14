@@ -356,6 +356,7 @@ export default function CommunityScreen() {
   const [deletePassword, setDeletePassword] = useState("");
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [unlocked, setUnlocked] = useState(false);
+  const attemptedAutomaticUnlock = useRef(false);
   const [unlockCapability, setUnlockCapability] = useState<CommunityUnlockCapability>({
     available: false,
     label: "Biometrics",
@@ -538,6 +539,12 @@ export default function CommunityScreen() {
     await loadUnlockedCommunity(session);
     setStatus(`Community unlocked with ${unlockCapability.label}.`);
   }
+
+  useEffect(() => {
+    if (!loaded || !session || unlocked || busy || !biometricEnabled || !unlockCapability.available || attemptedAutomaticUnlock.current) return;
+    attemptedAutomaticUnlock.current = true;
+    void run(unlockWithDevice);
+  }, [loaded, session, unlocked, busy, biometricEnabled, unlockCapability.available]);
 
   async function unlockWithPassword() {
     if (!session) return;
@@ -919,7 +926,7 @@ export default function CommunityScreen() {
 
   useEffect(() => {
     const subscription = AppState.addEventListener("change", nextState => {
-      if (nextState !== "active" && session) {
+      if (nextState === "background" && session) {
         setUnlocked(false);
         setPassword("");
       }
@@ -1477,48 +1484,31 @@ export default function CommunityScreen() {
 </SafeAreaView>;
   }
 
+  const bottomTabs = connected && !needsSetup ? (
+    <View accessibilityRole="tablist" style={{ flexDirection: "row", backgroundColor: "#f8f5ec", borderTopWidth: 1, borderTopColor: "#d8d3c7" }}>
+      {(["chats", "supporters", "map", "settings"] as const).map(id => {
+        const selected = id === "settings" ? showCommunitySettings : !showCommunitySettings && communityTab === id;
+        return <Pressable key={id} accessibilityRole="tab" accessibilityState={{ selected, disabled: busy }}
+          disabled={busy}
+          onPress={() => {
+            setShowCommunitySettings(id === "settings");
+            if (id !== "settings") setCommunityTab(id);
+          }}
+          style={{ flex: 1, minHeight: 52, alignItems: "center", justifyContent: "center", borderTopWidth: 3, borderTopColor: selected ? colour || "#17221c" : "transparent" }}>
+          <Text style={{ color: selected ? colour || "#17221c" : "#6f756f", fontWeight: selected ? "900" : "600", fontSize: 13 }}>
+            {id === "chats" ? "Chats" : id === "supporters" ? "Supporters" : id === "map" ? "Map" : "Settings"}
+          </Text>
+        </Pressable>;
+      })}
+    </View>
+  ) : null;
+
   if (connected && sameClub && !needsSetup && !showCommunitySettings) {
     const tabColour = colour || "#17221c";
     const avatarLetter =
       state.profile?.displayName?.trim().slice(0, 1).toUpperCase() ||
       name.trim().slice(0, 1).toUpperCase() ||
       "?";
-
-    const Tab = ({
-      id,
-      title,
-    }: {
-      id: "chats" | "supporters" | "map";
-      title: string;
-    }) => {
-      const selected = communityTab === id;
-
-      return (
-        <Pressable
-          accessibilityRole="tab"
-          accessibilityState={{ selected }}
-          onPress={() => setCommunityTab(id)}
-          style={{
-            flex: 1,
-            minHeight: 44,
-            alignItems: "center",
-            justifyContent: "center",
-            borderBottomWidth: 3,
-            borderBottomColor: selected ? tabColour : "transparent",
-          }}
-        >
-          <Text
-            style={{
-              color: selected ? tabColour : "#6f756f",
-              fontWeight: selected ? "900" : "700",
-              fontSize: 15,
-            }}
-          >
-            {title}
-          </Text>
-        </Pressable>
-      );
-    };
 
     return (
       <SafeAreaView
@@ -1633,19 +1623,10 @@ export default function CommunityScreen() {
             </Pressable>
           </View>
 
-          <View
-            accessibilityRole="tablist"
-            style={{
-              flexDirection: "row",
-              marginTop: 10,
-            }}
-          >
-            <Tab id="chats" title="Chats" />
-            <Tab id="supporters" title="Supporters" />
-            <Tab id="map" title="Map" />
-          </View>
+
         </View>
 
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <View style={{ flex: 1 }}>
           {!active && <Text style={[styles.copy, { padding: 20 }]}>
             Community is off. Open Settings and turn on Join Community when you are ready.
@@ -1695,6 +1676,8 @@ export default function CommunityScreen() {
           )}
         </View>
 
+      {bottomTabs}
+        </KeyboardAvoidingView>
       {pendingAvatar ? (
         <CircularPhotoEditor
           uri={pendingAvatar}
@@ -2103,6 +2086,7 @@ export default function CommunityScreen() {
       {!!status && <Text accessibilityLiveRegion="polite">{status}</Text>}
     </ScrollView>
 
+      {bottomTabs}
       {pendingAvatar ? (
         <CircularPhotoEditor
           uri={pendingAvatar}
