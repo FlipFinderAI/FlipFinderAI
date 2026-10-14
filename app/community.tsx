@@ -10,6 +10,8 @@ import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { useAnimatedStyle, useSharedValue } from "react-native-reanimated";
+import { homeStadiumForClub } from "@/lib/homeStadiumIdentity";
+import { stadiumPhotoForId } from "@/lib/homeStadiumPhotos";
 import { loadAttendanceHistory } from "@/lib/attendanceHistory";
 import { AVATARS, OFF, attendanceSummary, type Avatar, type CommunityState } from "@/lib/community/model";
 import {
@@ -253,6 +255,8 @@ export default function CommunityScreen() {
     experienceId?: string;
     fixtureId?: string;
   }>();
+  const communityStadium = homeStadiumForClub(clubId, clubName || "");
+  const communityClubPhoto = stadiumPhotoForId(communityStadium?.id);
   const openedFromMatchdayExperience =
     experience === "active" && Boolean(experienceId) && Boolean(fixtureId);
   const [name, setName] = useState("");
@@ -1003,33 +1007,80 @@ export default function CommunityScreen() {
               paddingVertical: 28,
             }}
           >
-            <Text
-              accessibilityRole="header"
-              style={[
-                styles.title,
-                {
-                  color: colour || "#17221c",
-                  textAlign: "center",
+            <View
+              style={{
+                height: 300,
+                marginBottom: 24,
+                borderRadius: 16,
+                overflow: "hidden",
+                backgroundColor: colour || "#17221c",
+                justifyContent: "center",
+                alignItems: "center",
+                paddingHorizontal: 16,
+                paddingVertical: 24,
+              }}
+            >
+              {communityClubPhoto ? (
+                <Image
+                  source={communityClubPhoto}
+                  resizeMode="cover"
+                  style={{
+                    position: "absolute",
+                    width: "100%",
+                    height: "100%",
+                  }}
+                />
+              ) : null}
+
+              <View
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  right: 0,
+                  bottom: 0,
+                  left: 0,
+                  backgroundColor: "rgba(0,0,0,0.60)",
+                }}
+              />
+
+              <Text
+                accessibilityRole="header"
+                style={{
+                  color: "#FFFFFF",
                   fontSize: 30,
-                  marginBottom: 4,
-                },
-              ]}
-            >
-              COMMUNITY
-            </Text>
-
-            <Text
-              style={[
-                styles.copy,
-                {
+                  fontWeight: "900",
                   textAlign: "center",
-                  marginBottom: 24,
-                },
-              ]}
-            >
-              {clubName || "Your club"} supporters
-            </Text>
+                  marginBottom: 10,
+                }}
+              >
+                COMMUNITY
+              </Text>
 
+              <Text
+                style={{
+                  color: "#FFFFFF",
+                  fontSize: 21,
+                  fontWeight: "700",
+                  textAlign: "center",
+                }}
+              >
+                {clubName || "Your club"} supporters
+              </Text>
+
+              <Text
+                style={{
+                  color: "#FFFFFF",
+                  fontSize: 27,
+                  fontWeight: "800",
+                  textAlign: "center",
+                  marginTop: 28,
+                }}
+              >
+                {creating ? "Create your Community account" : "Welcome back"}
+              </Text>
+            </View>
+
+            {!rememberedAccount && (
             <View
               style={{
                 flexDirection: "row",
@@ -1094,10 +1145,9 @@ export default function CommunityScreen() {
               </Text>
               )}
             </View>
+            )}
 
-            <Text style={[styles.heading, { textAlign: "center" }]}>
-              {creating ? "Create your Community account" : "Welcome back"}
-            </Text>
+
 
             <Text
               style={[
