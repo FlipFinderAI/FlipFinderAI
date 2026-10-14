@@ -1968,6 +1968,8 @@ export default function CommunityScreen() {
                 enabled={active}
                 colour={colour}
                 stadium={communityStadium}
+                avatarPhoto={avatarPhoto}
+                avatarInitial={avatarLetter}
                 preferences={state.preferences}
                 sharing={mapSharing}
                 onStop={async () => {

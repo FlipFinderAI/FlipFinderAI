@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Alert, AppState, Linking, Platform, Text, UIManager, View } from "react-native";
+import { Alert, AppState, Image, Linking, Platform, Text, UIManager, View } from "react-native";
 import Constants from "expo-constants";
 import * as Location from "expo-location";
 import { useRef } from "react";
@@ -10,8 +10,8 @@ import type { useMapSharing } from "@/lib/community/useMapSharing";
 import type { FootballGround } from "@/lib/grounds";
 
 type Person = { profile: { id: string; displayName: string; avatar: string }; latitude: number; longitude: number; expiresAt: number; self: boolean; matchdayTicket: { fixtureId: string; stadium: string } | null };
-type Props = { enabled: boolean; busy: boolean; colour: string; stadium: FootballGround | null | undefined; preferences: Preferences; onStop(): Promise<void>; sharing: ReturnType<typeof useMapSharing>; run(task: () => Promise<void>): Promise<void> };
-export default function CommunityMap({ enabled, busy, colour, stadium, preferences, onStop, sharing, run }: Props) {
+type Props = { enabled: boolean; busy: boolean; colour: string; avatarPhoto: string | null; avatarInitial: string; stadium: FootballGround | null | undefined; preferences: Preferences; onStop(): Promise<void>; sharing: ReturnType<typeof useMapSharing>; run(task: () => Promise<void>): Promise<void> };
+export default function CommunityMap({ enabled, busy, colour, avatarPhoto, avatarInitial, stadium, preferences, onStop, sharing, run }: Props) {
   const [mode, setMode] = useState<"normal" | "cartoon" | "satellite">("normal");
   const mapRef = useRef<any>(null);
   const [myLocation, setMyLocation] = useState<{ latitude: number; longitude: number } | null>(null);
@@ -113,7 +113,29 @@ export default function CommunityMap({ enabled, busy, colour, stadium, preferenc
         { featureType: "road", elementType: "geometry", stylers: [{ color: accent }, { weight: 2 }] },
         { elementType: "labels.text.fill", stylers: [{ color: "#253147" }] },
       ] : []}>
-      {myLocation && <Maps.Marker coordinate={myLocation} title="My Location" pinColor="#2684ff" />}
+      {myLocation && <Maps.Marker coordinate={myLocation} title="You are here">
+          <View style={{
+            width: 52,
+            height: 52,
+            borderRadius: 26,
+            borderWidth: 4,
+            borderColor: "#2684ff",
+            backgroundColor: "#ffffff",
+            alignItems: "center",
+            justifyContent: "center",
+          }}>
+            {avatarPhoto ? (
+              <Image
+                source={{ uri: avatarPhoto }}
+                style={{ width: 42, height: 42, borderRadius: 21 }}
+              />
+            ) : (
+              <Text style={{ fontSize: 22, fontWeight: "900", color: accent }}>
+                {avatarInitial}
+              </Text>
+            )}
+          </View>
+        </Maps.Marker>}
       {stadium && <Maps.Marker coordinate={stadium} title={stadium.stadium} pinColor={accent} />}
       {people.map(person => <Maps.Marker key={person.profile.id} coordinate={person} onPress={() => setSelected(person)} title={person.profile.displayName} description="Approximate area">
         <View style={{ borderRadius: 24, borderWidth: 3, borderColor: accent, padding: 7, backgroundColor: "white" }}><Text style={{ fontSize: 25 }}>{person.profile.avatar}</Text></View>
