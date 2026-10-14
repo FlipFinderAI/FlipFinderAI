@@ -1892,13 +1892,15 @@ export default function CommunityScreen() {
         Games attended and grounds visited are shared only if you choose to share them.
         Your tickets, Ticket Frame photos and account details stay private.
       </Text>
-      <Text style={styles.heading}>Your public profile</Text>
+      <Text style={styles.heading}>YOUR PUBLIC PROFILE</Text>
       {!!state.profile?.friendId && (
         <Text accessibilityLabel="Your Community Friend ID">
           Your Friend ID: {state.profile.friendId}
         </Text>
       )}
+      <Text style={{ fontWeight: "700" }}>Name:</Text>
       <TextInput accessibilityLabel="Community display name" placeholder="Choose a display name" value={name} maxLength={40} onChangeText={setName} style={styles.input} />
+      <Text style={{ fontWeight: "700" }}>Photo:</Text>
       <View style={{ alignItems: "center", gap: 8 }}>
         {avatarPhoto ? (
           <Image
@@ -1945,7 +1947,7 @@ export default function CommunityScreen() {
             colour={colour}
           />
           <Action
-            title="Choose Photo"
+            title="Choose New Photo"
             disabled={busy}
             onPress={() => void run(chooseAvatarPhoto)}
             colour={colour}
@@ -1953,7 +1955,7 @@ export default function CommunityScreen() {
         </View>
       </View>
       <Text>{summary.gamesAttended} games attended · {summary.groundsVisited.length} grounds visited</Text>
-      <Text>{summary.groundsVisited.join(" · ") || "No confirmed grounds yet"}</Text>
+
       <Action title={connected ? "Save public profile" : "Save profile draft"} disabled={busy || !loaded} onPress={() => void run(saveProfile)} colour={colour} />
       <Text style={styles.heading}>Community & Privacy</Text>
 
