@@ -243,7 +243,7 @@ export default function Messages({
       <View
         style={{
           flex: 1,
-          backgroundColor: "#f4f1e9",
+          backgroundColor: "transparent",
           overflow: "hidden",
         }}
       >
@@ -330,9 +330,9 @@ export default function Messages({
 
         <ScrollView
           style={{
-            minHeight: 360,
-            maxHeight: 560,
-            backgroundColor: "#f4f1e9",
+            flex: 1,
+            minHeight: 0,
+            backgroundColor: "transparent",
           }}
           contentContainerStyle={{
             flexGrow: 1,
@@ -479,7 +479,7 @@ export default function Messages({
     <View
       style={{
         flex: 1,
-        backgroundColor: "#ffffff",
+        backgroundColor: "transparent",
       }}
     >
       <View

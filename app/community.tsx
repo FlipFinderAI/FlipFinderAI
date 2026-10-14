@@ -83,6 +83,7 @@ function CommunityBackgroundImage({
         resizeMode="cover"
         style={{ width: "100%", height: "100%" }}
       />
+      <View style={{ position: "absolute", top: 0, right: 0, bottom: 0, left: 0, backgroundColor: "rgba(248,245,236,0.76)" }} />
     </View>
   );
 }
@@ -1393,6 +1394,7 @@ export default function CommunityScreen() {
 
   if (serviceConfigured && session && !unlocked) {
     return <SafeAreaView style={{ flex: 1, backgroundColor: "#f8f5ec" }}>
+      <CommunityBackgroundImage choice={communityBackground} clubPhoto={communityClubPhoto} personalPhoto={communityBackgroundPhoto} />
       <ScrollView
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={{ padding: 20, gap: 14 }}
@@ -1517,6 +1519,7 @@ export default function CommunityScreen() {
           backgroundColor: "#f8f5ec",
         }}
       >
+      <CommunityBackgroundImage choice={communityBackground} clubPhoto={communityClubPhoto} personalPhoto={communityBackgroundPhoto} />
         <View
           style={{
             paddingHorizontal: 16,
@@ -1694,6 +1697,7 @@ export default function CommunityScreen() {
   }
 
   return <SafeAreaView style={{ flex: 1, backgroundColor: "#f8f5ec" }}>
+      <CommunityBackgroundImage choice={communityBackground} clubPhoto={communityClubPhoto} personalPhoto={communityBackgroundPhoto} />
     <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 20, gap: 14 }}>
       {connected && !needsSetup && showCommunitySettings ? (
         <Action
@@ -1867,8 +1871,8 @@ export default function CommunityScreen() {
       <Text style={styles.heading}>Community Background</Text>
 
       <Text style={styles.copy}>
-        Choose the background for your signed-in Community screen.
-        Your sign-in screen will always show your club stadium.
+        Choose the background for Community sign-in, chats, settings, supporters and map.
+        The sign-in welcome card will still show your club stadium.
       </Text>
 
       <Action
