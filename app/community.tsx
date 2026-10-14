@@ -1797,96 +1797,6 @@ export default function CommunityScreen() {
         </View>
       )}
 
-      {serviceConfigured && session && (
-        <View style={{ gap: 8 }}>
-          <Text style={styles.heading}>Community account</Text>
-          <Text>{session.email}</Text>
-
-          {!session.emailVerified ? (
-            <>
-              <Text style={styles.copy}>
-                Your Community email has not been verified yet.
-                Verification is separate from Community eligibility.
-              </Text>
-              <Action
-                title={
-                  verificationSending
-                    ? "Sending…"
-                    : verificationCooldown > 0
-                      ? `Email sent ✓ (${verificationCooldown}s)`
-                      : "Resend verification email"
-                }
-                disabled={busy || verificationCooldown > 0}
-                onPress={() =>
-                  void run(requestEmailVerification)
-                }
-                colour={colour}
-              />
-            </>
-          ) : (
-            <Text style={styles.copy}>
-              Email verified.
-            </Text>
-          )}
-          {!session.communityEligible && (
-            <Text style={styles.copy}>
-              You are signed in, but Community access is not active until eligibility has been confirmed.
-            </Text>
-          )}
-          <Action
-            title="Sign out of Community"
-            disabled={busy}
-            onPress={() => void run(signOut)}
-            colour={colour}
-          />
-
-          <Text style={styles.heading}>
-            Delete Community account
-          </Text>
-          <Text style={styles.copy}>
-            This permanently deletes your Community account and
-            associated Community profile, friendships, messages,
-            blocks, reports and presence data. It does not delete
-            Football Ticket Frame or your football history.
-          </Text>
-
-          <TextInput
-            accessibilityLabel="Community password for account deletion"
-            placeholder="Community password"
-            secureTextEntry
-            autoCapitalize="none"
-            autoCorrect={false}
-            textContentType="password"
-            value={deletePassword}
-            onChangeText={setDeletePassword}
-            style={styles.input}
-          />
-
-          <TextInput
-            accessibilityLabel="Type DELETE to confirm Community account deletion"
-            placeholder="Type DELETE to confirm"
-            autoCapitalize="characters"
-            autoCorrect={false}
-            value={deleteConfirmation}
-            onChangeText={setDeleteConfirmation}
-            style={styles.input}
-          />
-
-          <Action
-            title="Permanently delete Community account"
-            disabled={
-              busy ||
-              !deletePassword ||
-              deleteConfirmation !== "DELETE"
-            }
-            onPress={() =>
-              void run(deleteCommunityAccount)
-            }
-            colour={colour}
-          />
-        </View>
-      )}
-
       <Text style={styles.copy}>
         Your chosen name, avatar and favourite club identify you in Community.
         Games attended and grounds visited are shared only if you choose to share them.
@@ -2019,6 +1929,99 @@ export default function CommunityScreen() {
       {!!state.safetyId && (
         <Text style={styles.copy}>Community Safety ID: {state.safetyId}</Text>
       )}
+      {serviceConfigured && session && (
+        <View style={{ gap: 8 }}>
+          <Text style={styles.heading}>Community account</Text>
+          <Text>{session.email}</Text>
+
+          {!session.emailVerified ? (
+            <>
+              <Text style={styles.copy}>
+                Your Community email has not been verified yet.
+                Verification is separate from Community eligibility.
+              </Text>
+              <Action
+                title={
+                  verificationSending
+                    ? "Sending…"
+                    : verificationCooldown > 0
+                      ? `Email sent ✓ (${verificationCooldown}s)`
+                      : "Resend verification email"
+                }
+                disabled={busy || verificationCooldown > 0}
+                onPress={() =>
+                  void run(requestEmailVerification)
+                }
+                colour={colour}
+              />
+            </>
+          ) : (
+            <Text style={styles.copy}>
+              Email verified.
+            </Text>
+          )}
+          {!session.communityEligible && (
+            <Text style={styles.copy}>
+              You are signed in, but Community access is not active until eligibility has been confirmed.
+            </Text>
+          )}
+
+
+          <Text style={styles.heading}>
+            Delete Community account
+          </Text>
+          <Text style={styles.copy}>
+            This permanently deletes your Community account and
+            associated Community profile, friendships, messages,
+            blocks, reports and presence data. It does not delete
+            Football Ticket Frame or your football history.
+          </Text>
+
+          <TextInput
+            accessibilityLabel="Community password for account deletion"
+            placeholder="Community password"
+            secureTextEntry
+            autoCapitalize="none"
+            autoCorrect={false}
+            textContentType="password"
+            value={deletePassword}
+            onChangeText={setDeletePassword}
+            style={styles.input}
+          />
+
+          <TextInput
+            accessibilityLabel="Type DELETE to confirm Community account deletion"
+            placeholder="Type DELETE to confirm"
+            autoCapitalize="characters"
+            autoCorrect={false}
+            value={deleteConfirmation}
+            onChangeText={setDeleteConfirmation}
+            style={styles.input}
+          />
+
+          <Action
+            title="Permanently delete Community account"
+            disabled={
+              busy ||
+              !deletePassword ||
+              deleteConfirmation !== "DELETE"
+            }
+            onPress={() =>
+              void run(deleteCommunityAccount)
+            }
+            colour={colour}
+          />
+
+          <Action
+            title="Sign out of Community"
+            disabled={busy}
+            onPress={() => void run(signOut)}
+            colour={colour}
+          />
+        </View>
+      )}
+
+
       {/* Social Community lives in the messaging-style Chats / Supporters / Map home. */}
       {/* COMMUNITY_FEATURES */}
       {!!status && <Text accessibilityLiveRegion="polite">{status}</Text>}
