@@ -41,6 +41,7 @@ function setup() {
  COMMUNITY_AUTH: { async fetch(r) {
   return Response.json({
    subject: r.headers.get('authorization').slice(7),
+   emailVerified: true,
    communityEligible: true,
    isChild: false
   });
@@ -88,6 +89,8 @@ test('profile defaults off; eligibility and withdrawal use server state', async 
   enabled: false,
   locationVisible: false,
   shareGames: false,
+  shareTicket: false,
+  alwaysLocation: false,
   shareGrounds: false,
   photoSharing: false
  });
@@ -109,6 +112,8 @@ test('profile defaults off; eligibility and withdrawal use server state', async 
   enabled: false,
   locationVisible: false,
   shareGames: false,
+  shareTicket: false,
+  alwaysLocation: false,
   shareGrounds: false,
   photoSharing: false
  });
@@ -365,6 +370,7 @@ test('child accounts are rejected by the trusted authentication boundary', async
   async fetch(r) {
    return Response.json({
     subject: r.headers.get('authorization').slice(7),
+    emailVerified: true,
     communityEligible: false,
     isChild: true
    });
@@ -455,6 +461,8 @@ test('profile aggregates are private unless individually enabled', async () => {
   enabled: false,
   locationVisible: false,
   shareGames: false,
+  shareTicket: false,
+  alwaysLocation: false,
   shareGrounds: false,
   photoSharing: false
  });
@@ -1496,4 +1504,44 @@ test('Nearby Supporters excludes pending and accepted friends without changing m
     ),
     new Set([b, c])
   );
+});
+
+test('Community map browsing does not require viewer location; new preferences default off', async () => {
+ const {call, member} = setup(); await member('a');
+ const state = await call('a','/me');
+ assert.equal(state.body.preferences.alwaysLocation, false);
+ assert.equal(state.body.preferences.shareTicket, false);
+ await call('a','/preferences',{...state.body.preferences,locationVisible:false});
+ assert.equal((await call('a','/community-map')).status,200);
+ assert.equal((await call('a','/community-map/location',{...coords,mode:'always'})).status,403);
+ assert.equal((await call('a','/community-map/location',{...coords,mode:'matchday',accepted:true})).status,403);
+});
+test('always location is independent, approximate, friend-only, revocable and expires', async () => {
+ const {call, member, db} = setup(); const a=await member('a'),b=await member('b');
+ const prefs=(await call('b','/me')).body.preferences;
+ await call('b','/preferences',{...prefs,alwaysLocation:true,locationVisible:false});
+ assert.equal((await call('b','/community-map/location',{...coords,latitude:53.123456,mode:'always'})).status,200);
+ assert.equal((await call('a','/community-map')).body.people.length,0);
+ db.prepare("INSERT INTO community_relationships(id,sender,recipient,status,friend_type) VALUES(?,?,?,'accepted','full_time')").run('friend',a,b);
+ const person=(await call('a','/community-map')).body.people[0];
+ assert.equal(person.latitude,53.12); assert.equal(person.matchdayTicket,null);
+ assert.equal(JSON.stringify(person).includes('subject'),false);
+ db.prepare('INSERT INTO community_blocks VALUES(?,?)').run(b,a);
+ assert.equal((await call('a','/community-map')).body.people.length,0);
+ db.prepare('DELETE FROM community_blocks').run();
+ db.prepare('UPDATE community_map_locations SET expires_at=0').run();
+ assert.equal((await call('a','/community-map')).body.people.length,0);
+ await call('b','/community-map/location',{...coords,mode:'always'});
+ await call('b','/preferences',{...prefs,alwaysLocation:false});
+ assert.equal(db.prepare('SELECT COUNT(*) n FROM community_map_locations').get().n,0);
+});
+test('temporary location requires separate acceptance and ends with Matchday session', async () => {
+ const {call,member,db} = setup(); await member('a');
+ const experience=await call('a','/experience',{fixtureId:fixture.id});
+ assert.equal(experience.status,200);
+ assert.equal((await call('a','/community-map/location',{...coords,mode:'matchday'})).status,403);
+ assert.equal((await call('a','/community-map/location',{...coords,mode:'matchday',accepted:true})).status,200);
+ await call('a','/experience',undefined,'DELETE');
+ assert.equal(db.prepare('SELECT COUNT(*) n FROM community_map_locations').get().n,0);
+ assert.equal((await call('a','/community-map/location',{...coords,mode:'matchday',accepted:true})).status,403);
 });

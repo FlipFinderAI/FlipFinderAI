@@ -1,3 +1,4 @@
+import { communityMap } from "./communityMap";
 import {
   eligible,
   validCoordinates,
@@ -23,6 +24,7 @@ type Member = {
  display_name: string; avatar: string; club_id: string;
  games_attended: number; grounds_json: string;
  enabled: number; location_visible: number;
+ share_ticket: number; always_location: number;
  share_games: number; share_grounds: number; photo_sharing: number;
 };
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), {
@@ -229,6 +231,8 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
     enabled: Boolean(me?.enabled),
     locationVisible: Boolean(me?.location_visible),
     shareGames: Boolean(me?.share_games),
+    shareTicket: Boolean(me?.share_ticket),
+    alwaysLocation: Boolean(me?.always_location),
     shareGrounds: Boolean(me?.share_grounds),
     photoSharing: Boolean(me?.photo_sharing),
    },
@@ -267,6 +271,7 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
       id, identity.subject, safetyId, friendId, data.displayName.trim(), data.avatar,
       data.clubId, data.gamesAttended, JSON.stringify([...new Set(data.groundsVisited)])),
       sql("DELETE FROM community_presence WHERE member_id = ?", id),
+      sql("DELETE FROM community_map_locations WHERE member_id = ?", id),
       sql("DELETE FROM community_matchday_experience_sessions WHERE member_id = ?", id),
     ]);
     me = await sql("SELECT * FROM community_members WHERE id = ?", id).first<Member>();
@@ -282,7 +287,12 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
      typeof data.photoSharing !== "boolean"
     ) fail("Invalid privacy options.");
 
+    if ((data.shareTicket !== undefined && typeof data.shareTicket !== "boolean") ||
+        (data.alwaysLocation !== undefined && typeof data.alwaysLocation !== "boolean")) fail("Invalid privacy options.");
     const enabled = data.enabled;
+    // Older clients preserve new choices; they never implicitly grant consent.
+    const shareTicket = enabled && (data.shareTicket ?? Boolean(me.share_ticket));
+    const alwaysLocation = enabled && (data.alwaysLocation ?? Boolean(me.always_location));
     const locationVisible = enabled && data.locationVisible;
     const shareGames = enabled && data.shareGames;
     const shareGrounds = enabled && data.shareGrounds;
@@ -293,10 +303,13 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
 
     await env.DB.batch([
       sql(`UPDATE community_members
-       SET enabled=?,location_visible=?,share_games=?,share_grounds=?,photo_sharing=?
+       SET enabled=?,location_visible=?,share_games=?,share_grounds=?,photo_sharing=?,share_ticket=?,always_location=?
        WHERE id=?`,
-       +enabled, +locationVisible, +shareGames, +shareGrounds, +photoSharing, me.id),
+       +enabled, +locationVisible, +shareGames, +shareGrounds, +photoSharing, +shareTicket, +alwaysLocation, me.id),
       sql("DELETE FROM community_presence WHERE member_id=?", me.id),
+      sql(`DELETE FROM community_map_locations WHERE member_id=? AND
+        (?=0 OR (mode='always' AND ?=0) OR (mode='matchday' AND ?=0))`,
+        me.id, +enabled, +alwaysLocation, +locationVisible),
       // Location privacy and Community membership are separate:
       // - location off: keep Experience, erase its optional GPS snapshot
       // - Community off: remove the server-side Community Experience
@@ -331,6 +344,10 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
     return json({ ok: true });
   }
   if (!me.enabled) fail("Enable Community first.", 403);
+
+  if (path.startsWith("/community-map")) {
+    return communityMap(request, env, me, data, now);
+  }
 
   if (path === "/activity" && request.method === "POST") {
     await sql(
@@ -666,6 +683,7 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
   }
 
   if (path === "/experience" && request.method === "DELETE") {
+    await sql("DELETE FROM community_map_locations WHERE member_id=? AND mode='matchday'", me.id).run();
     await sql(
       "DELETE FROM community_matchday_experience_sessions WHERE member_id=?",
       me.id,

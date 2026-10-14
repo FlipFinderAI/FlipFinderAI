@@ -10,6 +10,8 @@ export type Preferences = {
   enabled: boolean;
   locationVisible: boolean;
   shareGames: boolean;
+  shareTicket: boolean;
+  alwaysLocation: boolean;
   shareGrounds: boolean;
   photoSharing: boolean;
 };
@@ -44,6 +46,8 @@ export const OFF: Preferences = {
   enabled: false,
   locationVisible: false,
   shareGames: false,
+  shareTicket: false,
+  alwaysLocation: false,
   shareGrounds: false,
   photoSharing: false,
 };
