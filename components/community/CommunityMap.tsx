@@ -141,6 +141,8 @@ export default function CommunityMap({ enabled, busy, colour, avatarPhoto, avata
         position: "absolute",
         top: 12,
         left: 12,
+        right: 12,
+        flexDirection: "row",
         alignItems: "flex-start",
         gap: 8,
       }}>
@@ -197,6 +199,24 @@ export default function CommunityMap({ enabled, busy, colour, avatarPhoto, avata
             ))}
           </View>
         )}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Friends and privacy"
+          accessibilityState={{ expanded: panelOpen }}
+          onPress={() => setPanelOpen(value => !value)}
+          style={{
+            width: 52,
+            height: 52,
+            borderRadius: 26,
+            backgroundColor: "#ffffff",
+            borderWidth: 1,
+            borderColor: "#dddddd",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Text style={{ fontSize: 25 }}>👥</Text>
+        </Pressable>
       </View>
 
       <Pressable
@@ -207,7 +227,7 @@ export default function CommunityMap({ enabled, busy, colour, avatarPhoto, avata
         style={{
           position: "absolute",
           right: 14,
-          top: 74,
+          top: 12,
           width: 52,
           height: 52,
           borderRadius: 26,
@@ -230,24 +250,7 @@ export default function CommunityMap({ enabled, busy, colour, avatarPhoto, avata
         right: 12,
         alignItems: "flex-start",
       }}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Friends and privacy"
-          accessibilityState={{ expanded: panelOpen }}
-          onPress={() => setPanelOpen(value => !value)}
-          style={{
-            width: 52,
-            height: 52,
-            borderRadius: 26,
-            backgroundColor: "#ffffff",
-            borderWidth: 1,
-            borderColor: "#dddddd",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <Text style={{ fontSize: 25 }}>👥</Text>
-        </Pressable>
+
 
         {panelOpen && (
           <ScrollView

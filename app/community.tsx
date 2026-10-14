@@ -1814,7 +1814,8 @@ export default function CommunityScreen() {
           backgroundColor: "#f8f5ec",
         }}
       >
-      <CommunityBackgroundImage choice={communityBackground} clubPhoto={communityClubPhoto} personalPhoto={communityBackgroundPhoto} />
+      {communityTab !== "map" && <CommunityBackgroundImage choice={communityBackground} clubPhoto={communityClubPhoto} personalPhoto={communityBackgroundPhoto} />}
+        {communityTab !== "map" && (
         <View
           style={{
             paddingHorizontal: 16,
@@ -1924,6 +1925,7 @@ export default function CommunityScreen() {
 
         </View>
 
+        )}
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <View style={{ flex: 1 }}>
           {!active && <Text style={[styles.copy, { padding: 20 }]}>
