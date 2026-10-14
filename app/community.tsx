@@ -1657,7 +1657,7 @@ export default function CommunityScreen() {
 
   if (serviceConfigured && session && !unlocked) {
     return <SafeAreaView style={{ flex: 1, backgroundColor: "#f8f5ec" }}>
-      <CommunityBackgroundImage choice={communityBackground} clubPhoto={communityClubPhoto} personalPhoto={communityBackgroundPhoto} />
+      {communityTab !== "map" && <CommunityBackgroundImage choice={communityBackground} clubPhoto={communityClubPhoto} personalPhoto={communityBackgroundPhoto} />}
       <ScrollView
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={{ padding: 20, gap: 14 }}
@@ -1956,14 +1956,7 @@ export default function CommunityScreen() {
           )}
 
           {communityTab === "map" && (
-            <ScrollView
-              keyboardShouldPersistTaps="handled"
-              contentContainerStyle={{
-                padding: 16,
-                paddingBottom: 36,
-                gap: 12,
-              }}
-            >
+            <View style={{ flex: 1 }}>
               <CommunityMap
                 enabled={active}
                 colour={colour}
@@ -1979,7 +1972,7 @@ export default function CommunityScreen() {
                 busy={busy}
                 run={run}
               />
-            </ScrollView>
+            </View>
           )}
         </View>
 

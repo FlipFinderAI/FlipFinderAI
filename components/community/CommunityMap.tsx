@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Alert, AppState, Image, Linking, Platform, Text, UIManager, View } from "react-native";
+import { Alert, AppState, Image, Linking, Platform, Pressable, ScrollView, Text, UIManager, View } from "react-native";
 import Constants from "expo-constants";
 import * as Location from "expo-location";
 import { useRef } from "react";
@@ -13,6 +13,8 @@ type Person = { profile: { id: string; displayName: string; avatar: string }; la
 type Props = { enabled: boolean; busy: boolean; colour: string; avatarPhoto: string | null; avatarInitial: string; stadium: FootballGround | null | undefined; preferences: Preferences; onStop(): Promise<void>; sharing: ReturnType<typeof useMapSharing>; run(task: () => Promise<void>): Promise<void> };
 export default function CommunityMap({ enabled, busy, colour, avatarPhoto, avatarInitial, stadium, preferences, onStop, sharing, run }: Props) {
   const [mode, setMode] = useState<"normal" | "cartoon" | "satellite">("normal");
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [layersOpen, setLayersOpen] = useState(false);
   const mapRef = useRef<any>(null);
   const [myLocation, setMyLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [locating, setLocating] = useState(false);
@@ -92,18 +94,10 @@ export default function CommunityMap({ enabled, busy, colour, avatarPhoto, avata
   }
 
   const accent = /^#[\da-f]{6}$/i.test(colour) ? colour : "#2354a5";
-  return <View style={{ gap: 14 }}>
-    <Text style={styles.heading}>Community Map</Text>
-    <Text style={styles.copy}>Browse any time. Opening the map does not turn on location sharing. Friends appear only while they choose to share.</Text>
-    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-      {(["normal", "cartoon", "satellite"] as const).map(value => <Action key={value}
-        title={`${mode === value ? "✓ " : ""}${value === "normal" ? "Normal" : value === "cartoon" ? "Team Cartoon" : "Satellite"}`}
-        disabled={!enabled || (value === "cartoon" && !google)} onPress={() => setMode(value)} />)}
-    </View>
-    {!google && <Text style={styles.copy}>Team Cartoon needs Google Maps configured in the iPhone build. Normal and satellite use Apple Maps.</Text>}
-    <Action title={locating ? "Finding my location…" : "📍 My Location"} disabled={!enabled || !Maps || locating} onPress={() => void centreOnMyLocation()} />
+  return <View style={{ flex: 1, backgroundColor: "#f8f5ec" }}>
+    <View style={{ flex: 1 }}>
     {enabled && Maps ? <Maps.default ref={mapRef} provider={google ? Maps.PROVIDER_GOOGLE : undefined}
-      style={{ height: 380, borderRadius: 20 }} showsUserLocation={false}
+      style={{ flex: 1 }} showsUserLocation={false}
       initialRegion={{ latitude: stadium?.latitude ?? 54, longitude: stadium?.longitude ?? -2, latitudeDelta: stadium ? 0.15 : 8, longitudeDelta: stadium ? 0.15 : 8 }}
       mapType={mode === "satellite" ? "satellite" : "standard"}
       customMapStyle={mode === "cartoon" ? [
@@ -141,6 +135,134 @@ export default function CommunityMap({ enabled, busy, colour, avatarPhoto, avata
         <View style={{ borderRadius: 24, borderWidth: 3, borderColor: accent, padding: 7, backgroundColor: "white" }}><Text style={{ fontSize: 25 }}>{person.profile.avatar}</Text></View>
       </Maps.Marker>)}
     </Maps.default> : <Text style={styles.copy}>{enabled ? "The map needs the updated native app build and map provider configuration. Friend location controls are available below." : "Enable Join Community in Settings to browse the map."}</Text>}
+
+
+      <View style={{
+        position: "absolute",
+        top: 12,
+        left: 12,
+        alignItems: "flex-start",
+        gap: 8,
+      }}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Map layers"
+          accessibilityState={{ expanded: layersOpen }}
+          onPress={() => setLayersOpen(value => !value)}
+          style={{
+            width: 52,
+            height: 52,
+            borderRadius: 26,
+            backgroundColor: "#ffffff",
+            alignItems: "center",
+            justifyContent: "center",
+            borderWidth: 1,
+            borderColor: "#dddddd",
+          }}
+        >
+          <Text style={{ fontSize: 25 }}>🗺️</Text>
+        </Pressable>
+
+        {layersOpen && (
+          <View style={{
+            padding: 8,
+            borderRadius: 18,
+            backgroundColor: "#ffffff",
+            gap: 6,
+          }}>
+            {(["normal", "cartoon", "satellite"] as const).map(value => (
+              <Pressable
+                key={value}
+                accessibilityRole="button"
+                disabled={!enabled || (value === "cartoon" && !google)}
+                onPress={() => {
+                  setMode(value);
+                  setLayersOpen(false);
+                }}
+                style={{
+                  paddingHorizontal: 16,
+                  paddingVertical: 12,
+                  borderRadius: 12,
+                  backgroundColor: mode === value ? accent : "#f5f5f5",
+                  opacity: value === "cartoon" && !google ? 0.5 : 1,
+                }}
+              >
+                <Text style={{
+                  color: mode === value ? "#ffffff" : "#17221c",
+                  fontWeight: "800",
+                }}>
+                  {value === "normal" ? "Normal" : value === "cartoon" ? "Team Cartoon" : "Satellite"}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        )}
+      </View>
+
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Centre map on my location"
+        disabled={!enabled || !Maps || locating}
+        onPress={() => void centreOnMyLocation()}
+        style={{
+          position: "absolute",
+          right: 14,
+          top: 74,
+          width: 52,
+          height: 52,
+          borderRadius: 26,
+          alignItems: "center",
+          justifyContent: "center",
+          backgroundColor: "#ffffff",
+          borderWidth: 1,
+          borderColor: "#dddddd",
+          opacity: locating ? 0.5 : 1,
+        }}
+      >
+        <Text style={{ fontSize: 25 }}>📍</Text>
+      </Pressable>
+
+
+      <View style={{
+        position: "absolute",
+        bottom: 12,
+        left: 12,
+        right: 12,
+        alignItems: "flex-start",
+      }}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Friends and privacy"
+          accessibilityState={{ expanded: panelOpen }}
+          onPress={() => setPanelOpen(value => !value)}
+          style={{
+            width: 52,
+            height: 52,
+            borderRadius: 26,
+            backgroundColor: "#ffffff",
+            borderWidth: 1,
+            borderColor: "#dddddd",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Text style={{ fontSize: 25 }}>👥</Text>
+        </Pressable>
+
+        {panelOpen && (
+          <ScrollView
+            style={{ maxHeight: 290, width: "100%", backgroundColor: "#ffffff", borderRadius: 18, marginTop: 8 }}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={{ padding: 14, gap: 12 }}
+          >
+            <Text style={styles.copy}>
+              Opening this map never shares your location. Friends appear only when they choose to share.
+            </Text>
+            {!google && (
+              <Text style={styles.copy}>
+                Team Cartoon requires a separate map renderer on iPhone.
+              </Text>
+            )}
     {!!error && <Text accessibilityLiveRegion="polite">{error}</Text>}
     <Text accessibilityLiveRegion="polite" style={styles.copy}>{sharing.status}</Text>
     {preferences.alwaysLocation && <Action title="Allow device location / resume sharing" disabled={!enabled || busy} onPress={() => void run(sharing.enableDeviceLocation)} />}
@@ -159,5 +281,9 @@ export default function CommunityMap({ enabled, busy, colour, avatarPhoto, avata
       {!selected.self && <><Action title="Walk to friend's area" disabled={busy} onPress={() => void run(() => navigate(selected, "walking"))} />
       <Action title="Drive to friend's area" disabled={busy} onPress={() => void run(() => navigate(selected, "driving"))} /></>}
     </View>}
+          </ScrollView>
+        )}
+      </View>
+    </View>
   </View>;
 }
