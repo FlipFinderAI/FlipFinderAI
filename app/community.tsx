@@ -1,3 +1,4 @@
+import PrivacySettings from "@/components/community/PrivacySettings";
 import Friends from "@/components/community/Friends";
 import Messages from "@/components/community/Messages";
 import Matchday from "@/components/community/Matchday";
@@ -1237,6 +1238,8 @@ export default function CommunityScreen() {
 
     if (!preferences.enabled) {
       preferences.locationVisible = false;
+      preferences.alwaysLocation = false;
+      preferences.shareTicket = false;
       preferences.shareGames = false;
       preferences.shareGrounds = false;
       preferences.photoSharing = false;
@@ -2319,73 +2322,13 @@ export default function CommunityScreen() {
         <Text>Save your profile with your current favourite club before using Community.</Text>
       )}
 
-      <Text style={styles.heading}>Accept All Community Settings</Text>
-      <Text style={styles.copy}>
-        Enable Community, matchday information, grounds visited,
-        matchday location and photo sharing together.
-        Your 16+ declaration must still be selected manually.
-      </Text>
-      <Switch
-        accessibilityLabel="Accept All Community Settings"
-        value={
-          state.preferences.enabled &&
-          state.preferences.shareGames &&
-          state.preferences.shareGrounds &&
-          state.preferences.locationVisible &&
-          state.preferences.photoSharing
-        }
+      <PrivacySettings
+        key={session?.email || "signed-out"}
+        accountKey={session?.email || ""}
+        preferences={state.preferences}
         disabled={busy || !connected || (!needsSetup && !sameClub)}
-        onValueChange={acceptAll =>
-          void run(() =>
-            privacy({
-              enabled: acceptAll,
-              shareGames: acceptAll,
-              shareGrounds: acceptAll,
-              locationVisible: acceptAll,
-              photoSharing: acceptAll,
-            })
-          )
-        }
-      />
-
-      <Text>Join Community — off by default</Text>
-      <Switch
-        accessibilityLabel="Join Community"
-        value={state.preferences.enabled}
-        disabled={busy || !connected || (!needsSetup && !sameClub)}
-        onValueChange={enabled => void run(() => privacy({ enabled }))}
-      />
-
-      <Text>Share my games-attended total</Text>
-      <Switch
-        accessibilityLabel="Share games attended"
-        value={state.preferences.shareGames}
-        disabled={busy || !connected || !state.preferences.enabled || (!needsSetup && !sameClub)}
-        onValueChange={shareGames => void run(() => privacy({ shareGames }))}
-      />
-
-      <Text>Share the grounds I have visited</Text>
-      <Switch
-        accessibilityLabel="Share grounds visited"
-        value={state.preferences.shareGrounds}
-        disabled={busy || !connected || !state.preferences.enabled || (!needsSetup && !sameClub)}
-        onValueChange={shareGrounds => void run(() => privacy({ shareGrounds }))}
-      />
-
-      <Text>Allow matchday location features</Text>
-      <Switch
-        accessibilityLabel="Matchday location visibility"
-        value={state.preferences.locationVisible}
-        disabled={busy || !connected || !state.preferences.enabled || (!needsSetup && !sameClub)}
-        onValueChange={locationVisible => void run(() => privacy({ locationVisible }))}
-      />
-
-      <Text>Allow eligible matchday photo sharing</Text>
-      <Switch
-        accessibilityLabel="Eligible matchday photo sharing"
-        value={state.preferences.photoSharing}
-        disabled={busy || !connected || !state.preferences.enabled || (!needsSetup && !sameClub)}
-        onValueChange={photoSharing => void run(() => privacy({ photoSharing }))}
+        onChange={privacy}
+        run={run}
       />
 
       <Text style={styles.copy}>
@@ -2397,7 +2340,7 @@ export default function CommunityScreen() {
       </Text>
 
       <Text style={styles.copy}>
-        Location is checked only when you deliberately use a matchday feature.
+        Location sharing follows your separate Always Show and Matchday choices and device permissions.
         Joining Community does not automatically put you on a map.
       </Text>
 
