@@ -40,6 +40,8 @@ import { Action, styles } from "@/components/community/Controls";
 
 const DRAFT_KEY = "ticket-frame.community-profile-draft.v1";
 const AVATAR_PHOTO_KEY = "ticket-frame.community-avatar-photo.v1";
+const COMMUNITY_BACKGROUND_KEY = "ticket-frame.community-background.v1";
+const COMMUNITY_BACKGROUND_PHOTO_KEY = "ticket-frame.community-background-photo.v1";
 const BIOMETRIC_KEY = "ticket-frame.community-biometric-enabled.v1";
 
 function CircularPhotoEditor({
@@ -265,6 +267,10 @@ export default function CommunityScreen() {
   const [avatar, setAvatar] = useState<Avatar>("⚽");
   const [avatarPhoto, setAvatarPhoto] = useState<string | null>(null);
   const [pendingAvatar, setPendingAvatar] = useState<string | null>(null);
+  const [communityBackground, setCommunityBackground] =
+    useState<"club" | "mine" | "none">("none");
+  const [communityBackgroundPhoto, setCommunityBackgroundPhoto] =
+    useState<string | null>(null);
   const [biometricEnabled, setBiometricEnabled] = useState(false);
   const [biometricChoiceMade, setBiometricChoiceMade] = useState(false);
   const [showSecuritySetup, setShowSecuritySetup] = useState(false);
@@ -379,17 +385,25 @@ export default function CommunityScreen() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [draft, records, storedAvatarPhoto, storedBiometric] = await Promise.all([
+      const [draft, records, storedAvatarPhoto, storedBiometric, storedBackground, storedBackgroundPhoto] = await Promise.all([
         AsyncStorage.getItem(DRAFT_KEY),
         loadAttendanceHistory(),
         AsyncStorage.getItem(AVATAR_PHOTO_KEY),
         AsyncStorage.getItem(BIOMETRIC_KEY),
+        AsyncStorage.getItem(COMMUNITY_BACKGROUND_KEY),
+        AsyncStorage.getItem(COMMUNITY_BACKGROUND_PHOTO_KEY),
       ]);
 
       if (cancelled) return;
 
       setSummary(attendanceSummary(records));
       setAvatarPhoto(storedAvatarPhoto);
+      setCommunityBackground(
+        storedBackground === "club" || storedBackground === "mine"
+          ? storedBackground
+          : "none"
+      );
+      setCommunityBackgroundPhoto(storedBackgroundPhoto);
 
       if (storedBiometric === "1" || storedBiometric === "0") {
         setBiometricChoiceMade(true);
