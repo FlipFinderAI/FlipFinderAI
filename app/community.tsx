@@ -1800,7 +1800,7 @@ export default function CommunityScreen() {
     </View>
   ) : null;
 
-  if (connected && session?.emailVerified === true && sameClub && !needsSetup && !showCommunitySettings) {
+  if (connected && session?.emailVerified === true && !needsSetup && !showCommunitySettings) {
     const tabColour = colour || "#17221c";
     const avatarLetter =
       state.profile?.displayName?.trim().slice(0, 1).toUpperCase() ||
