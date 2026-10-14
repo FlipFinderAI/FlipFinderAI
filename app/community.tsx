@@ -326,6 +326,7 @@ export default function CommunityScreen() {
   const [biometricChoiceMade, setBiometricChoiceMade] = useState(false);
   const [automaticSignIn, setAutomaticSignIn] = useState(false);
   const [needsSetup, setNeedsSetup] = useState(true);
+  const [age16Declared, setAge16Declared] = useState(false);
   const [summary, setSummary] = useState({ gamesAttended: 0, groundsVisited: [] as string[] });
   const [state, setState] = useState<CommunityState>({
     profile: null,
@@ -968,6 +969,7 @@ export default function CommunityScreen() {
   }
   async function finishSetup() {
     if (!session || !connected) throw new Error("Community eligibility must be confirmed before finishing setup.");
+    if (!age16Declared) throw new Error("Confirm that you are aged 16 or over.");
     if (!biometricChoiceMade) throw new Error("Choose your future sign-in method.");
     await saveProfile();
     // First-time privacy choices remain local until the profile exists. Only mark
@@ -1921,19 +1923,32 @@ export default function CommunityScreen() {
       <Text style={styles.heading}>Community & Privacy</Text>
 
       <View style={{ gap: 8, paddingVertical: 12 }}>
-        <Text style={styles.heading}>Over 18 Verification</Text>
+        <Text style={styles.heading}>Community Age Requirement — 16+</Text>
         <Text style={styles.copy}>
-          Ticket Frame Community is for adults aged 18 or over.
-          Junior Apple Accounts and users under 18 cannot access Community.
+          Ticket Frame Community is available to supporters aged 16 or over.
+          Users under 16 cannot access Community.
+        </Text>
+        <Text style={styles.copy}>
+          Junior Apple Accounts identified as under 16 will be blocked.
         </Text>
         <Text style={styles.copy}>
           {session?.communityEligible
             ? "Community eligibility confirmed by the service."
-            : "Verification pending. Community remains locked until eligibility is confirmed."}
+            : "Eligibility pending. Community remains locked until eligibility is confirmed."}
         </Text>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+            <Switch
+              accessibilityLabel="I confirm I am aged 16 or over"
+              value={age16Declared}
+              disabled={busy}
+              onValueChange={setAge16Declared}
+            />
+            <Text style={[styles.copy, { flex: 1 }]}>
+              I confirm that I am aged 16 or over.
+            </Text>
+          </View>
         <Text style={styles.copy}>
-          Age verification cannot be completed by switching on a setting.
-          Apple age-range checks and server-side verification are required.
+          Age declaration alone does not verify your age.
         </Text>
       </View>
 
@@ -2035,7 +2050,7 @@ export default function CommunityScreen() {
                 Your profile and privacy choices are saved together below.
                 Joining Community is optional.
               </Text>
-              <Action title={needsSetup ? "Finish Setup" : "Save Settings & Open Chats"} disabled={busy || !connected || !biometricChoiceMade}
+              <Action title={needsSetup ? "Finish Setup" : "Save Settings & Open Chats"} disabled={busy || !connected || !biometricChoiceMade || !age16Declared}
                 onPress={() => void run(finishSetup)} colour={colour} />
             </>
         </View>
