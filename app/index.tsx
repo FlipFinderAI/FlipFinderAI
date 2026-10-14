@@ -12035,7 +12035,7 @@ useEffect(() => {
               resizeMode="cover"
               style={{
                 flex: 1,
-                opacity: 0.50,
+                opacity: 0.60,
               }}
             />
           </View>
