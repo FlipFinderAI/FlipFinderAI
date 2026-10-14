@@ -101,7 +101,7 @@ export default function MatchdayHub({ match, clubs, tickets, favouriteClub, dire
           {match.competition ? <Text style={[s.muted, s.photoCaption]}>{match.competition}</Text> : null}
         </View>
       </View>
-      <View style={[s.details, { backgroundColor: /^#[0-9a-f]{6}$/i.test(primary) ? `${primary}70` : primary }]}>
+      <View style={[s.details, { backgroundColor: /^#[0-9a-f]{6}$/i.test(primary) ? `${primary}8C` : primary }]}>
         <Text style={[s.kicker, panelText]}>{countdown ? "COUNTDOWN" : "KICK-OFF"}</Text>
         {countdown ? <View style={s.clock} accessibilityLabel={`${countdown.days} days, ${countdown.hours} hours, ${countdown.minutes} minutes until kickoff`}>
           {[[countdown.days, "DAYS"], [countdown.hours, "HRS"], [countdown.minutes, "MINS"]].map(([value, label]) => <View key={label} style={[s.unit, { backgroundColor: secondary }]}>
