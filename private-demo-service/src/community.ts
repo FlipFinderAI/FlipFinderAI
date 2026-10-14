@@ -163,6 +163,7 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
   let identity: {
     subject?: string;
     communityEligible?: boolean;
+    emailVerified?: boolean;
     isChild?: boolean;
   } | null = null;
 
@@ -177,6 +178,7 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
       identity = await session.json() as {
         subject?: string;
         communityEligible?: boolean;
+    emailVerified?: boolean;
         isChild?: boolean;
       };
     }
@@ -188,6 +190,13 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
 
   if (!identity.subject || typeof identity.subject !== "string") {
    return json({ error: "Sign in required." }, 401);
+  }
+
+  if (identity.emailVerified !== true) {
+    return json(
+      { error: "Verify your email before accessing Community." },
+      403
+    );
   }
 
   if (identity.communityEligible !== true || identity.isChild !== false) {

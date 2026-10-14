@@ -95,16 +95,24 @@ function toSession(result: AuthResponse): CommunitySession {
   };
 }
 
+export type CommunitySignUpDetails = {
+  username: string;
+  firstName: string;
+  surname: string;
+  email: string;
+  phoneNumber: string;
+  password: string;
+  age16Declared: boolean;
+};
+
 export async function communitySignUp(
-  email: string,
-  password: string,
-  age16Declared: boolean,
+  details: CommunitySignUpDetails,
 ) {
   const result = await requestJson<AuthResponse>(
     "/api/community/auth/signup",
     {
       method: "POST",
-      body: JSON.stringify({ email, password, age16Declared }),
+      body: JSON.stringify(details),
     },
   );
 
@@ -341,4 +349,40 @@ export async function communityRequest<T>(
     }
     throw error;
   }
+}
+
+/**
+ * Public username availability check for Community signup.
+ * This does not register or reserve the username.
+ */
+export async function communityGetRegisteredUsername(): Promise<{
+  username: string | null;
+  registered: boolean;
+}> {
+  const session = await getCommunitySession();
+
+  if (!session) {
+    throw new Error("Sign in to Community first.");
+  }
+
+  return requestJson<{
+    username: string | null;
+    registered: boolean;
+  }>("/api/community/auth/username/me", {
+    method: "GET",
+    headers: {
+      authorization: `Bearer ${session.token}`,
+    },
+  });
+}
+
+export async function communityCheckSignupUsername(
+  username: string,
+): Promise<{ username: string; available: boolean }> {
+  const candidate = username.trim().replace(/^@/, "");
+
+  return requestJson<{ username: string; available: boolean }>(
+    `/api/community/auth/username/availability?username=${encodeURIComponent(candidate)}`,
+    { method: "GET" },
+  );
 }

@@ -1307,6 +1307,29 @@ button.addEventListener("click", async () => {
       });
     }
 
+    if (path === "/username/availability" && request.method === "GET") {
+      const requested = (url.searchParams.get("username") || "").trim();
+      const username = requested.replace(/^@/, "");
+
+      if (!/^[A-Za-z0-9_]{3,20}$/.test(username)) {
+        return json({
+          username,
+          available: false,
+          error: "Username must be 3–20 letters, numbers or underscores.",
+        }, 400);
+      }
+
+      const existing = await env.DB.prepare(
+        `SELECT account_id FROM community_usernames
+         WHERE username=? COLLATE NOCASE LIMIT 1`
+      ).bind(username).first<{ account_id: string }>();
+
+      return json({
+        username,
+        available: !existing,
+      });
+    }
+
     if (path === "/username/me" && request.method === "GET") {
       const identity = await verifyCommunitySession(request, env);
 

@@ -17,6 +17,10 @@ import { AVATARS, OFF, attendanceSummary, type Avatar, type CommunityState } fro
 import {
   communityAvailable,
   communityRequest,
+  communityCheckUsername,
+  communityCheckSignupUsername,
+  communityRegisterUsername,
+  communityGetRegisteredUsername,
   communityRestoreSession,
   communitySignIn,
   communitySignOut,
@@ -352,8 +356,20 @@ export default function CommunityScreen() {
   const [session, setSession] = useState<CommunitySession | null>(null);
   const [email, setEmail] = useState("");
   const [phoneNumber, setPhoneNumber] = useState("");
+  const [firstName, setFirstName] = useState("");
+  const [surname, setSurname] = useState("");
+
+  const [username, setUsername] = useState("");
+  const [usernameStatus, setUsernameStatus] = useState("");
+  const [signupUsernameCheck, setSignupUsernameCheck] = useState<{
+    username: string;
+    status: "checking" | "available" | "taken" | "error";
+  } | null>(null);
+  const [registeredUsername, setRegisteredUsername] = useState("");
+  const [usernameLookupFailed, setUsernameLookupFailed] = useState(false);
+
   const [password, setPassword] = useState("");
-  const [authMode, setAuthMode] = useState<"signin" | "create">("signin");
+  const [authMode, setAuthMode] = useState<"signin" | "create">("create");
   const [rememberedAccount, setRememberedAccount] = useState<string | null>(null);
   const [communityTab, setCommunityTab] =
     useState<"chats" | "supporters" | "map">("chats");
@@ -507,6 +523,22 @@ export default function CommunityScreen() {
   async function loadUnlockedCommunity(next: CommunitySession, generation = lockGeneration.current) {
     // Keep protected content locked until both the server and local setup state load.
     setSession(next);
+
+    // The server is authoritative for permanent Community usernames.
+    setRegisteredUsername("");
+    setUsernameLookupFailed(false);
+
+    try {
+      const usernameRecord = await communityGetRegisteredUsername();
+
+      if (usernameRecord.registered && usernameRecord.username) {
+        setRegisteredUsername(usernameRecord.username);
+        setUsername(usernameRecord.username);
+      }
+    } catch {
+      // Do not allow username changes when registration state is unknown.
+      setUsernameLookupFailed(true);
+    }
     const current = next.communityEligible
       ? await communityRequest<CommunityState>("/me")
       : { profile: null, preferences: OFF, safetyId: null, serverNow: 0 };
@@ -597,9 +629,81 @@ export default function CommunityScreen() {
     }
   }
 
+  useEffect(() => {
+    if (authMode !== "create" || session) return;
+
+    const candidate = username.trim().replace(/^@/, "");
+
+    if (!/^[A-Za-z0-9_]{3,20}$/.test(candidate)) {
+      setSignupUsernameCheck(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    setSignupUsernameCheck({
+      username: candidate,
+      status: "checking",
+    });
+
+    const timer = setTimeout(async () => {
+      try {
+        const result = await communityCheckSignupUsername(candidate);
+
+        if (!cancelled) {
+          setSignupUsernameCheck({
+            username: candidate,
+            status: result.available ? "available" : "taken",
+          });
+        }
+      } catch {
+        if (!cancelled) {
+          setSignupUsernameCheck({
+            username: candidate,
+            status: "error",
+          });
+        }
+      }
+    }, 450);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [username, authMode, session]);
+
   async function signUp() {
+    const candidate = username.trim().replace(/^@/, "");
+
+    if (
+      signupUsernameCheck?.username !== candidate ||
+      signupUsernameCheck?.status !== "available"
+    ) {
+      throw new Error(
+        "Please choose an available @username before creating your account."
+      );
+    }
+
     const generation = lockGeneration.current;
-    const displayName = name.trim();
+    const displayName = username.trim().replace(/^@/, "");
+
+    if (!/^[A-Za-z0-9_]{3,20}$/.test(displayName)) {
+      throw new Error("Choose a unique username of 3–20 letters, numbers or underscores.");
+    }
+
+    if (!firstName.trim() || firstName.trim().length > 80) {
+      throw new Error("Enter your first name.");
+    }
+
+    if (!surname.trim() || surname.trim().length > 80) {
+      throw new Error("Enter your surname.");
+    }
+
+    const formattedPhone = phoneNumber.trim().replace(/[^+0-9]/g, "");
+
+    if (!new RegExp("^\\+[1-9][0-9]{7,14}$").test(formattedPhone)) {
+      throw new Error("Enter your phone number with country code, for example +447123456789.");
+    }
 
     if (!age16Declared) {
       throw new Error("Confirm that you are aged 16 or over.");
@@ -630,7 +734,15 @@ export default function CommunityScreen() {
       throw new Error("A Community account is already registered on this device. Please sign in.");
     }
 
-    const signup = await communitySignUp(email.trim(), password, age16Declared);
+    const signup = await communitySignUp({
+      username: displayName,
+      firstName: firstName.trim(),
+      surname: surname.trim(),
+      email: email.trim(),
+      phoneNumber: formattedPhone,
+      password,
+      age16Declared,
+    });
     await rememberCommunityAccount(signup.session.email);
     setRememberedAccount(signup.session.email.toLowerCase());
     setAuthMode("signin");
@@ -854,6 +966,24 @@ export default function CommunityScreen() {
     return () => subscription.remove();
   }, [session?.emailVerified, session?.email, serviceConfigured]);
 
+  async function checkEmailVerification() {
+    const refreshed = await communityRestoreSession();
+
+    if (!refreshed) {
+      throw new Error("Your session has expired. Please sign in again.");
+    }
+
+    setSession(refreshed);
+
+    if (refreshed.emailVerified) {
+      setStatus("Email verified ✓ You can now finish Community setup.");
+    } else {
+      setStatus(
+        "Email is not verified yet. Open the verification link in your email, then try again."
+      );
+    }
+  }
+
   async function requestEmailVerification() {
     setVerificationSending(true);
     setStatus("Sending verification email…");
@@ -972,6 +1102,11 @@ export default function CommunityScreen() {
     } else setStatus("Profile draft saved on this iPhone. Nothing has been shared.");
   }
   async function finishSetup() {
+    if (!session?.emailVerified) {
+      throw new Error(
+        "Please verify your email address before entering Community Chats."
+      );
+    }
     if (!session || !connected) throw new Error("Community eligibility must be confirmed before finishing setup.");
     if (!age16Declared) throw new Error("Confirm that you are aged 16 or over.");
     if (!biometricChoiceMade) throw new Error("Choose your future sign-in method.");
@@ -1207,111 +1342,65 @@ export default function CommunityScreen() {
               ]}
             >
               {creating
-                ? "Choose the name other supporters will know you by."
+                ? "Choose your unique public @username and enter your private account details."
                 : "Sign in to your private Community account."}
             </Text>
 
             {creating ? (
-              <TextInput
-                accessibilityLabel="Community name"
-                placeholder="Community name"
-                value={name}
-                maxLength={40}
-                onChangeText={setName}
-                autoCapitalize="words"
-                autoCorrect={false}
-                style={[styles.input, { marginBottom: 10 }]}
-              />
-            ) : null}
-
-            {creating ? (
-              <View
-                style={{
-                  alignItems: "center",
-                  marginBottom: 18,
-                  gap: 10,
-                }}
-              >
-                {avatarPhoto ? (
-                  <Image
-                    source={{ uri: avatarPhoto }}
-                    accessibilityLabel="Your Community avatar"
+              <>
+                <TextInput
+                  accessibilityLabel="Community signup username"
+                  placeholder="@UniqueName"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  maxLength={21}
+                  value={username}
+                  onChangeText={setUsername}
+                  style={[styles.input, { marginBottom: 10 }]}
+                />
+                {signupUsernameCheck?.username ===
+                  username.trim().replace(/^@/, "") && (
+                  <Text
+                    accessibilityLiveRegion="polite"
                     style={{
-                      width: 116,
-                      height: 116,
-                      borderRadius: 58,
-                      borderWidth: 3,
-                      borderColor: colour || "#17221c",
-                    }}
-                  />
-                ) : (
-                  <View
-                    accessibilityLabel="No Community avatar photo selected"
-                    style={{
-                      width: 116,
-                      height: 116,
-                      borderRadius: 58,
-                      borderWidth: 3,
-                      borderColor: colour || "#17221c",
-                      backgroundColor: "#eee9dd",
-                      alignItems: "center",
-                      justifyContent: "center",
+                      marginBottom: 10,
+                      color:
+                        signupUsernameCheck.status === "available"
+                          ? "#18753c"
+                          : signupUsernameCheck.status === "checking"
+                            ? "#555555"
+                            : "#b42318",
                     }}
                   >
-                    <Text
-                      style={{
-                        fontSize: 36,
-                        fontWeight: "900",
-                        color: colour || "#17221c",
-                      }}
-                    >
-                      {name.trim().slice(0, 1).toUpperCase() || "?"}
-                    </Text>
-                  </View>
+                    {signupUsernameCheck.status === "checking"
+                      ? "Checking username availability…"
+                      : signupUsernameCheck.status === "available"
+                        ? "✓ Username available"
+                        : signupUsernameCheck.status === "taken"
+                          ? "Username already used. Please choose another."
+                          : "Unable to check username. Please try again."}
+                  </Text>
                 )}
 
-                <Text
-                  style={[
-                    styles.copy,
-                    {
-                      textAlign: "center",
-                      fontWeight: "800",
-                    },
-                  ]}
-                >
-                  PROFILE PHOTO
-                </Text>
-
-                <View
-                  style={{
-                    width: "100%",
-                    gap: 8,
-                  }}
-                >
-                  <Action
-                    title="Take Photo"
-                    disabled={busy}
-                    onPress={() => void run(takeAvatarPhoto)}
-                    colour={colour}
-                  />
-
-                  <Action
-                    title="Choose Photo"
-                    disabled={busy}
-                    onPress={() => void run(chooseAvatarPhoto)}
-                    colour={colour}
-                  />
-
-                  {avatarPhoto ? (
-                    <Action
-                      title="Remove Photo"
-                      disabled={busy}
-                      onPress={() => void run(removeAvatarPhoto)}
-                      colour={colour}
-                    />
-                  ) : null}
-                </View>
-              </View>
+                <TextInput
+                  accessibilityLabel="Community signup first name"
+                  placeholder="First Name"
+                  autoCapitalize="words"
+                  maxLength={80}
+                  value={firstName}
+                  onChangeText={setFirstName}
+                  style={[styles.input, { marginBottom: 10 }]}
+                />
+                <TextInput
+                  accessibilityLabel="Community signup surname"
+                  placeholder="Surname"
+                  autoCapitalize="words"
+                  maxLength={80}
+                  value={surname}
+                  onChangeText={setSurname}
+                  style={[styles.input, { marginBottom: 10 }]}
+                />
+              </>
             ) : null}
 
             <TextInput
@@ -1328,8 +1417,8 @@ export default function CommunityScreen() {
 
             {creating ? (
               <TextInput
-                accessibilityLabel="Phone number optional"
-                placeholder="Phone number (optional)"
+                accessibilityLabel="Phone number required"
+                placeholder="Phone Number (required, e.g. +447123456789)"
                 keyboardType="phone-pad"
                 textContentType="telephoneNumber"
                 autoComplete="tel"
@@ -1372,7 +1461,16 @@ export default function CommunityScreen() {
                 busy ||
                 !email.trim() ||
                 !password ||
-                (creating && (!name.trim() || !age16Declared))
+                (creating && (
+                    signupUsernameCheck?.username !==
+                      username.trim().replace(/^@/, "") ||
+                    signupUsernameCheck?.status !== "available" ||
+                    !/^[A-Za-z0-9_]{3,20}$/.test(username.trim().replace(/^@/, "")) ||
+                    !firstName.trim() ||
+                    !surname.trim() ||
+                    !phoneNumber.trim() ||
+                    !age16Declared
+                  ))
               }
               onPress={() =>
                 void run(creating ? signUp : signIn)
@@ -1529,7 +1627,7 @@ export default function CommunityScreen() {
 </SafeAreaView>;
   }
 
-  const bottomTabs = connected && !needsSetup ? (
+  const bottomTabs = connected && session?.emailVerified === true && !needsSetup ? (
     <View accessibilityRole="tablist" style={{ flexDirection: "row", backgroundColor: "#f8f5ec", borderTopWidth: 1, borderTopColor: "#d8d3c7" }}>
       {(["chats", "supporters", "map", "settings"] as const).map(id => {
         const selected = id === "settings" ? showCommunitySettings : !showCommunitySettings && communityTab === id;
@@ -1548,7 +1646,7 @@ export default function CommunityScreen() {
     </View>
   ) : null;
 
-  if (connected && sameClub && !needsSetup && !showCommunitySettings) {
+  if (connected && session?.emailVerified === true && sameClub && !needsSetup && !showCommunitySettings) {
     const tabColour = colour || "#17221c";
     const avatarLetter =
       state.profile?.displayName?.trim().slice(0, 1).toUpperCase() ||
@@ -1743,7 +1841,7 @@ export default function CommunityScreen() {
       <CommunityBackgroundImage choice={communityBackground} clubPhoto={communityClubPhoto} personalPhoto={communityBackgroundPhoto} />
     <ScrollView
       keyboardShouldPersistTaps="handled"
-      keyboardDismissMode="interactive"
+      keyboardDismissMode="on-drag"
       automaticallyAdjustKeyboardInsets={Platform.OS === "ios"}
       contentContainerStyle={{
         padding: 20,
@@ -1861,7 +1959,96 @@ export default function CommunityScreen() {
           Your Friend ID: {state.profile.friendId}
         </Text>
       )}
-      <Text style={{ fontWeight: "700" }}>Name:</Text>
+      <Text style={styles.heading}>YOUR @USERNAME</Text>
+
+      {usernameLookupFailed ? (
+        <Text style={styles.copy}>
+          Unable to confirm your permanent username.
+          Please reconnect and sign in again.
+          Username changes are disabled until verification succeeds.
+        </Text>
+      ) : registeredUsername ? (
+        <>
+          <TextInput
+            accessibilityLabel="Permanent Community username"
+            value={`@${registeredUsername}`}
+            editable={false}
+            selectTextOnFocus={false}
+            style={[
+              styles.input,
+              {
+                backgroundColor: "#e5e5e5",
+                color: "#666666",
+                opacity: 0.8,
+              },
+            ]}
+          />
+
+          <Text style={styles.copy}>
+            Your username is permanent and cannot be changed.
+          </Text>
+        </>
+      ) : (
+        <>
+          <Text style={styles.copy}>
+            Register your permanent username. You can only do this once.
+          </Text>
+
+          <TextInput
+            accessibilityLabel="Community username"
+            placeholder="@YourUsername"
+            autoCapitalize="none"
+            autoCorrect={false}
+            maxLength={21}
+            value={username}
+            onChangeText={(value) => {
+              setUsername(value);
+              setUsernameStatus("");
+            }}
+            style={styles.input}
+          />
+
+          <Action
+            title="Check Username Availability"
+            disabled={busy || !username.trim()}
+            onPress={() => void run(async () => {
+              const result = await communityCheckUsername(username);
+
+              setUsernameStatus(
+                result.yours
+                  ? "This username is already yours."
+                  : result.available
+                    ? "Username available."
+                    : "Username already taken."
+              );
+            })}
+            colour={colour}
+          />
+
+          <Action
+            title="Register My Username"
+            disabled={busy || !username.trim()}
+            onPress={() => void run(async () => {
+              const result = await communityRegisterUsername(username);
+
+              if (!result.registered) {
+                throw new Error("Username registration was not confirmed.");
+              }
+
+              setRegisteredUsername(result.username);
+              setUsername(result.username);
+              setUsernameStatus("");
+            })}
+            colour={colour}
+          />
+
+          {!!usernameStatus && (
+            <Text style={styles.copy}>{usernameStatus}</Text>
+          )}
+        </>
+      )}
+
+        <Text style={{ fontWeight: "700" }}>Name:</Text>
       <TextInput accessibilityLabel="Community display name" placeholder="Choose a display name" value={name} maxLength={40} onChangeText={setName} style={styles.input} />
       <Text style={{ fontWeight: "700" }}>Photo:</Text>
       <View style={{ alignItems: "center", gap: 8 }}>
@@ -2106,7 +2293,7 @@ export default function CommunityScreen() {
                 Your profile and privacy choices are saved together below.
                 Joining Community is optional.
               </Text>
-              <Action title={needsSetup ? "Finish Setup" : "Save Settings & Open Chats"} disabled={busy || !connected || !biometricChoiceMade || !age16Declared}
+              <Action title={needsSetup ? "Finish Setup" : "Save Settings & Open Chats"} disabled={busy || !connected || !session?.emailVerified || !biometricChoiceMade || !age16Declared}
                 onPress={() => void run(finishSetup)} colour={colour} />
             </>
         </View>
@@ -2120,10 +2307,17 @@ export default function CommunityScreen() {
           {!session.emailVerified ? (
             <>
               <Text style={styles.copy}>
-                Your Community email has not been verified yet.
-                Verification is separate from Community eligibility.
+                Verify your email address before finishing setup and entering Community Chats.
+                Check your inbox and spam folder for the verification link.
               </Text>
               <Action
+                  title="I've Verified My Email"
+                  disabled={busy}
+                  onPress={() => void run(checkEmailVerification)}
+                  colour={colour}
+                />
+
+                <Action
                 title={
                   verificationSending
                     ? "Sending…"
