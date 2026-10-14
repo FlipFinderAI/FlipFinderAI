@@ -1249,7 +1249,18 @@ export default function CommunityScreen() {
     setState(await communityRequest<CommunityState>("/preferences", preferences));
     setStatus("Community privacy choices saved. Matchday presence has ended.");
   }
-  if (serviceConfigured && !loaded) {
+  if (
+    serviceConfigured &&
+    (
+      !loaded ||
+      (
+        session !== null &&
+        !unlocked &&
+        foreground &&
+        loginMode === "stay"
+      )
+    )
+  ) {
     return (
       <SafeAreaView style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
         <Text>Loading Community account...</Text>
