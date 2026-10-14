@@ -195,6 +195,8 @@ export async function communityRestoreSession() {
 }
 
 export async function communitySignOut() {
+  const { stopBackgroundMapLocation } = await import("./backgroundLocation");
+  await stopBackgroundMapLocation().catch(() => {});
   const session = await getCommunitySession();
 
   if (session && communityAvailable()) {

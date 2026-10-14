@@ -1,7 +1,8 @@
 import PrivacySettings from "@/components/community/PrivacySettings";
 import Friends from "@/components/community/Friends";
 import Messages from "@/components/community/Messages";
-import Matchday from "@/components/community/Matchday";
+import CommunityMap from "@/components/community/CommunityMap";
+import { useMapSharing } from "@/lib/community/useMapSharing";
 import { useEffect, useState, useRef } from "react";
 import { router, useLocalSearchParams } from "expo-router";
 import { Alert, AppState, Image, Modal, useWindowDimensions, Pressable, ScrollView, KeyboardAvoidingView, Platform, Switch, Text, TextInput, View } from "react-native";
@@ -400,6 +401,7 @@ export default function CommunityScreen() {
   const connected = serviceConfigured && unlocked && Boolean(session?.emailVerified) && Boolean(session?.communityEligible);
   const sameClub = state.profile?.clubId === clubId;
   const active = connected && sameClub && state.preferences.enabled;
+  const mapSharing = useMapSharing(active, state.preferences, session?.email || "");
 
   // "Active now" means the supporter is genuinely using Community
   // in the foreground. It is deliberately independent of matchday
@@ -1962,9 +1964,16 @@ export default function CommunityScreen() {
                 gap: 12,
               }}
             >
-              <Matchday
-                enabled={active && state.preferences.locationVisible}
-                clubId={clubId}
+              <CommunityMap
+                enabled={active}
+                colour={colour}
+                stadium={communityStadium}
+                preferences={state.preferences}
+                sharing={mapSharing}
+                onStop={async () => {
+                  await privacy({ alwaysLocation: false });
+                  await mapSharing.stop();
+                }}
                 busy={busy}
                 run={run}
               />
