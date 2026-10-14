@@ -261,6 +261,50 @@ export async function communityDeleteAccount(
   return result;
 }
 
+export type CommunityUsernameResult = {
+  username: string;
+  available?: boolean;
+  yours?: boolean;
+  registered?: boolean;
+};
+
+export async function communityCheckUsername(username: string) {
+  const session = await getCommunitySession();
+
+  if (!session) {
+    throw new Error("Sign in to Community first.");
+  }
+
+  return requestJson<CommunityUsernameResult>(
+    `/api/community/auth/username?username=${encodeURIComponent(username)}`,
+    {
+      method: "GET",
+      headers: {
+        authorization: `Bearer ${session.token}`,
+      },
+    },
+  );
+}
+
+export async function communityRegisterUsername(username: string) {
+  const session = await getCommunitySession();
+
+  if (!session) {
+    throw new Error("Sign in to Community first.");
+  }
+
+  return requestJson<CommunityUsernameResult>(
+    "/api/community/auth/username",
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${session.token}`,
+      },
+      body: JSON.stringify({ username }),
+    },
+  );
+}
+
 export async function communityRequest<T>(
   path: string,
   body?: unknown,
