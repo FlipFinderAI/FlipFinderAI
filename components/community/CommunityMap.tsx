@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { Alert, AppState, Linking, Platform, Text, UIManager, View } from "react-native";
 import Constants from "expo-constants";
+import * as Location from "expo-location";
+import { useRef } from "react";
 import { communityRequest } from "@/lib/community/api";
 import type { Preferences } from "@/lib/community/model";
 import { Action, styles } from "./Controls";
@@ -11,6 +13,9 @@ type Person = { profile: { id: string; displayName: string; avatar: string }; la
 type Props = { enabled: boolean; busy: boolean; colour: string; stadium: FootballGround | null | undefined; preferences: Preferences; onStop(): Promise<void>; sharing: ReturnType<typeof useMapSharing>; run(task: () => Promise<void>): Promise<void> };
 export default function CommunityMap({ enabled, busy, colour, stadium, preferences, onStop, sharing, run }: Props) {
   const [mode, setMode] = useState<"normal" | "cartoon" | "satellite">("normal");
+  const mapRef = useRef<any>(null);
+  const [myLocation, setMyLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [locating, setLocating] = useState(false);
   const [people, setPeople] = useState<Person[]>([]);
   const [selected, setSelected] = useState<Person | null>(null);
   const [error, setError] = useState("");
@@ -57,6 +62,35 @@ export default function CommunityMap({ enabled, busy, colour, stadium, preferenc
       : `https://www.google.com/maps/dir/?api=1&destination=${destination}&travelmode=${travel}`;
     await Linking.openURL(url);
   }
+  async function centreOnMyLocation() {
+    if (locating) return;
+    setLocating(true);
+    try {
+      const permission = await Location.requestForegroundPermissionsAsync();
+      if (permission.status !== "granted") {
+        Alert.alert("Location unavailable", "Allow location access in iPhone Settings to centre the map on your position.");
+        return;
+      }
+      const position = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+      const coordinate = {
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+      };
+      setMyLocation(coordinate);
+      mapRef.current?.animateToRegion({
+        ...coordinate,
+        latitudeDelta: 0.012,
+        longitudeDelta: 0.012,
+      }, 650);
+    } catch {
+      Alert.alert("Location unavailable", "Could not determine your current position. Please try again.");
+    } finally {
+      setLocating(false);
+    }
+  }
+
   const accent = /^#[\da-f]{6}$/i.test(colour) ? colour : "#2354a5";
   return <View style={{ gap: 14 }}>
     <Text style={styles.heading}>Community Map</Text>
@@ -67,7 +101,8 @@ export default function CommunityMap({ enabled, busy, colour, stadium, preferenc
         disabled={!enabled || (value === "cartoon" && !google)} onPress={() => setMode(value)} />)}
     </View>
     {!google && <Text style={styles.copy}>Team Cartoon needs Google Maps configured in the iPhone build. Normal and satellite use Apple Maps.</Text>}
-    {enabled && Maps ? <Maps.default provider={google ? Maps.PROVIDER_GOOGLE : undefined}
+    <Action title={locating ? "Finding my location…" : "📍 My Location"} disabled={!enabled || !Maps || locating} onPress={() => void centreOnMyLocation()} />
+    {enabled && Maps ? <Maps.default ref={mapRef} provider={google ? Maps.PROVIDER_GOOGLE : undefined}
       style={{ height: 380, borderRadius: 20 }} showsUserLocation={false}
       initialRegion={{ latitude: stadium?.latitude ?? 54, longitude: stadium?.longitude ?? -2, latitudeDelta: stadium ? 0.15 : 8, longitudeDelta: stadium ? 0.15 : 8 }}
       mapType={mode === "satellite" ? "satellite" : "standard"}
@@ -78,6 +113,7 @@ export default function CommunityMap({ enabled, busy, colour, stadium, preferenc
         { featureType: "road", elementType: "geometry", stylers: [{ color: accent }, { weight: 2 }] },
         { elementType: "labels.text.fill", stylers: [{ color: "#253147" }] },
       ] : []}>
+      {myLocation && <Maps.Marker coordinate={myLocation} title="My Location" pinColor="#2684ff" />}
       {stadium && <Maps.Marker coordinate={stadium} title={stadium.stadium} pinColor={accent} />}
       {people.map(person => <Maps.Marker key={person.profile.id} coordinate={person} onPress={() => setSelected(person)} title={person.profile.displayName} description="Approximate area">
         <View style={{ borderRadius: 24, borderWidth: 3, borderColor: accent, padding: 7, backgroundColor: "white" }}><Text style={{ fontSize: 25 }}>{person.profile.avatar}</Text></View>
