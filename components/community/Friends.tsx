@@ -10,6 +10,8 @@ import {
 import { communityRequest } from "@/lib/community/api";
 import type { FriendType, PublicProfile, Relationship } from "@/lib/community/model";
 import { Action, styles } from "./Controls";
+type BlockedContact = Pick<PublicProfile, "id" | "displayName" | "friendId">;
+
 export default function Friends({
  enabled,
  busy,
@@ -22,6 +24,8 @@ export default function Friends({
  experienceActive?: boolean;
 }) {
  const [relationships, setRelationships] = useState<Relationship[]>([]);
+ const [blocked, setBlocked] = useState<BlockedContact[]>([]);
+ const [blockedLoaded, setBlockedLoaded] = useState(false);
  const [people, setPeople] = useState<PublicProfile[]>([]);
  const [knownQuery, setKnownQuery] = useState("");
  const [knownPeople, setKnownPeople] = useState<PublicProfile[]>([]);
@@ -36,6 +40,9 @@ export default function Friends({
   reason: string;
  } | null>(null);
  useEffect(() => {
+  setBlocked([]);
+  setBlockedLoaded(false);
+  setNotice("");
   setPeople([]);
   setKnownQuery("");
   setKnownPeople([]);
@@ -62,13 +69,17 @@ export default function Friends({
    refreshing = true;
 
    try {
-    const result = await communityRequest<{
-     relationships: Relationship[];
-    }>("/friends");
-
-    if (alive) {
-     setRelationships(result.relationships);
-    }
+    await Promise.allSettled([
+     communityRequest<{ relationships: Relationship[] }>("/friends").then(result => {
+      if (alive) setRelationships(result.relationships);
+     }),
+     communityRequest<{ blocked: BlockedContact[] }>("/blocked").then(result => {
+      if (alive) {
+       setBlocked(result.blocked);
+       setBlockedLoaded(true);
+      }
+     }),
+    ]);
    } catch {
     // Passive foreground refresh is best effort.
    } finally {
@@ -115,7 +126,15 @@ export default function Friends({
  }, [enabled]);
 
  async function refresh() {
-   const result = await communityRequest<{ relationships: Relationship[] }>("/friends"); setRelationships(result.relationships);
+   await Promise.all([
+    communityRequest<{ relationships: Relationship[] }>("/friends").then(result => {
+     setRelationships(result.relationships);
+    }),
+    communityRequest<{ blocked: BlockedContact[] }>("/blocked").then(result => {
+     setBlocked(result.blocked);
+     setBlockedLoaded(true);
+    }),
+   ]);
  }
  async function relationship(id: string, action: string) {
    await communityRequest("/relationship", { id, action }); await refresh();
@@ -313,6 +332,7 @@ export default function Friends({
        setPeople(list =>
         list.filter(x => x.id !== p.id)
        );
+       setKnownPeople(list => list.filter(x => x.id !== p.id));
        await refresh();
       })}
       style={({ pressed }) => ({
@@ -547,6 +567,32 @@ export default function Friends({
     <Text>{friendTypeLabel(r.friendType)}</Text>
      <Action title="Unfriend" disabled={busy} onPress={() => void run(() => relationship(r.id, "unfriend"))} />
    </View>)}</>}
+   {enabled && <View style={{ gap: 10 }}>
+    <Text accessibilityRole="header" style={styles.heading}>Blocked Contacts</Text>
+    <Text style={styles.copy}>
+     Unblocking lets you find a supporter and send a new friend request.
+     It does not restore friendship or location sharing. Existing messages are kept.
+    </Text>
+    <Action title="Refresh blocked contacts" disabled={busy} onPress={() => void run(refresh)} />
+    {!blockedLoaded && <Text>Refresh to load blocked contacts if they do not appear.</Text>}
+    {blockedLoaded && blocked.length === 0 && <Text>You have no blocked contacts.</Text>}
+    {blocked.map(p => <View key={`blocked-${p.id}`} style={{ gap: 8 }}>
+     <Text style={styles.copy}>{p.displayName}</Text>
+     {!!p.friendId && <Text>Friend ID {p.friendId}</Text>}
+     <Action
+      title={`Unblock ${p.displayName}`}
+      disabled={busy}
+      onPress={() => void run(async () => {
+       await communityRequest("/unblock", { target: p.id });
+       setBlocked(list => list.filter(x => x.id !== p.id));
+       setKnownQuery(p.friendId || p.displayName);
+       setKnownPeople([]);
+       setNotice(`${p.displayName} unblocked. Use Find known supporter above to send a fresh request if they are available. They will need to accept it.`);
+       await refresh();
+      })}
+     />
+    </View>)}
+   </View>}
    {enabled && report && <><Text>Report {report.displayName}</Text>
      <TextInput style={styles.input} accessibilityLabel="Report reason" placeholder="What happened?" multiline maxLength={1000} value={reason} onChangeText={setReason} />
      <Action title="Submit report" disabled={busy || !reason.trim()} onPress={() => void run(async () => {

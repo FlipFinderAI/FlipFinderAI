@@ -1084,6 +1084,26 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
     }
     return json({ ok: true });
   }
+  if (path === "/blocked" && request.method === "GET") {
+    // Only outgoing blocks; return identity fields, never location or account data.
+    const rows = (await sql(`SELECT m.id,m.display_name,m.friend_id
+      FROM community_blocks b JOIN community_members m ON m.id=b.blocked
+      WHERE b.blocker=? ORDER BY m.display_name COLLATE NOCASE,m.id`, me.id)
+      .all<{ id: string; display_name: string; friend_id: string | null }>()).results;
+    return json({ blocked: rows.map(row => ({
+      id: row.id,
+      displayName: row.display_name,
+      friendId: row.friend_id || "",
+    })) });
+  }
+  if (path === "/unblock" && request.method === "POST") {
+    if (typeof data?.target !== "string" || !data.target.trim() || data.target === me.id) {
+      fail("Choose a supporter to unblock.");
+    }
+    // Idempotent and owner-scoped. Never remove a reciprocal block or restore consent.
+    await sql("DELETE FROM community_blocks WHERE blocker=? AND blocked=?", me.id, data.target).run();
+    return json({ ok: true });
+  }
   if (path === "/block" && request.method === "POST") {
     if (typeof data.target !== "string" || data.target === me.id) fail("Choose a supporter to block.");
     const target = await sql("SELECT id FROM community_members WHERE id=?", data.target).first();
