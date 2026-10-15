@@ -32,6 +32,8 @@ export default function Friends({
  const [report, setReport] = useState<PublicProfile | null>(null);
  const [reason, setReason] = useState("");
  const [notice, setNotice] = useState("");
+ const [knownNotice, setKnownNotice] = useState("");
+ const [nearbyNotice, setNearbyNotice] = useState("");
  const [submittedReport, setSubmittedReport] = useState<{
   reportId: string;
   reportedSafetyId: string | null;
@@ -43,6 +45,8 @@ export default function Friends({
   setBlocked([]);
   setBlockedLoaded(false);
   setNotice("");
+  setKnownNotice("");
+  setNearbyNotice("");
   setPeople([]);
   setKnownQuery("");
   setKnownPeople([]);
@@ -126,16 +130,16 @@ export default function Friends({
  }, [enabled]);
 
  async function refresh() {
-   await Promise.all([
-    communityRequest<{ relationships: Relationship[] }>("/friends").then(result => {
-     setRelationships(result.relationships);
-    }),
-    communityRequest<{ blocked: BlockedContact[] }>("/blocked").then(result => {
-     setBlocked(result.blocked);
-     setBlockedLoaded(true);
-    }),
-   ]);
+  const result = await communityRequest<{ relationships: Relationship[] }>("/friends");
+  setRelationships(result.relationships);
  }
+
+ async function refreshBlocked() {
+  const result = await communityRequest<{ blocked: BlockedContact[] }>("/blocked");
+  setBlocked(result.blocked);
+  setBlockedLoaded(true);
+ }
+
  async function relationship(id: string, action: string) {
    await communityRequest("/relationship", { id, action }); await refresh();
  }
@@ -440,7 +444,7 @@ export default function Friends({
      `/friend-search?q=${encodeURIComponent(query)}`
     );
     setKnownPeople(result.people);
-    setNotice(
+    setKnownNotice(
      result.people.length
       ? "Exact same-club supporter match found."
       : "No same-club supporter matched that exact Friend ID or name."
@@ -448,6 +452,9 @@ export default function Friends({
    })}
   />
 
+  {!!knownNotice && (
+   <Text accessibilityLiveRegion="polite" style={styles.copy}>{knownNotice}</Text>
+  )}
   {enabled && knownPeople.map(p => (
    <View key={`known-${p.id}`} style={{ gap: 10 }}>
     {profile(p)}
@@ -509,7 +516,7 @@ export default function Friends({
 
      setPeople(result.people.map(p => p.profile));
 
-     setNotice(
+     setNearbyNotice(
        result.people.length
          ? experienceActive
            ? "Same-club supporters in this active Matchday Experience are shown. Location sharing is not required."
@@ -520,7 +527,10 @@ export default function Friends({
      );
    })}
  />
-   {enabled && people.map(p => <View key={p.id} style={{ gap: 10 }}>{profile(p)}
+   {!!nearbyNotice && (
+   <Text accessibilityLiveRegion="polite" style={styles.copy}>{nearbyNotice}</Text>
+  )}
+  {enabled && people.map(p => <View key={p.id} style={{ gap: 10 }}>{profile(p)}
      <Action
      title={`Request ${p.displayName} as Matchday Friend`}
      disabled={busy}
@@ -573,7 +583,7 @@ export default function Friends({
      Unblocking lets you find a supporter and send a new friend request.
      It does not restore friendship or location sharing. Existing messages are kept.
     </Text>
-    <Action title="Refresh blocked contacts" disabled={busy} onPress={() => void run(refresh)} />
+    <Action title="Refresh blocked contacts" disabled={busy} onPress={() => void run(refreshBlocked)} />
     {!blockedLoaded && <Text>Refresh to load blocked contacts if they do not appear.</Text>}
     {blockedLoaded && blocked.length === 0 && <Text>You have no blocked contacts.</Text>}
     {blocked.map(p => <View key={`blocked-${p.id}`} style={{ gap: 8 }}>
