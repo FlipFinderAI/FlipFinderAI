@@ -950,6 +950,12 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
       AND (
         upper(m.friend_id)=upper(?)
         OR lower(m.display_name)=lower(?)
+        OR (length(?)>=3 AND lower(m.display_name) LIKE lower(?) ESCAPE '!')
+        OR EXISTS (
+          SELECT 1 FROM community_usernames u
+          WHERE u.account_id=substr(m.subject,19)
+          AND lower(u.username)=lower(?)
+        )
       )
       ORDER BY m.display_name COLLATE NOCASE
       LIMIT 20`,
@@ -958,7 +964,10 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
       me.id,
       me.id,
       query,
-      query
+      query,
+      query,
+      "%" + query.replace(/[!%_]/g, "!$&") + "%",
+      query.replace(/^@/, "")
     ).all<Member>()).results;
 
     return json({ people: rows.map(publicProfile) });
@@ -987,6 +996,12 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
         AND (
           upper(m.friend_id)=upper(?)
           OR lower(m.display_name)=lower(?)
+          OR (length(?)>=3 AND lower(m.display_name) LIKE lower(?) ESCAPE '!')
+          OR EXISTS (
+            SELECT 1 FROM community_usernames u
+            WHERE u.account_id=substr(m.subject,19)
+            AND lower(u.username)=lower(?)
+          )
         )`,
         relationshipId,
         me.id,
@@ -996,7 +1011,10 @@ export async function communityFetch(request: Request, env: CommunityEnv): Promi
         me.id,
         me.id,
         lookup,
-        lookup
+        lookup,
+        lookup,
+        "%" + lookup.replace(/[!%_]/g, "!$&") + "%",
+        lookup.replace(/^@/, "")
       ).run();
 
       if (!result.meta.changes) {

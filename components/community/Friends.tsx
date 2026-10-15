@@ -34,6 +34,24 @@ export default function Friends({
  const [notice, setNotice] = useState("");
  const [knownNotice, setKnownNotice] = useState("");
  const [nearbyNotice, setNearbyNotice] = useState("");
+ const [activeSupporterAction, setActiveSupporterAction] = useState<
+   "known" | "nearby" | "blocked" | null
+ >(null);
+
+ const runSupporterAction = (
+   action: "known" | "nearby" | "blocked",
+   task: () => Promise<void>,
+ ) => {
+   if (busy || activeSupporterAction !== null) return;
+   setActiveSupporterAction(action);
+   void run(async () => {
+     try {
+       await task();
+     } finally {
+       setActiveSupporterAction(null);
+     }
+   });
+ };
  const [submittedReport, setSubmittedReport] = useState<{
   reportId: string;
   reportedSafetyId: string | null;
@@ -421,14 +439,14 @@ export default function Friends({
     color: "#777168",
    }}
   >
-   Search their exact Friend ID or Community name. Only supporters
+   Search by Friend ID, Community username or part of a name. Only supporters
    with your favourite club can be found.
   </Text>
 
   <TextInput
    style={styles.input}
-   accessibilityLabel="Friend ID or exact Community name"
-   placeholder="Friend ID or exact name"
+   accessibilityLabel="Friend ID, username or supporter name"
+   placeholder="Friend ID, username or name"
    autoCapitalize="none"
    maxLength={80}
    value={knownQuery}
@@ -437,8 +455,8 @@ export default function Friends({
 
   <Action
    title="Find known supporter"
-   disabled={!enabled || busy || knownQuery.trim().length < 2}
-   onPress={() => void run(async () => {
+   disabled={!enabled || knownQuery.trim().length < 2}
+   onPress={() => runSupporterAction("known", async () => {
     const query = knownQuery.trim();
     const result = await communityRequest<{ people: PublicProfile[] }>(
      `/friend-search?q=${encodeURIComponent(query)}`
@@ -446,8 +464,8 @@ export default function Friends({
     setKnownPeople(result.people);
     setKnownNotice(
      result.people.length
-      ? "Exact same-club supporter match found."
-      : "No same-club supporter matched that exact Friend ID or name."
+      ? "Matching same-club supporters found."
+      : "No matching same-club supporters found."
     );
    })}
   />
@@ -504,8 +522,8 @@ export default function Friends({
        ? "Find Experience supporters"
        : "Find nearby supporters"
    }
-   disabled={!enabled || busy}
-   onPress={() => void run(async () => {
+   disabled={!enabled}
+   onPress={() => runSupporterAction("nearby", async () => {
      const result = await communityRequest<{
        people: { profile: PublicProfile }[];
      }>(
@@ -583,7 +601,11 @@ export default function Friends({
      Unblocking lets you find a supporter and send a new friend request.
      It does not restore friendship or location sharing. Existing messages are kept.
     </Text>
-    <Action title="Refresh blocked contacts" disabled={busy} onPress={() => void run(refreshBlocked)} />
+    <Action
+      title="Refresh blocked contacts"
+      disabled={!enabled}
+      onPress={() => runSupporterAction("blocked", refreshBlocked)}
+    />
     {!blockedLoaded && <Text>Refresh to load blocked contacts if they do not appear.</Text>}
     {blockedLoaded && blocked.length === 0 && <Text>You have no blocked contacts.</Text>}
     {blocked.map(p => <View key={`blocked-${p.id}`} style={{ gap: 8 }}>
