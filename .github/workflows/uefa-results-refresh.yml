@@ -32,7 +32,6 @@ jobs:
       - name: Fetch confirmed final scores and safeguard other competitions
         id: scores
         env:
-          API_SPORTS_KEY: ${{ secrets.API_SPORTS_KEY || secrets.API_FOOTBALL_KEY }}
           CATCHUP: ${{ github.event.schedule == '17 5 * * *' && 'true' || 'false' }}
           PROBE: ${{ inputs.probe || 'false' }}
         shell: bash
