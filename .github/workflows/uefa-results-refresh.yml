@@ -1,0 +1,54 @@
+name: UEFA final-score auto refresh
+on:
+  schedule:
+    - cron: '7,37 * * * *'
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+    inputs:
+      probe:
+        description: 'Check API provider access without publishing'
+        type: boolean
+        default: true
+permissions:
+  contents: write
+concurrency:
+  group: uefa-tfd-live-results
+  cancel-in-progress: false
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout updater
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: automation
+      - name: Checkout public score feed
+        uses: actions/checkout@v4
+        with:
+          ref: tfd-live
+          path: live
+      - name: Fetch confirmed final scores and safeguard other competitions
+        id: scores
+        env:
+          API_SPORTS_KEY: ${{ secrets.API_SPORTS_KEY || secrets.API_FOOTBALL_KEY }}
+          CATCHUP: ${{ github.event.schedule == '17 5 * * *' && 'true' || 'false' }}
+          PROBE: ${{ inputs.probe || 'false' }}
+        shell: bash
+        run: |
+          args=()
+          if [[ "$CATCHUP" == 'true' ]]; then args+=(--catchup); fi
+          if [[ "$PROBE" == 'true' ]]; then args+=(--probe); fi
+          python3 automation/scripts/uefa_auto_refresh.py live/snapshot-v1.json "${args[@]}"
+      - name: Publish updated score feed (no force push)
+        if: steps.scores.outputs.changed == 'true'
+        working-directory: live
+        shell: bash
+        run: |
+          test "$(git status --porcelain)" = ' M snapshot-v1.json'
+          git config user.name 'UEFA results automation'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- snapshot-v1.json
+          git commit -m 'Update verified UEFA 2026-27 final scores'
+          git push origin HEAD:refs/heads/tfd-live
